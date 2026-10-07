@@ -82,13 +82,48 @@ export function normalizeToIso639_1(input?: string): string | undefined {
  */
 export async function fetchAudioFromUrl(url: string): Promise<{ buffer: Buffer; filename: string }> {
   console.log(`[Plivo Fetch] Downloading audio from: ${url}`);
-  const response = await fetch(url);
+  
+  const fetchHeaders: Record<string, string> = {
+    'User-Agent': 'Pilvo-Downloader/1.0',
+    'ngrok-skip-browser-warning': 'true',
+  };
+  
+  let response = await fetch(url, { headers: fetchHeaders });
+
+  // If carrier requires basic auth, retry with Plivo credentials
+  if (
+    !response.ok &&
+    (response.status === 401 || response.status === 403) &&
+    process.env.PLIVO_AUTH_ID &&
+    process.env.PLIVO_AUTH_TOKEN
+  ) {
+    const basicAuth = Buffer.from(
+      `${process.env.PLIVO_AUTH_ID}:${process.env.PLIVO_AUTH_TOKEN}`
+    ).toString('base64');
+    response = await fetch(url, {
+      headers: { ...fetchHeaders, Authorization: `Basic ${basicAuth}` },
+    });
+  }
 
   if (!response.ok) {
     throw new Error(`Failed to download audio from Plivo URL: HTTP ${response.status} ${response.statusText}`);
   }
 
+  const contentType = response.headers.get('content-type') || '';
+  if (
+    contentType.includes('text/html') ||
+    contentType.includes('application/xhtml') ||
+    contentType.includes('application/xml')
+  ) {
+    throw new Error(`Carrier URL returned a document (${contentType}) instead of an audio file. This often happens with ngrok interstitial pages or unauthorized endpoints.`);
+  }
+
   const arrayBuffer = await response.arrayBuffer();
+  
+  if (arrayBuffer.byteLength < 1000) {
+    throw new Error(`Downloaded audio file is suspiciously small (${arrayBuffer.byteLength} bytes). It may be empty or invalid.`);
+  }
+
   const buffer = Buffer.from(arrayBuffer);
 
   // Extract or infer filename with extension

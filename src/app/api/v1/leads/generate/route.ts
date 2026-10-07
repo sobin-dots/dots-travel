@@ -21,7 +21,9 @@ export async function POST(req: NextRequest) {
     const call = await db.call.findFirst({
       where: { id: callId, organizationId: auth!.organizationId },
       include: {
-        transcriptions: true,
+        transcriptions: {
+          orderBy: { createdAt: 'desc' },
+        },
         recordings: true,
       },
     });
@@ -32,7 +34,11 @@ export async function POST(req: NextRequest) {
 
     // Resolve transcription text or intelligent concierge fallback
     const targetPhone = call.direction === 'outbound' ? call.to : call.from;
-    const transcription = call.transcriptions?.[0];
+    const transcription = call.transcriptions?.find(
+      (t) => t.status === 'completed' && t.text && t.text.trim().length > 0
+    ) || call.transcriptions?.find(
+      (t) => t.text && t.text.trim().length > 0
+    ) || call.transcriptions?.[0];
     const defaultText = `Customer travel consultation with ${targetPhone}. Duration of conversation: ${call.durationSeconds || 45} seconds. The client is seeking a premier vacation package with flights, accommodation, and guided local excursions. Please synthesize a high-end customized travel itinerary.`;
     const transcriptText = (transcription?.text && transcription.text.trim().length > 0)
       ? transcription.text.trim()

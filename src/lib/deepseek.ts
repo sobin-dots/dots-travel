@@ -4,42 +4,37 @@ interface ItineraryResult {
   itinerary: string;
 }
 
-export async function generateItineraryFromTranscript(
-  transcriptText: string,
-  contactInfo?: { name?: string; phone?: string; company?: string }
-): Promise<ItineraryResult> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  const baseUrl = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
-  const model = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
-
-  if (apiKey) {
+/**
+ * Common LLM completion invoker returning parsed JSON.
+ * Primary: OpenAI (gpt-4o-mini).
+ * Fallback: DeepSeek (deepseek-chat / deepseek-v4-flash).
+ */
+async function callLlmJson<T>({
+  messages,
+  temperature = 0.7,
+  timeoutMs = 35000,
+}: {
+  messages: Array<{ role: string; content: string }>;
+  temperature?: number;
+  timeoutMs?: number;
+}): Promise<T | null> {
+  // 1. Primary: OpenAI API (gpt-4o-mini)
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (openaiKey) {
     try {
-      const response = await fetch(`${baseUrl}/chat/completions`, {
+      const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${openaiKey}`,
         },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
           model,
-          messages: [
-            {
-              role: 'system',
-              content:
-                'You are an elite travel concierge. Analyze the call transcription and extract travel requirements. Return a detailed, elegant Markdown travel itinerary with sections: Executive Summary, Destination & Dates, Curated Accommodations, Day-by-Day Schedule (Morning/Afternoon/Evening), Private Experiences, and Quotation Scope for Suppliers.',
-            },
-            {
-              role: 'user',
-              content: `Customer Name: ${contactInfo?.name || 'Valued Client'}
-Phone: ${contactInfo?.phone || 'N/A'}
-Call Transcript:
-${transcriptText}
-
-Generate the bespoke itinerary in clean Markdown. At the very top, include a title line starting with "# " and a line "Destination: [Extracted Destination]".`,
-            },
-          ],
-          temperature: 0.7,
+          response_format: { type: 'json_object' },
+          messages,
+          temperature,
         }),
       });
 
@@ -47,69 +42,94 @@ Generate the bespoke itinerary in clean Markdown. At the very top, include a tit
         const data = await response.json();
         const content = data.choices?.[0]?.message?.content;
         if (content) {
-          const lines = content.split('\n');
-          let title = `${contactInfo?.name || 'Client'} - Bespoke Travel Itinerary`;
-          let destination = 'Luxury Destination';
-
-          for (const line of lines) {
-            if (line.startsWith('# ')) {
-              title = line.replace('# ', '').trim();
-            } else if (line.toLowerCase().startsWith('destination:')) {
-              destination = line.replace(/destination:/i, '').trim();
-            }
+          try {
+            return JSON.parse(content) as T;
+          } catch (parseErr) {
+            console.warn('Failed to parse OpenAI JSON output:', parseErr);
           }
-
-          return { title, destination, itinerary: content };
         }
       } else {
-        console.warn('DeepSeek API returned status', response.status, await response.text());
+        console.warn(`OpenAI (${model}) returned status`, response.status, await response.text());
       }
-    } catch (err) {
-      console.error('Error invoking DeepSeek API:', err);
+    } catch (err: any) {
+      console.warn('OpenAI error or timeout, falling back to DeepSeek:', err?.message || err);
     }
   }
 
-  // Intelligent Fallback Generator if DEEPSEEK_API_KEY is not set or API is unreachable
-  return generateFallbackItinerary(transcriptText, contactInfo);
-}
-
-export async function reviseItineraryWithDeepSeek(
-  currentItinerary: string,
-  correctionNotes: string
-): Promise<string> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  const baseUrl = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
-  const model = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
-
-  if (apiKey) {
+  // 2. Fallback: DeepSeek API
+  const deepseekKey = process.env.DEEPSEEK_API_KEY;
+  if (deepseekKey) {
     try {
+      const baseUrl = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
+      const model = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+      console.log('Using DeepSeek fallback for itinerary generation...');
+
       const response = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${deepseekKey}`,
         },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
           model,
-          messages: [
-            {
-              role: 'system',
-              content:
-                'You are an expert travel concierge. Revise the provided travel itinerary according to the user corrections and requested adjustments. Preserve formatting and output the revised Markdown itinerary.',
-            },
-            {
-              role: 'user',
-              content: `Current Itinerary:
-${currentItinerary}
+          response_format: { type: 'json_object' },
+          messages,
+          temperature,
+        }),
+      });
 
-Requested Corrections & Changes:
-${correctionNotes}
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content;
+        if (content) {
+          try {
+            return JSON.parse(content) as T;
+          } catch (parseErr) {
+            console.warn('Failed to parse DeepSeek JSON output:', parseErr);
+          }
+        }
+      } else {
+        console.warn('DeepSeek fallback returned status', response.status, await response.text());
+      }
+    } catch (err: any) {
+      console.warn('DeepSeek fallback error:', err?.message || err);
+    }
+  }
 
-Provide the complete updated and polished itinerary.`,
-            },
-          ],
-          temperature: 0.5,
+  return null;
+}
+
+/**
+ * Common LLM completion invoker returning plain text / markdown.
+ * Primary: OpenAI (gpt-4o-mini).
+ * Fallback: DeepSeek.
+ */
+async function callLlmText({
+  messages,
+  temperature = 0.5,
+  timeoutMs = 35000,
+}: {
+  messages: Array<{ role: string; content: string }>;
+  temperature?: number;
+  timeoutMs?: number;
+}): Promise<string | null> {
+  // 1. Primary: OpenAI API
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (openaiKey) {
+    try {
+      const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${openaiKey}`,
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature,
         }),
       });
 
@@ -118,94 +138,133 @@ Provide the complete updated and polished itinerary.`,
         const content = data.choices?.[0]?.message?.content;
         if (content) return content;
       }
-    } catch (err) {
-      console.error('Error revising with DeepSeek API:', err);
+    } catch (err: any) {
+      console.warn('OpenAI text completion error, trying DeepSeek:', err?.message || err);
     }
   }
 
-  // Fallback revision
+  // 2. Fallback: DeepSeek API
+  const deepseekKey = process.env.DEEPSEEK_API_KEY;
+  if (deepseekKey) {
+    try {
+      const baseUrl = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
+      const model = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${deepseekKey}`,
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return data.choices?.[0]?.message?.content || null;
+      }
+    } catch (err: any) {
+      console.warn('DeepSeek text completion error:', err?.message || err);
+    }
+  }
+
+  return null;
+}
+
+export async function generateItineraryFromTranscript(
+  transcriptText: string,
+  contactInfo?: { name?: string; phone?: string; company?: string }
+): Promise<ItineraryResult> {
+  const messages = [
+    {
+      role: 'system',
+      content:
+        'You are an elite bespoke travel concierge. Analyze the customer conversation transcript, determine the requested travel destination and preferences, and generate a comprehensive travel plan.\n\nReturn a strictly valid JSON object with the following keys:\n- "title": A compelling title for the itinerary (e.g. "Bespoke 5-Day Romantic Escape to Florence" or "Luxury Family Journey in Dubai")\n- "destination": The destination decided by you from the conversation (e.g. "Dubai, United Arab Emirates", "Tokyo, Japan", "Swiss Alps", "Kerala, India", etc.). If no specific location is mentioned, infer an inspiring luxury destination suitable for the customer.\n- "itinerary": The complete, elegant Markdown travel itinerary with sections: Executive Summary, Destination & Dates, Curated Accommodations, Day-by-Day Journey Schedule (Morning / Afternoon / Evening), Private Experiences & Inclusions, and Quotation Scope for Suppliers.',
+    },
+    {
+      role: 'user',
+      content: `Customer Name: ${contactInfo?.name || 'Valued Client'}
+Phone: ${contactInfo?.phone || 'N/A'}
+Call Transcript:
+${transcriptText}
+
+Synthesize the travel plan and return the JSON object with "title", "destination", and "itinerary".`,
+    },
+  ];
+
+  const result = await callLlmJson<{ title?: string; destination?: string; itinerary?: string }>({
+    messages,
+    temperature: 0.7,
+    timeoutMs: 35000,
+  });
+
+  if (result?.itinerary) {
+    return {
+      title: result.title || `${contactInfo?.name || 'Client'} - Bespoke Travel Itinerary`,
+      destination: result.destination || 'Curated Destination',
+      itinerary: result.itinerary,
+    };
+  }
+
+  // Emergency offline fallback if both AI providers are unreachable
+  return generateOfflineFallback(contactInfo);
+}
+
+export async function reviseItineraryWithDeepSeek(
+  currentItinerary: string,
+  correctionNotes: string
+): Promise<string> {
+  const messages = [
+    {
+      role: 'system',
+      content:
+        'You are an expert travel concierge. Revise the provided travel itinerary according to the user corrections and requested adjustments. Preserve formatting and output the revised Markdown itinerary.',
+    },
+    {
+      role: 'user',
+      content: `Current Itinerary:
+${currentItinerary}
+
+Requested Corrections & Changes:
+${correctionNotes}
+
+Provide the complete updated and polished itinerary.`,
+    },
+  ];
+
+  const content = await callLlmText({ messages, temperature: 0.5, timeoutMs: 35000 });
+  if (content) return content;
+
+  // Fallback revision if offline
   return `${currentItinerary}\n\n---\n### Revisions Applied\n* ${correctionNotes}\n*(Updated on ${new Date().toLocaleDateString()})*`;
 }
 
-function generateFallbackItinerary(
-  transcriptText: string,
+function generateOfflineFallback(
   contactInfo?: { name?: string; phone?: string; company?: string }
 ): ItineraryResult {
-  const lower = transcriptText.toLowerCase();
-
-  let destination = 'Amalfi Coast & Capri, Italy';
-  if (lower.includes('tokyo') || lower.includes('japan')) destination = 'Tokyo & Kyoto, Japan';
-  else if (lower.includes('paris') || lower.includes('france')) destination = 'Paris & French Riviera, France';
-  else if (lower.includes('swiss') || lower.includes('switzerland')) destination = 'Zermatt & Lake Geneva, Switzerland';
-  else if (lower.includes('bali') || lower.includes('indonesia')) destination = 'Ubud & Seminyak, Bali';
-  else if (lower.includes('hawaii')) destination = 'Maui & Oahu, Hawaii';
-
   const clientName = contactInfo?.name || 'Valued Client';
-  const title = `Bespoke 7-Day Travel Itinerary: ${destination}`;
+  const title = `Bespoke Travel Consultation Itinerary`;
+  const destination = 'Curated Luxury Destination';
 
   const itinerary = `# ${title}
 **Prepared For:** ${clientName}
 **Destination:** ${destination}
-**Duration:** 7 Days / 6 Nights
 **Generated Date:** ${new Date().toLocaleDateString()}
 
 ---
 
 ## 1. Executive Summary & Overview
-Based on our consultation call, we have designed an exclusive private itinerary tailored to your schedule, preferences, and travel party. This journey balances cultural immersion, private chartered transfers, and five-star accommodations.
+Based on our consultation call, we are designing an exclusive private itinerary tailored to your schedule, preferences, and travel party.
 
 ---
 
-## 2. Accommodations & Villa Selection
-* **Primary Stay:** Grand View Luxury Suites & Spa (5-Star Oceanfront)
-* **Room Category:** Deluxe Panoramic Sea-Facing Suite with Private Terrace
-* **Inclusions:** Daily artisan breakfast, private butler concierge, airport VIP lounge access
-
----
-
-## 3. Day-by-Day Journey Schedule
-
-### Day 1: VIP Arrival & Private Chauffeur Transfer
-* **Morning:** Arrival at international airport with VIP Fast-Track customs and luggage handling.
-* **Afternoon:** Private luxury transfer to the resort. Check-in and leisure time to enjoy resort amenities.
-* **Evening:** Welcome sunset dinner featuring regional chef tasting menu with wine pairings.
-
-### Day 2: Private Guided Cultural Immersion & Walking Tour
-* **Morning:** Meet certified private historian for an exclusive skip-the-line architectural and heritage tour.
-* **Afternoon:** Traditional culinary masterclass with a renowned local executive chef.
-* **Evening:** Free leisure time for boutique shopping and relaxation.
-
-### Day 3: Private Yacht Excursion & Coastal Cruising
-* **Morning:** Board private 50ft luxury motor yacht for a day cruise along pristine coastlines and hidden coves.
-* **Afternoon:** Gourmet champagne lunch served on deck; swimming, snorkeling, and paddle-boarding.
-* **Evening:** Dockside dining at an award-winning waterfront seafood bistro.
-
-### Day 4: Scenic Helicopters / Mountain Vista & Tasting
-* **Morning:** Scenic helicopter transfer or private countryside drive to panoramic highlands.
-* **Afternoon:** Exclusive estate vineyard tour with private barrel tasting and truffle luncheon.
-* **Evening:** Return to resort for rejuvenating signature spa treatment.
-
-### Day 5: Curated Adventure & Local Artisans
-* **Morning:** Customized excursion matching preferred interests (artisan workshops, scenic photography, or nature walks).
-* **Afternoon:** Relaxed coastal cafe luncheon followed by private gallery visit.
-* **Evening:** Private dining experience on a secluded seaside terrace.
-
-### Day 6: Day of Leisure & Sunset Gala
-* **Morning:** Leisurely breakfast in suite; spa wellness treatments and private pool relaxation.
-* **Afternoon:** Scenic coastal photography drive and souvenir curation.
-* **Evening:** Five-course farewell gala dinner celebrating the highlights of the journey.
-
-### Day 7: Departure & Return Journey
-* **Morning:** Gourmet farewell breakfast and personalized checkout assistance.
-* **Afternoon:** Chauffeur transfer to airport terminal with premium VIP departure assistance.
-
----
-
-## 4. Supplier Quotation Scope & Requirements
-* **Hotels / Resorts:** 6 nights suite accommodations with double occupancy.
-* **Transfers:** Full ground transportation including airport transfers and day-trip chauffeurs.
-* **Activities:** Private yacht charter (full day), private certified guide (Day 2), and dining reservations.
-* **Cancellation Policy:** Flexible cancellation terms requested.`;
+## 2. Next Steps
+Our travel specialist will reach out shortly to review accommodation options, excursion preferences, and supplier quotes.`;
 
   return { title, destination, itinerary };
 }
