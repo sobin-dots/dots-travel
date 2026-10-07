@@ -4,8 +4,7 @@ import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { getTelephonyProvider } from '@/lib/telephony';
 import {
-  transcribeAudioWithOpenAi,
-  generateSyntheticWavBuffer,
+  transcribeAudioFromUrl,
   normalizeToIso639_1,
 } from '@/lib/openai-transcribe';
 
@@ -49,110 +48,34 @@ export async function POST(
   // ─────────────────────────────────────────────────────────────
   if (requestedProvider === 'openai') {
     try {
-      let audioBuffer: Buffer | null = null;
-      let filename = `recording_${recording.id}.mp3`;
-      let downloadError: string | null = null;
-      let contentType = '';
-
-      // Attempt to download the audio from the recording URL
-      if (recording.recordingUrl && recording.recordingUrl.startsWith('http')) {
-        try {
-          const fetchHeaders: Record<string, string> = {
-            'User-Agent': 'Pilvo-Downloader/1.0',
-            'ngrok-skip-browser-warning': 'true',
-          };
-          let audioRes = await fetch(recording.recordingUrl, { headers: fetchHeaders });
-
-          // If carrier requires basic auth, retry with Plivo credentials
-          if (
-            !audioRes.ok &&
-            (audioRes.status === 401 || audioRes.status === 403) &&
-            process.env.PLIVO_AUTH_ID &&
-            process.env.PLIVO_AUTH_TOKEN
-          ) {
-            const basicAuth = Buffer.from(
-              `${process.env.PLIVO_AUTH_ID}:${process.env.PLIVO_AUTH_TOKEN}`
-            ).toString('base64');
-            audioRes = await fetch(recording.recordingUrl, {
-              headers: { ...fetchHeaders, Authorization: `Basic ${basicAuth}` },
-            });
-          }
-
-          if (audioRes.ok) {
-            contentType = audioRes.headers.get('content-type') || '';
-            // Reject HTML/XML error pages served with 200 OK (e.g. ngrok interstitial or web portal errors)
-            if (
-              contentType.includes('text/html') ||
-              contentType.includes('application/xhtml') ||
-              contentType.includes('application/xml')
-            ) {
-              downloadError = `Carrier URL returned ${contentType} document instead of audio. If using ngrok, ensure ngrok warnings are bypassed.`;
-            } else {
-              const arrayBuf = await audioRes.arrayBuffer();
-              if (arrayBuf.byteLength > 1000) {
-                audioBuffer = Buffer.from(arrayBuf);
-                if (contentType.includes('wav')) {
-                  filename = `recording_${recording.id}.wav`;
-                }
-              } else {
-                downloadError = `Downloaded audio file is suspiciously small (${arrayBuf.byteLength} bytes) or empty.`;
-              }
-            }
-          } else {
-            downloadError = `Carrier recording URL returned HTTP ${audioRes.status} ${audioRes.statusText}`;
-          }
-        } catch (fetchErr: any) {
-          downloadError = `Failed to connect to carrier recording URL: ${fetchErr.message}`;
-        }
-      } else {
-        downloadError = 'Recording does not have a valid HTTP recording URL';
-      }
-
-      // If audio file could not be downloaded, return error instead of sending a synthetic sine wave tone.
-      // Feeding a 440Hz synthetic beep/silence to OpenAI Whisper triggers language misdetection and repetitive Tamil hallucinations!
-      if (!audioBuffer) {
+      if (!recording.recordingUrl || !recording.recordingUrl.startsWith('http')) {
         return NextResponse.json(
           {
             api_id: 'media_not_found',
-            error:
-              downloadError ||
-              'Could not retrieve recording audio file from carrier. The recording may still be encoding on Plivo servers.',
+            error: 'Recording does not have a valid HTTP recording URL',
             recordingUrl: recording.recordingUrl,
           },
           { status: 400 }
         );
       }
 
-      // Language parameter handling:
-      // If the caller explicitly requests a specific language (e.g. 'ta', 'en', 'hi'), normalize it.
-      // If language is omitted, 'auto', or 'mixed', leave undefined so Whisper auto-detects dynamically!
       let effectiveLanguage: string | undefined = undefined;
       if (body.language && body.language !== 'auto' && body.language !== 'mixed') {
         effectiveLanguage = normalizeToIso639_1(body.language);
       }
 
-      // Bilingual code-switching context prompt:
-      // Primes Whisper's decoder so it accepts natural code-switching between English, Tamil, and Hindi
-      // without trying to force English speech into Tamil script or vice versa.
-      const defaultPrompt =
-        effectiveLanguage === 'en'
-          ? 'Customer telephone travel consultation in English.'
-          : effectiveLanguage === 'ta'
-          ? 'வாடிக்கையாளர் தொலைபேசி உரையாடல் மற்றும் பயண முன்பதிவு.'
-          : 'Customer telephone consultation. Mixed multilingual conversation in English, Tamil (வணக்கம்), and Hindi. Natural code-switching.';
-
       const requestedModel = body.model || 'large-v3';
 
       console.log(
-        `[Transcription] Sending recording ${recording.id} (${audioBuffer.length} bytes, type: ${contentType || 'audio/mpeg'}, language: ${effectiveLanguage || 'auto-detect'}, model: ${requestedModel}) to OpenAI Whisper`
+        `[Transcription] Sending recording ${recording.id} (language: ${effectiveLanguage || 'auto-detect'}, model: ${requestedModel}) to OpenAI Whisper via Plivo URL`
       );
 
-      // Call OpenAI Whisper API
-      const result = await transcribeAudioWithOpenAi(audioBuffer, filename, {
+      // Call OpenAI Whisper API via convenience wrapper
+      const result = await transcribeAudioFromUrl(recording.recordingUrl, {
         apiKey: body.apiKey,
         model: requestedModel,
         language: effectiveLanguage,
-        prompt: body.prompt || defaultPrompt,
+        prompt: body.prompt,
       });
 
       // Upsert Transcription record in database

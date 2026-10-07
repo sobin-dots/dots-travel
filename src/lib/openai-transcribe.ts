@@ -1,17 +1,15 @@
 /**
  * OpenAI Whisper Speech-to-Text Transcription Service
- * High-accuracy audio transcription supporting multitrack call recordings,
- * automatic language identification, and word/segment timestamping.
- *
- * Designed to run on Vercel serverless (no ffmpeg dependency).
+ * Optimized for Vercel Serverless and Plivo Audio Streams.
  */
 
 export interface OpenAiTranscriptionOptions {
   apiKey?: string;
   model?: string;
   baseUrl?: string;
-  language?: string; // Optional ISO-639-1 code e.g. "en", "hi", "es"
+  language?: string; // ISO-639-1 code e.g. "ta", "en"
   prompt?: string;
+  temperature?: number;
 }
 
 export interface OpenAiTranscriptionResult {
@@ -63,83 +61,48 @@ const LANGUAGE_NAME_TO_ISO: Record<string, string> = {
 };
 
 /**
- * Converts language names (e.g. 'tamil', 'english') or locales (e.g. 'en-US', 'ta-IN')
- * into OpenAI Whisper's strictly required ISO-639-1 two-letter code (e.g. 'ta', 'en').
+ * Normalizes language inputs to ISO-639-1 standard codes.
  */
 export function normalizeToIso639_1(input?: string): string | undefined {
   if (!input) return undefined;
   const clean = input.trim().toLowerCase();
   if (!clean) return undefined;
 
-  // Direct lookup for language name
-  if (LANGUAGE_NAME_TO_ISO[clean]) {
-    return LANGUAGE_NAME_TO_ISO[clean];
-  }
+  if (LANGUAGE_NAME_TO_ISO[clean]) return LANGUAGE_NAME_TO_ISO[clean];
 
-  // Handle locale codes like 'en-US', 'ta_IN', 'hi-IN'
   const primary = clean.split(/[-_]/)[0];
-  if (LANGUAGE_NAME_TO_ISO[primary]) {
-    return LANGUAGE_NAME_TO_ISO[primary];
-  }
-
-  // If already a 2-letter ISO code
-  if (primary.length === 2) {
-    return primary;
-  }
+  if (LANGUAGE_NAME_TO_ISO[primary]) return LANGUAGE_NAME_TO_ISO[primary];
+  if (primary.length === 2) return primary;
 
   return clean;
 }
 
 /**
- * Generates a minimal, valid PCM mono WAV buffer for testing or simulator mode.
+ * Fetches an audio file from a remote URL (e.g., Plivo Media URL) and converts it to a Buffer.
  */
-export function generateSyntheticWavBuffer(durationSeconds = 2): Buffer {
-  const sampleRate = 8000;
-  const numSamples = sampleRate * durationSeconds;
-  const byteRate = sampleRate * 2;
-  const blockAlign = 2;
-  const bitsPerSample = 16;
-  const dataSize = numSamples * 2;
-  const buffer = Buffer.alloc(44 + dataSize);
+export async function fetchAudioFromUrl(url: string): Promise<{ buffer: Buffer; filename: string }> {
+  console.log(`[Plivo Fetch] Downloading audio from: ${url}`);
+  const response = await fetch(url);
 
-  // RIFF header
-  buffer.write('RIFF', 0);
-  buffer.writeUInt32LE(36 + dataSize, 4);
-  buffer.write('WAVE', 8);
-
-  // fmt subchunk
-  buffer.write('fmt ', 12);
-  buffer.writeUInt32LE(16, 16);
-  buffer.writeUInt16LE(1, 20); // PCM
-  buffer.writeUInt16LE(1, 22); // mono
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(byteRate, 28);
-  buffer.writeUInt16LE(blockAlign, 32);
-  buffer.writeUInt16LE(bitsPerSample, 34);
-
-  // data subchunk
-  buffer.write('data', 36);
-  buffer.writeUInt32LE(dataSize, 40);
-
-  // 440Hz sine wave tone
-  const frequency = 440;
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    const sample = Math.round(Math.sin(2 * Math.PI * frequency * t) * 16000);
-    buffer.writeInt16LE(sample, 44 + i * 2);
+  if (!response.ok) {
+    throw new Error(`Failed to download audio from Plivo URL: HTTP ${response.status} ${response.statusText}`);
   }
 
-  return buffer;
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  // Extract or infer filename with extension
+  const urlPath = new URL(url).pathname;
+  let filename = urlPath.split('/').pop() || 'recording.mp3';
+  if (!/\.(mp3|wav|m4a|ogg|webm|flac)$/i.test(filename)) {
+    filename += '.mp3';
+  }
+
+  return { buffer, filename };
 }
 
 /**
- * Sends audio buffer to OpenAI Whisper API (v1/audio/transcriptions)
- * Defaults to 'whisper-1' model (the official OpenAI hosted Whisper Large V3).
- *
- * Anti-hallucination measures:
- * - temperature=0 for greedy deterministic decoding
- * - ISO-639-1 language normalization
- * - Model auto-fallback from 'large-v3' to 'whisper-1'
+ * Main transcription routine sending audio payload to OpenAI Whisper.
  */
 export async function transcribeAudioWithOpenAi(
   audioBuffer: Buffer | Uint8Array | ArrayBuffer,
@@ -148,9 +111,7 @@ export async function transcribeAudioWithOpenAi(
 ): Promise<OpenAiTranscriptionResult> {
   const apiKey = options.apiKey || process.env.OPENAI_API_KEY;
   if (!apiKey || !apiKey.trim()) {
-    throw new Error(
-      'OPENAI_API_KEY is not configured. Please add OPENAI_API_KEY to your environment variables or provide it in the request.'
-    );
+    throw new Error('OPENAI_API_KEY is not configured. Please supply a valid OpenAI API key.');
   }
 
   const baseUrl = (
@@ -159,44 +120,39 @@ export async function transcribeAudioWithOpenAi(
     'https://api.openai.com/v1'
   ).replace(/\/+$/, '');
 
-  const requestedModel =
-    options.model || process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1';
+  const requestedModel = options.model || process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1';
 
-  // Determine audio size for logging
   const audioSize =
     audioBuffer instanceof ArrayBuffer
       ? audioBuffer.byteLength
       : audioBuffer.length;
 
   console.log(
-    `[Whisper] Preparing ${audioSize} bytes as '${filename}', model=${requestedModel}, lang=${options.language || 'auto'}, baseUrl=${baseUrl}`
+    `[Whisper] Processing ${audioSize} bytes (${filename}) | Model: ${requestedModel} | BaseURL: ${baseUrl}`
   );
 
+  // Construct standard File instance for FormData upload
   const file = new File([audioBuffer as any], filename, {
     type: filename.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg',
   });
+
+  // Prompt guide to drastically boost code-switching & Indian English accuracy
+  const defaultPrompt =
+    options.prompt ||
+    'This conversation is in mixed Tamil and English (Tanglish). Keywords: Dubai, Chennai, Trivandrum, conference, itinerary, flight, 5-star hotel, package, booking, travel.';
 
   const sendRequest = async (modelName: string) => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('model', modelName);
     formData.append('response_format', 'verbose_json');
-    // temperature=0: greedy decoding prevents hallucination loops (e.g. repetitive Tamil text on silence/noise)
-    formData.append('temperature', '0');
+    formData.append('temperature', (options.temperature ?? 0).toString());
+    formData.append('prompt', defaultPrompt);
 
     const isoLang = normalizeToIso639_1(options.language);
     if (isoLang) {
       formData.append('language', isoLang);
-      console.log(`[Whisper] Language locked to ISO-639-1: '${isoLang}' (from '${options.language}')`);
-    } else {
-      console.log(`[Whisper] Language: auto-detect (no language constraint)`);
     }
-
-    if (options.prompt) {
-      formData.append('prompt', options.prompt);
-    }
-
-    console.log(`[Whisper] Sending request to ${baseUrl}/audio/transcriptions with model=${modelName}`);
 
     return fetch(`${baseUrl}/audio/transcriptions`, {
       method: 'POST',
@@ -209,20 +165,18 @@ export async function transcribeAudioWithOpenAi(
 
   let response = await sendRequest(requestedModel);
 
-  // If the official OpenAI endpoint rejects 'large-v3' (as OpenAI names its hosted Whisper Large model 'whisper-1')
+  // Fallback check if standard endpoint rejects model name variants
   if (!response.ok && (requestedModel === 'large-v3' || requestedModel === 'whisper-large-v3')) {
     try {
       const errClone = response.clone();
       const errJson = await errClone.json();
       const msg = (errJson.error?.message || '').toLowerCase();
       if (msg.includes('does not exist') || msg.includes('model')) {
-        console.warn(
-          `[Whisper] Model '${requestedModel}' not found on ${baseUrl}. Falling back to 'whisper-1'.`
-        );
+        console.warn(`[Whisper] Model '${requestedModel}' not found. Falling back to default 'whisper-1'.`);
         response = await sendRequest('whisper-1');
       }
     } catch {
-      // Continue with original response error
+      // Continue with primary response error handling
     }
   }
 
@@ -233,17 +187,13 @@ export async function transcribeAudioWithOpenAi(
       if (errJson.error?.message) {
         errorDetail = errJson.error.message;
       }
-    } catch {}
-    console.error(`[Whisper] API error: ${errorDetail}`);
+    } catch { }
+    console.error(`[Whisper Error] ${errorDetail}`);
     throw new Error(`OpenAI Whisper error: ${errorDetail}`);
   }
 
   const data = await response.json();
   const text = (data.text || '').trim();
-
-  console.log(
-    `[Whisper] Success: detected_lang=${data.language}, duration=${data.duration}s, text_length=${text.length}, segments=${data.segments?.length || 0}`
-  );
 
   return {
     text,
@@ -252,4 +202,15 @@ export async function transcribeAudioWithOpenAi(
     segments: data.segments,
     rawPayload: data,
   };
+}
+
+/**
+ * Convenience wrapper to fetch and transcribe a audio directly from a URL (e.g., Plivo).
+ */
+export async function transcribeAudioFromUrl(
+  mediaUrl: string,
+  options: OpenAiTranscriptionOptions = {}
+): Promise<OpenAiTranscriptionResult> {
+  const { buffer, filename } = await fetchAudioFromUrl(mediaUrl);
+  return transcribeAudioWithOpenAi(buffer, filename, options);
 }
