@@ -105,6 +105,7 @@ export async function POST(
       // Call OpenAI Whisper API
       const result = await transcribeAudioWithOpenAi(audioBuffer, filename, {
         apiKey: body.apiKey,
+        model: body.model || 'large-v3',
         language: body.language,
         prompt: body.prompt || 'Customer and agent telephone travel consultation.',
       });

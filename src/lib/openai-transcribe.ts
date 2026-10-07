@@ -6,6 +6,8 @@
 
 export interface OpenAiTranscriptionOptions {
   apiKey?: string;
+  model?: string;
+  baseUrl?: string;
   language?: string; // Optional ISO-639-1 code e.g. "en", "hi", "es"
   prompt?: string;
 }
@@ -67,6 +69,7 @@ export function generateSyntheticWavBuffer(durationSeconds = 2): Buffer {
 
 /**
  * Sends audio buffer to OpenAI Whisper API (v1/audio/transcriptions)
+ * Defaults to 'large-v3' model (with automatic fallback to 'whisper-1' if using official OpenAI endpoint)
  */
 export async function transcribeAudioWithOpenAi(
   audioBuffer: Buffer | Uint8Array | ArrayBuffer,
@@ -75,31 +78,63 @@ export async function transcribeAudioWithOpenAi(
 ): Promise<OpenAiTranscriptionResult> {
   const apiKey = options.apiKey || process.env.OPENAI_API_KEY;
   if (!apiKey || !apiKey.trim()) {
-    throw new Error('OPENAI_API_KEY is not configured. Please add OPENAI_API_KEY to your environment variables or provide it in the request.');
+    throw new Error(
+      'OPENAI_API_KEY is not configured. Please add OPENAI_API_KEY to your environment variables or provide it in the request.'
+    );
   }
+
+  const baseUrl = (
+    options.baseUrl ||
+    process.env.OPENAI_BASE_URL ||
+    'https://api.openai.com/v1'
+  ).replace(/\/+$/, '');
+
+  const requestedModel =
+    options.model || process.env.OPENAI_TRANSCRIPTION_MODEL || 'large-v3';
 
   const file = new File([audioBuffer as any], filename, {
     type: filename.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg',
   });
 
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('model', 'whisper-1');
-  formData.append('response_format', 'verbose_json');
-  if (options.language) {
-    formData.append('language', options.language);
-  }
-  if (options.prompt) {
-    formData.append('prompt', options.prompt);
-  }
+  const sendRequest = async (modelName: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('model', modelName);
+    formData.append('response_format', 'verbose_json');
+    if (options.language) {
+      formData.append('language', options.language);
+    }
+    if (options.prompt) {
+      formData.append('prompt', options.prompt);
+    }
 
-  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey.trim()}`,
-    },
-    body: formData,
-  });
+    return fetch(`${baseUrl}/audio/transcriptions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey.trim()}`,
+      },
+      body: formData,
+    });
+  };
+
+  let response = await sendRequest(requestedModel);
+
+  // If the official OpenAI endpoint rejects 'large-v3' (as OpenAI names its hosted Whisper Large model 'whisper-1')
+  if (!response.ok && (requestedModel === 'large-v3' || requestedModel === 'whisper-large-v3')) {
+    try {
+      const errClone = response.clone();
+      const errJson = await errClone.json();
+      const msg = (errJson.error?.message || '').toLowerCase();
+      if (msg.includes('does not exist') || msg.includes('model')) {
+        console.warn(
+          `[Transcription] Model '${requestedModel}' not found on ${baseUrl}. Falling back to official hosted Whisper Large alias 'whisper-1'.`
+        );
+        response = await sendRequest('whisper-1');
+      }
+    } catch {
+      // Continue with original response error
+    }
+  }
 
   if (!response.ok) {
     let errorDetail = `OpenAI API returned HTTP ${response.status}`;
