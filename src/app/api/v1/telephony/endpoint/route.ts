@@ -14,7 +14,9 @@ export async function GET(req: NextRequest) {
     const client = new (plivo as any).Client(process.env.PLIVO_AUTH_ID, process.env.PLIVO_AUTH_TOKEN);
     const endpoints = await client.endpoints.list();
     const endpoint = endpoints[0];
-    const password = endpoint.password || process.env.PLIVO_ENDPOINT_PASSWORD || 'PlivoWebRTCSecret2026!';
+    // Plivo's REST API returns an MD5 hash in endpoint.password, NOT the plaintext password.
+    // The browser Web Phone SIP stack requires the plaintext password to pass SIP 401/407 digest challenges.
+    const password = process.env.PLIVO_ENDPOINT_PASSWORD || 'PilvoAgent2026!Secure';
 
     if (!endpoint) {
       return NextResponse.json({

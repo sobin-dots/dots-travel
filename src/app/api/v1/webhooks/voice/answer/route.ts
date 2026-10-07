@@ -29,8 +29,17 @@ async function handleAnswer(req: NextRequest) {
   const transcriptionUrl = `${publicBase}/api/v1/webhooks/transcription`;
 
   const builder = new PlivoXmlBuilder();
-  const isSipEndpointCall =
-    Boolean((params.From && String(params.From).startsWith('sip:')) || (params.from && String(params.from).startsWith('sip:')));
+  const rawFrom = String(params.From || params.from || '');
+  const isSipEndpointCall = Boolean(
+    rawFrom.startsWith('sip:') ||
+    rawFrom.includes('threedotsagent') ||
+    params.Direction === 'outbound' ||
+    params.direction === 'outbound' ||
+    params.CallDirection === 'outbound' ||
+    params.callDirection === 'outbound' ||
+    params['X-PH-callerId'] ||
+    params['x-ph-callerid']
+  );
   const destinationNumber = params.To || params.to;
 
   if (isSipEndpointCall && destinationNumber) {

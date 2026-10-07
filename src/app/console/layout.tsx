@@ -10,6 +10,7 @@ import { CallModal } from '@/components/console/CallModal';
 import { CallDetailDrawer } from '@/components/console/CallDetailDrawer';
 import { LeadDetailDrawer } from '@/components/console/LeadDetailDrawer';
 import { GlobalModals } from '@/components/console/GlobalModals';
+import { patchPlivoSDK } from '@/lib/telephony/plivo-shim';
 
 function ConsoleLayoutContent({ children }: { children: React.ReactNode }) {
   const { initWebPhone } = useConsole();
@@ -35,6 +36,9 @@ function ConsoleLayoutContent({ children }: { children: React.ReactNode }) {
         src="https://cdn.plivo.com/sdk/browser/v2/plivo.min.js"
         strategy="afterInteractive"
         onLoad={() => {
+          if (typeof window !== 'undefined' && (window as any).Plivo) {
+            patchPlivoSDK((window as any).Plivo);
+          }
           initWebPhone();
         }}
       />
