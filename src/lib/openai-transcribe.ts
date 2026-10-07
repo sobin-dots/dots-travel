@@ -2,13 +2,9 @@
  * OpenAI Whisper Speech-to-Text Transcription Service
  * High-accuracy audio transcription supporting multitrack call recordings,
  * automatic language identification, and word/segment timestamping.
+ *
+ * Designed to run on Vercel serverless (no ffmpeg dependency).
  */
-
-import { spawn } from 'node:child_process';
-import os from 'node:os';
-import path from 'node:path';
-import fs from 'node:fs/promises';
-import crypto from 'node:crypto';
 
 export interface OpenAiTranscriptionOptions {
   apiKey?: string;
@@ -137,63 +133,13 @@ export function generateSyntheticWavBuffer(durationSeconds = 2): Buffer {
 }
 
 /**
- * Preprocesses telephony audio for OpenAI Whisper:
- * 1. Downmixes 8kHz dual-channel (stereo) to 16kHz mono (Whisper's native format).
- * 2. Trims initial dial-tone silence so language detection triggers on actual speech.
- * Falls back safely to the original buffer if ffmpeg is unavailable.
- */
-export async function preprocessAudioForWhisper(
-  audioBuffer: Buffer,
-  filename = 'recording.mp3'
-): Promise<{ buffer: Buffer; filename: string }> {
-  const tempDir = os.tmpdir();
-  const id = crypto.randomUUID();
-  const ext = path.extname(filename) || '.mp3';
-  const inputPath = path.join(tempDir, `whisper_in_${id}${ext}`);
-  const outputPath = path.join(tempDir, `whisper_out_${id}.mp3`);
-
-  try {
-    await fs.writeFile(inputPath, audioBuffer);
-
-    await new Promise<void>((resolve, reject) => {
-      const proc = spawn('ffmpeg', [
-        '-y',
-        '-i',
-        inputPath,
-        '-af',
-        'silenceremove=start_periods=1:start_duration=0.5:start_threshold=-35dB',
-        '-ac',
-        '1',
-        '-ar',
-        '16000',
-        '-b:a',
-        '64k',
-        outputPath,
-      ]);
-
-      proc.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`ffmpeg exited with code ${code}`));
-      });
-      proc.on('error', (err) => reject(err));
-    });
-
-    const processedBuffer = await fs.readFile(outputPath);
-    await Promise.allSettled([fs.unlink(inputPath), fs.unlink(outputPath)]);
-    return { buffer: processedBuffer, filename: `clean_${filename}` };
-  } catch {
-    // If ffmpeg is unavailable or fails, gracefully return original buffer
-    await Promise.allSettled([
-      fs.unlink(inputPath).catch(() => {}),
-      fs.unlink(outputPath).catch(() => {}),
-    ]);
-    return { buffer: audioBuffer, filename };
-  }
-}
-
-/**
  * Sends audio buffer to OpenAI Whisper API (v1/audio/transcriptions)
- * Defaults to 'large-v3' model (with automatic fallback to 'whisper-1' if using official OpenAI endpoint)
+ * Defaults to 'whisper-1' model (the official OpenAI hosted Whisper Large V3).
+ *
+ * Anti-hallucination measures:
+ * - temperature=0 for greedy deterministic decoding
+ * - ISO-639-1 language normalization
+ * - Model auto-fallback from 'large-v3' to 'whisper-1'
  */
 export async function transcribeAudioWithOpenAi(
   audioBuffer: Buffer | Uint8Array | ArrayBuffer,
@@ -214,23 +160,20 @@ export async function transcribeAudioWithOpenAi(
   ).replace(/\/+$/, '');
 
   const requestedModel =
-    options.model || process.env.OPENAI_TRANSCRIPTION_MODEL || 'large-v3';
+    options.model || process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1';
 
-  // Preprocess audio if Buffer: downmix stereo 8kHz to mono 16kHz and trim initial connection silence
-  let bufferToSend: Buffer | Uint8Array | ArrayBuffer = audioBuffer;
-  let filenameToSend = filename;
-  if (Buffer.isBuffer(audioBuffer)) {
-    try {
-      const pre = await preprocessAudioForWhisper(audioBuffer, filename);
-      bufferToSend = pre.buffer;
-      filenameToSend = pre.filename;
-    } catch {
-      // Graceful fallback to raw buffer
-    }
-  }
+  // Determine audio size for logging
+  const audioSize =
+    audioBuffer instanceof ArrayBuffer
+      ? audioBuffer.byteLength
+      : audioBuffer.length;
 
-  const file = new File([bufferToSend as any], filenameToSend, {
-    type: filenameToSend.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg',
+  console.log(
+    `[Whisper] Preparing ${audioSize} bytes as '${filename}', model=${requestedModel}, lang=${options.language || 'auto'}, baseUrl=${baseUrl}`
+  );
+
+  const file = new File([audioBuffer as any], filename, {
+    type: filename.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg',
   });
 
   const sendRequest = async (modelName: string) => {
@@ -238,14 +181,22 @@ export async function transcribeAudioWithOpenAi(
     formData.append('file', file);
     formData.append('model', modelName);
     formData.append('response_format', 'verbose_json');
+    // temperature=0: greedy decoding prevents hallucination loops (e.g. repetitive Tamil text on silence/noise)
     formData.append('temperature', '0');
+
     const isoLang = normalizeToIso639_1(options.language);
     if (isoLang) {
       formData.append('language', isoLang);
+      console.log(`[Whisper] Language locked to ISO-639-1: '${isoLang}' (from '${options.language}')`);
+    } else {
+      console.log(`[Whisper] Language: auto-detect (no language constraint)`);
     }
+
     if (options.prompt) {
       formData.append('prompt', options.prompt);
     }
+
+    console.log(`[Whisper] Sending request to ${baseUrl}/audio/transcriptions with model=${modelName}`);
 
     return fetch(`${baseUrl}/audio/transcriptions`, {
       method: 'POST',
@@ -266,7 +217,7 @@ export async function transcribeAudioWithOpenAi(
       const msg = (errJson.error?.message || '').toLowerCase();
       if (msg.includes('does not exist') || msg.includes('model')) {
         console.warn(
-          `[Transcription] Model '${requestedModel}' not found on ${baseUrl}. Falling back to official hosted Whisper Large alias 'whisper-1'.`
+          `[Whisper] Model '${requestedModel}' not found on ${baseUrl}. Falling back to 'whisper-1'.`
         );
         response = await sendRequest('whisper-1');
       }
@@ -283,11 +234,16 @@ export async function transcribeAudioWithOpenAi(
         errorDetail = errJson.error.message;
       }
     } catch {}
+    console.error(`[Whisper] API error: ${errorDetail}`);
     throw new Error(`OpenAI Whisper error: ${errorDetail}`);
   }
 
   const data = await response.json();
   const text = (data.text || '').trim();
+
+  console.log(
+    `[Whisper] Success: detected_lang=${data.language}, duration=${data.duration}s, text_length=${text.length}, segments=${data.segments?.length || 0}`
+  );
 
   return {
     text,
