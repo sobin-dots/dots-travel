@@ -4,6 +4,12 @@
  * automatic language identification, and word/segment timestamping.
  */
 
+import { spawn } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
+
 export interface OpenAiTranscriptionOptions {
   apiKey?: string;
   model?: string;
@@ -131,6 +137,61 @@ export function generateSyntheticWavBuffer(durationSeconds = 2): Buffer {
 }
 
 /**
+ * Preprocesses telephony audio for OpenAI Whisper:
+ * 1. Downmixes 8kHz dual-channel (stereo) to 16kHz mono (Whisper's native format).
+ * 2. Trims initial dial-tone silence so language detection triggers on actual speech.
+ * Falls back safely to the original buffer if ffmpeg is unavailable.
+ */
+export async function preprocessAudioForWhisper(
+  audioBuffer: Buffer,
+  filename = 'recording.mp3'
+): Promise<{ buffer: Buffer; filename: string }> {
+  const tempDir = os.tmpdir();
+  const id = crypto.randomUUID();
+  const ext = path.extname(filename) || '.mp3';
+  const inputPath = path.join(tempDir, `whisper_in_${id}${ext}`);
+  const outputPath = path.join(tempDir, `whisper_out_${id}.mp3`);
+
+  try {
+    await fs.writeFile(inputPath, audioBuffer);
+
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn('ffmpeg', [
+        '-y',
+        '-i',
+        inputPath,
+        '-af',
+        'silenceremove=start_periods=1:start_duration=0.5:start_threshold=-35dB',
+        '-ac',
+        '1',
+        '-ar',
+        '16000',
+        '-b:a',
+        '64k',
+        outputPath,
+      ]);
+
+      proc.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`ffmpeg exited with code ${code}`));
+      });
+      proc.on('error', (err) => reject(err));
+    });
+
+    const processedBuffer = await fs.readFile(outputPath);
+    await Promise.allSettled([fs.unlink(inputPath), fs.unlink(outputPath)]);
+    return { buffer: processedBuffer, filename: `clean_${filename}` };
+  } catch {
+    // If ffmpeg is unavailable or fails, gracefully return original buffer
+    await Promise.allSettled([
+      fs.unlink(inputPath).catch(() => {}),
+      fs.unlink(outputPath).catch(() => {}),
+    ]);
+    return { buffer: audioBuffer, filename };
+  }
+}
+
+/**
  * Sends audio buffer to OpenAI Whisper API (v1/audio/transcriptions)
  * Defaults to 'large-v3' model (with automatic fallback to 'whisper-1' if using official OpenAI endpoint)
  */
@@ -155,8 +216,21 @@ export async function transcribeAudioWithOpenAi(
   const requestedModel =
     options.model || process.env.OPENAI_TRANSCRIPTION_MODEL || 'large-v3';
 
-  const file = new File([audioBuffer as any], filename, {
-    type: filename.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg',
+  // Preprocess audio if Buffer: downmix stereo 8kHz to mono 16kHz and trim initial connection silence
+  let bufferToSend: Buffer | Uint8Array | ArrayBuffer = audioBuffer;
+  let filenameToSend = filename;
+  if (Buffer.isBuffer(audioBuffer)) {
+    try {
+      const pre = await preprocessAudioForWhisper(audioBuffer, filename);
+      bufferToSend = pre.buffer;
+      filenameToSend = pre.filename;
+    } catch {
+      // Graceful fallback to raw buffer
+    }
+  }
+
+  const file = new File([bufferToSend as any], filenameToSend, {
+    type: filenameToSend.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg',
   });
 
   const sendRequest = async (modelName: string) => {
@@ -164,6 +238,7 @@ export async function transcribeAudioWithOpenAi(
     formData.append('file', file);
     formData.append('model', modelName);
     formData.append('response_format', 'verbose_json');
+    formData.append('temperature', '0');
     const isoLang = normalizeToIso639_1(options.language);
     if (isoLang) {
       formData.append('language', isoLang);

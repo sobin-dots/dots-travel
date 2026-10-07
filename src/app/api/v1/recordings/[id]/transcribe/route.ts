@@ -123,17 +123,28 @@ export async function POST(
         );
       }
 
-      // Explicitly define target language in ISO-639-1 (e.g. 'ta', 'en', 'hi')
-      const rawLanguage =
-        body.language ||
-        recording.call?.transcriptionLanguage ||
-        'en';
-      const effectiveLanguage = normalizeToIso639_1(rawLanguage) || 'en';
+      // Language parameter handling:
+      // If the caller explicitly requests a specific language (e.g. 'ta', 'en', 'hi'), normalize it.
+      // If language is omitted, 'auto', or 'mixed', leave undefined so Whisper auto-detects dynamically!
+      let effectiveLanguage: string | undefined = undefined;
+      if (body.language && body.language !== 'auto' && body.language !== 'mixed') {
+        effectiveLanguage = normalizeToIso639_1(body.language);
+      }
+
+      // Bilingual code-switching context prompt:
+      // Primes Whisper's decoder so it accepts natural code-switching between English, Tamil, and Hindi
+      // without trying to force English speech into Tamil script or vice versa.
+      const defaultPrompt =
+        effectiveLanguage === 'en'
+          ? 'Customer telephone travel consultation in English.'
+          : effectiveLanguage === 'ta'
+          ? 'வாடிக்கையாளர் தொலைபேசி உரையாடல் மற்றும் பயண முன்பதிவு.'
+          : 'Customer telephone consultation. Mixed multilingual conversation in English, Tamil (வணக்கம்), and Hindi. Natural code-switching.';
 
       const requestedModel = body.model || 'large-v3';
 
       console.log(
-        `[Transcription] Sending recording ${recording.id} (${audioBuffer.length} bytes, type: ${contentType || 'audio/mpeg'}, language: ${effectiveLanguage}, model: ${requestedModel}) to OpenAI Whisper`
+        `[Transcription] Sending recording ${recording.id} (${audioBuffer.length} bytes, type: ${contentType || 'audio/mpeg'}, language: ${effectiveLanguage || 'auto-detect'}, model: ${requestedModel}) to OpenAI Whisper`
       );
 
       // Call OpenAI Whisper API
@@ -141,7 +152,7 @@ export async function POST(
         apiKey: body.apiKey,
         model: requestedModel,
         language: effectiveLanguage,
-        prompt: body.prompt || 'Customer and agent telephone travel consultation.',
+        prompt: body.prompt || defaultPrompt,
       });
 
       // Upsert Transcription record in database
