@@ -29,6 +29,22 @@ async function handleAnswer(req: NextRequest) {
   const transcriptionUrl = `${publicBase}/api/v1/webhooks/transcription`;
 
   const builder = new PlivoXmlBuilder();
+
+  // Plivo Audio Streaming (<Stream>) integration
+  const streamWebSocketUrl = process.env.PLIVO_STREAM_WS_URL || (
+    publicBase.startsWith('http')
+      ? publicBase.replace(/^http/, 'ws') + '/api/plivo/stream'
+      : undefined
+  );
+  const enableAudioStreaming = process.env.ENABLE_AUDIO_STREAMING === 'true' || Boolean(process.env.PLIVO_STREAM_WS_URL);
+
+  if (enableAudioStreaming && streamWebSocketUrl) {
+    builder.stream(streamWebSocketUrl, {
+      audioTrack: 'both',
+      streamTimeout: 86400,
+    });
+  }
+
   const rawFrom = String(params.From || params.from || '');
   const isSipEndpointCall = Boolean(
     rawFrom.startsWith('sip:') ||

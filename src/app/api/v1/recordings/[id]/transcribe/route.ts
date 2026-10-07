@@ -164,47 +164,141 @@ export async function POST(
   }
 
   // ─────────────────────────────────────────────────────────────
-  // 2. PLIVO NATIVE TRANSCRIPTION FALLBACK
+  // 2. PLIVO CARRIER TRANSCRIPTION REFETCH / FETCH
   // ─────────────────────────────────────────────────────────────
   try {
     const provider = getTelephonyProvider();
-    const publicBase = process.env.PUBLIC_BASE_URL || 'http://localhost:3000';
-    const transcriptionUrl = `${publicBase}/api/v1/webhooks/transcription`;
 
-    const res = await provider.createTranscription(recording.plivoRecordingId, {
-      transcriptionType: 'auto',
-      transcriptionUrl,
-    });
+    // 1. First, attempt to fetch existing transcription directly from Plivo REST API
+    let plivoData = await provider.getTranscription(recording.plivoRecordingId);
 
-    const transcription = await db.transcription.create({
-      data: {
+    // 2. If not available yet, request on-demand carrier transcription from Plivo
+    if (!plivoData || !plivoData.text) {
+      const publicBase = process.env.PUBLIC_BASE_URL || 'http://localhost:3000';
+      const transcriptionUrl = `${publicBase}/api/v1/webhooks/transcription`;
+
+      const createRes = await provider.createTranscription(recording.plivoRecordingId, {
+        transcriptionType: 'auto',
+        transcriptionUrl,
+      });
+
+      if (createRes.status === 'completed') {
+        plivoData = await provider.getTranscription(recording.plivoRecordingId);
+      }
+    }
+
+    if (plivoData && plivoData.text) {
+      // Find existing Plivo transcription record for this recording
+      let existingTranscription = await db.transcription.findFirst({
+        where: {
+          recordingId: recording.id,
+          organizationId: auth!.organizationId,
+          source: { in: ['plivo', 'callback', 'on_demand'] },
+        },
+      });
+
+      if (!existingTranscription) {
+        existingTranscription = await db.transcription.findUnique({
+          where: { plivoTranscriptionId: recording.plivoRecordingId },
+        });
+      }
+
+      let transcription;
+      if (existingTranscription) {
+        transcription = await db.transcription.update({
+          where: { id: existingTranscription.id },
+          data: {
+            text: plivoData.text,
+            status: 'completed',
+            source: 'plivo',
+            wordCount: (plivoData.text || '').split(/\s+/).filter(Boolean).length,
+            rawPayload: plivoData.rawPayload || undefined,
+            updatedAt: new Date(),
+          },
+        });
+      } else {
+        transcription = await db.transcription.create({
+          data: {
+            organizationId: auth!.organizationId,
+            recordingId: recording.id,
+            callId: recording.callId,
+            plivoTranscriptionId: plivoData.transcriptionId || recording.plivoRecordingId,
+            recordingSid: recording.plivoRecordingId,
+            type: 'transcription',
+            status: 'completed',
+            language: 'en',
+            text: plivoData.text,
+            wordCount: (plivoData.text || '').split(/\s+/).filter(Boolean).length,
+            source: 'plivo',
+            rawPayload: plivoData.rawPayload || undefined,
+          },
+        });
+      }
+
+      // Mark transcription on call record
+      if (recording.callId) {
+        await db.call.update({
+          where: { id: recording.callId },
+          data: {
+            transcriptionEnabled: true,
+          },
+        });
+      }
+
+      await logAuditEvent({
         organizationId: auth!.organizationId,
+        actorUserId: auth!.userId,
+        action: 'transcription.refetch_plivo',
+        targetType: 'Recording',
+        targetId: recording.id,
+        metadata: {
+          recordingId: recording.plivoRecordingId,
+          transcriptionId: transcription.id,
+          wordCount: transcription.wordCount,
+          source: 'plivo',
+        },
+      });
+
+      return NextResponse.json({
+        api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
+        message: 'Transcription refetched successfully from Plivo carrier',
+        transcription,
+      });
+    }
+
+    // If Plivo carrier is generating or queued
+    const existingTranscription = await db.transcription.findFirst({
+      where: {
         recordingId: recording.id,
-        callId: recording.callId,
-        plivoTranscriptionId: res.transcriptionId,
-        recordingSid: recording.plivoRecordingId,
-        status: res.status,
-        source: 'on_demand',
+        organizationId: auth!.organizationId,
       },
     });
 
-    await logAuditEvent({
-      organizationId: auth!.organizationId,
-      actorUserId: auth!.userId,
-      action: 'transcription.create_on_demand',
-      targetType: 'Recording',
-      targetId: recording.id,
-      metadata: { recordingId: recording.plivoRecordingId, transcriptionId: res.transcriptionId },
-    });
+    let transcription = existingTranscription;
+    if (!transcription) {
+      transcription = await db.transcription.create({
+        data: {
+          organizationId: auth!.organizationId,
+          recordingId: recording.id,
+          callId: recording.callId,
+          plivoTranscriptionId: recording.plivoRecordingId,
+          recordingSid: recording.plivoRecordingId,
+          status: 'queued',
+          source: 'plivo',
+        },
+      });
+    }
 
     return NextResponse.json({
       api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
-      message: 'On-demand Plivo transcription requested successfully',
+      message: 'Carrier transcription requested from Plivo. Please check back in a few moments.',
       transcription,
+      status: 'queued',
     });
   } catch (err: any) {
+    console.error('Plivo transcription refetch error:', err);
     return NextResponse.json(
-      { api_id: 'provider_err', error: err.message },
+      { api_id: 'provider_err', error: err.message || 'Failed to refetch transcription from Plivo' },
       { status: 500 }
     );
   }

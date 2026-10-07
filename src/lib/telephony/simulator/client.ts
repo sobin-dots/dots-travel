@@ -18,6 +18,7 @@ import {
   RecordingDTO,
   TranscriptionOptions,
   TranscriptionResultDTO,
+  PlivoTranscriptionDTO,
 } from '../types';
 import { computeV3Signature } from '../webhook-validator';
 
@@ -247,6 +248,15 @@ export class SimulatorProvider implements TelephonyProvider {
 
   async deleteRecording(recordingId: string): Promise<void> {
     this.recordings.delete(recordingId);
+  }
+
+  async getTranscription(recordingOrTranscriptionId: string): Promise<PlivoTranscriptionDTO | null> {
+    return {
+      transcriptionId: recordingOrTranscriptionId,
+      recordingId: recordingOrTranscriptionId,
+      status: 'completed',
+      text: 'Simulated carrier transcription text.',
+    };
   }
 
   async createTranscription(recordingId: string, _options?: TranscriptionOptions): Promise<TranscriptionResultDTO> {

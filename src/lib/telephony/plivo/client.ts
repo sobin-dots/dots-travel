@@ -18,6 +18,7 @@ import {
   RecordingDTO,
   TranscriptionOptions,
   TranscriptionResultDTO,
+  PlivoTranscriptionDTO,
 } from '../types';
 
 const plivoSdk: any = (plivoModule as any).default || plivoModule;
@@ -368,18 +369,82 @@ export class PlivoProvider implements TelephonyProvider {
     }
   }
 
+  private getAuthHeader(): string {
+    return 'Basic ' + Buffer.from(`${this.authId}:${this.authToken}`).toString('base64');
+  }
+
+  private async plivoRequest(endpoint: string, options: RequestInit = {}): Promise<Response> {
+    const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const url = `https://api.plivo.com/v1/Account/${this.authId}${cleanEndpoint}`;
+    const headers: Record<string, string> = {
+      Authorization: this.getAuthHeader(),
+      'Content-Type': 'application/json',
+      ...((options.headers as any) || {}),
+    };
+    return fetch(url, { ...options, headers });
+  }
+
+  async getTranscription(recordingOrTranscriptionId: string): Promise<PlivoTranscriptionDTO | null> {
+    try {
+      const res = await this.plivoRequest(`/Transcription/${recordingOrTranscriptionId}/`);
+      if (res.status === 404) {
+        return null;
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text}`);
+      }
+      const data = await res.json();
+      return {
+        transcriptionId: data.transcription_id || recordingOrTranscriptionId,
+        recordingId: recordingOrTranscriptionId,
+        status: data.status || 'completed',
+        text: data.transcription || '',
+        cost: data.cost != null ? String(data.cost) : undefined,
+        rate: data.rate != null ? String(data.rate) : undefined,
+        durationMs: data.recording_duration_ms,
+        rawPayload: data,
+      };
+    } catch (err: any) {
+      throw new Error(`Plivo getTranscription error: ${err.message}`);
+    }
+  }
+
   async createTranscription(recordingId: string, options?: TranscriptionOptions): Promise<TranscriptionResultDTO> {
     try {
-      const params: any = {};
-      if (options?.transcriptionType) params.transcription_type = options.transcriptionType;
-      if (options?.transcriptionUrl) params.transcription_url = options.transcriptionUrl;
+      const body: any = {};
+      if (options?.transcriptionType) body.transcription_type = options.transcriptionType;
+      if (options?.transcriptionUrl) body.transcription_url = options.transcriptionUrl;
 
-      const response = await this.client.transcriptions.create(recordingId, params);
+      const res = await this.plivoRequest(`/Transcription/${recordingId}/`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+
+      if (res.status === 400) {
+        const data = await res.json().catch(() => ({}));
+        if (data.error && data.error.includes('already available')) {
+          return {
+            transcriptionId: recordingId,
+            recordingId,
+            status: 'completed',
+            message: 'Transcription already available',
+          };
+        }
+        throw new Error(data.error || 'Failed to request transcription');
+      }
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text}`);
+      }
+
+      const data = await res.json();
       return {
-        transcriptionId: response.transcriptionId || response.transcription_id || '',
+        transcriptionId: data.transcriptionId || data.transcription_id || recordingId,
         recordingId,
-        status: response.status || 'queued',
-        message: response.message || 'Transcription requested',
+        status: data.status || 'queued',
+        message: data.message || 'Transcription requested from Plivo carrier',
       };
     } catch (err: any) {
       throw new Error(`Plivo createTranscription error: ${err.message}`);
@@ -388,7 +453,13 @@ export class PlivoProvider implements TelephonyProvider {
 
   async deleteTranscription(transcriptionId: string): Promise<void> {
     try {
-      await this.client.transcriptions.delete(transcriptionId);
+      const res = await this.plivoRequest(`/Transcription/${transcriptionId}/`, {
+        method: 'DELETE',
+      });
+      if (!res.ok && res.status !== 404) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text}`);
+      }
     } catch (err: any) {
       throw new Error(`Plivo deleteTranscription error: ${err.message}`);
     }

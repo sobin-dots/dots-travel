@@ -86,7 +86,10 @@ interface ConsoleContextType {
   refreshCallDetail: (callId: string) => Promise<void>;
   transcribingRecId: string | null;
   setTranscribingRecId: (id: string | null) => void;
+  transcribingProvider: 'openai' | 'plivo' | null;
+  setTranscribingProvider: (provider: 'openai' | 'plivo' | null) => void;
   handleTriggerTranscription: (recordingId: string, provider?: 'openai' | 'plivo') => Promise<void>;
+  handleRefetchPlivoTranscriptionForCall: (callId: string) => Promise<void>;
   handleGenerateItinerary: (callId: string) => Promise<void>;
   generatingItineraryCallId: string | null;
   handleHangupLiveCall: (callId: string) => Promise<void>;
@@ -250,6 +253,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [selectedCallDetail, setSelectedCallDetail] = useState<any | null>(null);
   const [callDetailSyncing, setCallDetailSyncing] = useState<boolean>(false);
   const [transcribingRecId, setTranscribingRecId] = useState<string | null>(null);
+  const [transcribingProvider, setTranscribingProvider] = useState<'openai' | 'plivo' | null>(null);
 
   // In-Browser Web Phone (WebRTC) state
   const [webPhoneStatus, setWebPhoneStatus] = useState<'idle' | 'logging_in' | 'ready' | 'calling' | 'ringing' | 'connected' | 'ended' | 'error'>('idle');
@@ -1050,6 +1054,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   const handleTriggerTranscription = async (recordingId: string, provider: 'openai' | 'plivo' = 'openai') => {
     setTranscribingRecId(recordingId);
+    setTranscribingProvider(provider);
     try {
       const res = await fetch(`/api/v1/recordings/${recordingId}/transcribe`, {
         method: 'POST',
@@ -1061,10 +1066,10 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       });
       const data = await res.json();
       if (res.ok) {
-        alert(data.message || 'Transcription generated successfully with OpenAI Whisper!');
-        fetchData();
+        alert(data.message || (provider === 'plivo' ? 'Transcription refetched from Plivo successfully!' : 'Transcription generated successfully with OpenAI Whisper!'));
+        await fetchData();
         if (selectedCallDetail) {
-          refreshCallDetail(selectedCallDetail.id);
+          await refreshCallDetail(selectedCallDetail.id);
         }
       } else {
         alert(data.error || 'Failed to transcribe recording');
@@ -1073,6 +1078,33 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       alert(err.message || 'Transcription request failed');
     } finally {
       setTranscribingRecId(null);
+      setTranscribingProvider(null);
+    }
+  };
+
+  const handleRefetchPlivoTranscriptionForCall = async (callId: string) => {
+    setTranscribingProvider('plivo');
+    try {
+      const res = await fetch(`/api/v1/calls/${callId}/transcribe`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`,
+        },
+        body: JSON.stringify({ provider: 'plivo' }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || 'Transcription refetched from Plivo successfully!');
+        await fetchData();
+        await refreshCallDetail(callId);
+      } else {
+        alert(data.error || 'Failed to refetch Plivo transcription');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Plivo transcription request failed');
+    } finally {
+      setTranscribingProvider(null);
     }
   };
 
@@ -1395,7 +1427,10 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         refreshCallDetail,
         transcribingRecId,
         setTranscribingRecId,
+        transcribingProvider,
+        setTranscribingProvider,
         handleTriggerTranscription,
+        handleRefetchPlivoTranscriptionForCall,
         handleGenerateItinerary,
         generatingItineraryCallId,
         handleHangupLiveCall,

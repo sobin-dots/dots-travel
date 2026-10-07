@@ -136,6 +136,17 @@ export interface TranscriptionResultDTO {
   message: string;
 }
 
+export interface PlivoTranscriptionDTO {
+  transcriptionId: string;
+  recordingId: string;
+  status: string;
+  text?: string;
+  cost?: string;
+  rate?: string;
+  durationMs?: number;
+  rawPayload?: any;
+}
+
 export interface TelephonyProvider {
   readonly mode: 'live' | 'simulator';
 
@@ -161,6 +172,8 @@ export interface TelephonyProvider {
 
   listRecordings(params?: { callUuid?: string; limit?: number }): Promise<RecordingDTO[]>;
   deleteRecording(recordingId: string): Promise<void>;
+  getTranscription(recordingOrTranscriptionId: string): Promise<PlivoTranscriptionDTO | null>;
   createTranscription(recordingId: string, options?: TranscriptionOptions): Promise<TranscriptionResultDTO>;
   deleteTranscription(transcriptionId: string): Promise<void>;
 }
+

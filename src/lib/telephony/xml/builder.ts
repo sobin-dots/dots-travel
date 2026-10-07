@@ -47,11 +47,23 @@ export interface WaitElement {
   length: number;
 }
 
+export interface StreamElement {
+  type: 'Stream';
+  url: string;
+  bidirection?: boolean;
+  audioTrack?: 'inbound' | 'outbound' | 'both';
+  streamTimeout?: number;
+  statusCallbackUrl?: string;
+  statusCallbackMethod?: 'GET' | 'POST';
+  contentType?: string;
+}
+
 export type PlivoXmlElement =
   | SpeakElement
   | PlayElement
   | DialElement
   | RecordElement
+  | StreamElement
   | HangupElement
   | WaitElement;
 
@@ -133,6 +145,15 @@ export class PlivoXmlBuilder {
     return this;
   }
 
+  stream(url: string, options?: Omit<StreamElement, 'type' | 'url'>): this {
+    this.elements.push({
+      type: 'Stream',
+      url,
+      ...options,
+    });
+    return this;
+  }
+
   toXml(): string {
     const parts: string[] = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>'];
 
@@ -191,6 +212,17 @@ export class PlivoXmlBuilder {
         }
         case 'Wait': {
           parts.push(`  <Wait length="${el.length}" />`);
+          break;
+        }
+        case 'Stream': {
+          let attrs = '';
+          if (el.bidirection !== undefined) attrs += ` bidirection="${el.bidirection}"`;
+          if (el.audioTrack) attrs += ` audioTrack="${el.audioTrack}"`;
+          if (el.streamTimeout !== undefined) attrs += ` streamTimeout="${el.streamTimeout}"`;
+          if (el.statusCallbackUrl) attrs += ` statusCallbackUrl="${escapeXml(el.statusCallbackUrl)}"`;
+          if (el.statusCallbackMethod) attrs += ` statusCallbackMethod="${el.statusCallbackMethod}"`;
+          if (el.contentType) attrs += ` contentType="${el.contentType}"`;
+          parts.push(`  <Stream${attrs}>${escapeXml(el.url)}</Stream>`);
           break;
         }
       }
