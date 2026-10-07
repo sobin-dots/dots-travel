@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { processIncomingWebhook } from '@/lib/webhook-helper';
+import { transcribeAudioFromUrl } from '@/lib/openai-transcribe';
 
 export const runtime = 'nodejs';
 
@@ -41,7 +42,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (organizationId) {
-      await db.recording.upsert({
+      const recRecord = await db.recording.upsert({
         where: { plivoRecordingId: recordingId },
         update: {
           recordingUrl,
@@ -57,6 +58,39 @@ export async function POST(req: NextRequest) {
           status: 'completed',
         },
       });
+
+      // Automatically trigger OpenAI Whisper transcription for full-call fidelity
+      if (process.env.OPENAI_API_KEY && recordingUrl) {
+        transcribeAudioFromUrl(recordingUrl)
+          .then(async (whisperResult) => {
+            if (whisperResult.text) {
+              const whisperId = `whisper_${recordingId}`;
+              await db.transcription.upsert({
+                where: { plivoTranscriptionId: whisperId },
+                update: {
+                  text: whisperResult.text,
+                  status: 'completed',
+                  wordCount: whisperResult.text.split(/\s+/).filter(Boolean).length,
+                  source: 'openai_whisper',
+                  rawPayload: whisperResult.rawPayload,
+                },
+                create: {
+                  organizationId,
+                  recordingId: recRecord.id,
+                  callId: call?.id,
+                  plivoTranscriptionId: whisperId,
+                  recordingSid: recordingId,
+                  status: 'completed',
+                  text: whisperResult.text,
+                  wordCount: whisperResult.text.split(/\s+/).filter(Boolean).length,
+                  source: 'openai_whisper',
+                  rawPayload: whisperResult.rawPayload,
+                },
+              });
+            }
+          })
+          .catch((e) => console.warn('[Auto-Whisper] Notice:', e.message));
+      }
 
       if (call) {
         await db.callEvent.create({

@@ -171,10 +171,10 @@ export async function transcribeAudioWithOpenAi(
     type: filename.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg',
   });
 
-  // Prompt guide to drastically boost code-switching & Indian English accuracy
+  // Neutral travel context prompt to guide technical & travel terms without forcing hallucination loops
   const defaultPrompt =
     options.prompt ||
-    'This conversation is in mixed Tamil and English (Tanglish). Keywords: Dubai, Chennai, Trivandrum, conference, itinerary, flight, 5-star hotel, package, booking, travel.';
+    'Customer call discussing travel itinerary, vacation destination, flights, hotels, booking package, budget, dates.';
 
   const sendRequest = async (modelName: string) => {
     const formData = new FormData();

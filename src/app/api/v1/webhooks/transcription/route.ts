@@ -35,6 +35,20 @@ export async function POST(req: NextRequest) {
 
     const organizationId = recording?.organizationId || (await db.organization.findFirst())?.id;
 
+    // Do not overwrite high-fidelity OpenAI Whisper transcription with Plivo voicemail snippet
+    if (recording?.id) {
+      const existingWhisper = await db.transcription.findFirst({
+        where: {
+          recordingId: recording.id,
+          source: 'openai_whisper',
+        },
+      });
+      if (existingWhisper && (existingWhisper.wordCount || 0) > 5) {
+        console.log(`[Transcription Webhook] Retaining OpenAI Whisper transcription for recording ${recording.id}`);
+        return NextResponse.json({ status: 'retained_whisper_transcript' }, { status: 200 });
+      }
+    }
+
     if (organizationId) {
       if (transcriptionId) {
         await db.transcription.upsert({

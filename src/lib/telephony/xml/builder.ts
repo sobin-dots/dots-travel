@@ -33,7 +33,7 @@ export interface RecordElement {
   startOnDialAnswer?: boolean;
   redirect?: boolean;
   recordSession?: boolean;
-  recordChannelType?: 'mono' | 'dual';
+  recordChannelType?: 'mono' | 'stereo' | 'dual';
 }
 
 export interface HangupElement {

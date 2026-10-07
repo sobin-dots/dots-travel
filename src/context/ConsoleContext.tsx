@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { CallToneGenerator } from '@/lib/call-tones';
-import { patchPlivoSDK, createNoiseSuppressionShim } from '@/lib/telephony/plivo-shim';
+import { patchPlivoSDK, createNoiseSuppressionShim, getLiveMicrophoneStream } from '@/lib/telephony/plivo-shim';
 
 interface ConsoleContextType {
   bearerToken: string;
@@ -660,8 +660,9 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     setWebPhoneDuration(0);
 
     try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
+      const micStream = await getLiveMicrophoneStream();
+      if (typeof window !== 'undefined' && micStream) {
+        (window as any).localStream = micStream;
       }
 
       if (!plivoClientRef.current && typeof window !== 'undefined' && (window as any).Plivo && endpointConfig) {
@@ -745,13 +746,10 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
     if (plivoClientRef.current) {
       try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            if (typeof window !== 'undefined') (window as any).localStream = stream;
-          } catch (micErr) {
-            console.warn('Microphone permission request:', micErr);
-          }
+        // Guarantee live microphone audio tracks are active before answering
+        const micStream = await getLiveMicrophoneStream();
+        if (typeof window !== 'undefined' && micStream) {
+          (window as any).localStream = micStream;
         }
 
         patchPlivoSDK((window as any).Plivo, plivoClientRef.current);
@@ -765,6 +763,16 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         if (typeof plivoClientRef.current.answer === 'function') {
           plivoClientRef.current.answer();
         }
+
+        // Guarantee Plivo WebRTC stream is unmuted and transmitting audio
+        setTimeout(() => {
+          try {
+            if (typeof plivoClientRef.current.unmute === 'function') {
+              plivoClientRef.current.unmute();
+            }
+          } catch {}
+          setWebPhoneMuted(false);
+        }, 400);
       } catch (err: any) {
         console.warn('Plivo answer notice:', err.message);
       }

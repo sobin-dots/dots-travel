@@ -64,7 +64,7 @@ export async function POST(
         effectiveLanguage = normalizeToIso639_1(body.language);
       }
 
-      const requestedModel = body.model || 'large-v3';
+      const requestedModel = body.model || process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1';
 
       console.log(
         `[Transcription] Sending recording ${recording.id} (language: ${effectiveLanguage || 'auto-detect'}, model: ${requestedModel}) to OpenAI Whisper via Plivo URL`

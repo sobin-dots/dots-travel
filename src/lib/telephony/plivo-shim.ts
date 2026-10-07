@@ -7,17 +7,59 @@
  * `this.noiseSuppresion` is undefined, throwing:
  * "TypeError: Cannot read properties of undefined (reading 'startNoiseSuppression')".
  * 
- * This utility safely shims `noiseSuppresion` and `noiseSuppression` on Plivo prototype
- * and client instances so calls connect seamlessly without crashes.
+ * Furthermore, Plivo depends on `startNoiseSuppression()` and `setLocalMediaStream()`
+ * to return an active MediaStream containing live audio tracks. If null is returned,
+ * Plivo connects the call with NO audio track (silent agent channel).
  */
+
+export async function getLiveMicrophoneStream(): Promise<MediaStream | null> {
+  if (typeof window === 'undefined' || !navigator.mediaDevices?.getUserMedia) return null;
+
+  try {
+    const existing = (window as any).localStream as MediaStream | undefined;
+    if (
+      existing &&
+      typeof existing.getAudioTracks === 'function' &&
+      existing.getAudioTracks().some((t) => t.readyState === 'live' && t.enabled)
+    ) {
+      return existing;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    // Ensure all audio tracks are enabled and active
+    stream.getAudioTracks().forEach((track) => {
+      track.enabled = true;
+    });
+
+    (window as any).localStream = stream;
+    return stream;
+  } catch (err) {
+    console.warn('[PlivoShim] getUserMedia audio request notice:', err);
+    return null;
+  }
+}
 
 export function createNoiseSuppressionShim(clientInstance?: any) {
   return {
     noiseSupressionRunning: false,
     started: false,
     startNoiseSuppression: async (stream?: any) => {
-      const activeStream =
+      let activeStream =
         stream || (typeof window !== 'undefined' ? (window as any).localStream : null);
+      if (
+        !activeStream ||
+        typeof activeStream.getAudioTracks !== 'function' ||
+        !activeStream.getAudioTracks().some((t: any) => t.readyState === 'live')
+      ) {
+        activeStream = await getLiveMicrophoneStream();
+      }
       if (typeof window !== 'undefined' && activeStream) {
         (window as any).localStream = activeStream;
       }
@@ -26,19 +68,7 @@ export function createNoiseSuppressionShim(clientInstance?: any) {
     stopNoiseSuppresion: () => {},
     stopNoiseSuppression: () => {},
     setLocalMediaStream: async () => {
-      if (typeof window !== 'undefined' && (window as any).localStream) {
-        return (window as any).localStream;
-      }
-      if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
-        try {
-          const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-          if (typeof window !== 'undefined') (window as any).localStream = s;
-          return s;
-        } catch {
-          return null;
-        }
-      }
-      return null;
+      return await getLiveMicrophoneStream();
     },
     updateProcessingStream: async (stream: any) => stream,
     clearNoiseSupression: () => {},
