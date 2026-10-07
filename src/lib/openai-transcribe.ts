@@ -1,6 +1,9 @@
+import OpenAI, { toFile } from 'openai';
+
 /**
- * OpenAI Whisper Speech-to-Text Transcription Service
- * Optimized for Vercel Serverless and Plivo Audio Streams.
+ * OpenAI Speech-to-Text Transcription Service
+ * Uses official OpenAI SDK with gpt-4o-transcribe & Whisper-1,
+ * SSRF URL protection, and file size validation.
  */
 
 export interface OpenAiTranscriptionOptions {
@@ -24,6 +27,16 @@ export interface OpenAiTranscriptionResult {
   }>;
   rawPayload: any;
 }
+
+const MAX_AUDIO_BYTES = 24 * 1024 * 1024;
+
+const DEFAULT_ALLOWED_HOSTS = [
+  'media.plivo.com',
+  'aps1.media.plivo.com',
+  's3.amazonaws.com',
+  'plivo-recordings.s3.amazonaws.com',
+  'plivo-transcriptions-production.s3.amazonaws.com',
+];
 
 const LANGUAGE_NAME_TO_ISO: Record<string, string> = {
   tamil: 'ta',
@@ -78,19 +91,50 @@ export function normalizeToIso639_1(input?: string): string | undefined {
 }
 
 /**
- * Fetches an audio file from a remote URL (e.g., Plivo Media URL) and converts it to a Buffer.
+ * Transcribes a remote audio recording URL using OpenAI's transcription service.
+ * Includes SSRF URL host validation, max byte checks, and gpt-4o-transcribe processing.
  */
-export async function fetchAudioFromUrl(url: string): Promise<{ buffer: Buffer; filename: string }> {
-  console.log(`[Plivo Fetch] Downloading audio from: ${url}`);
-  
+export async function transcribeRecording(
+  recordingUrl: string,
+  options: OpenAiTranscriptionOptions = {}
+): Promise<string> {
+  const url = new URL(recordingUrl);
+
+  const userAllowedHosts = (process.env.RECORDING_ALLOWED_HOSTS ?? '')
+    .split(',')
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean);
+
+  const allowedHosts = new Set([...DEFAULT_ALLOWED_HOSTS, ...userAllowedHosts]);
+
+  const isAllowedHost =
+    allowedHosts.has(url.hostname.toLowerCase()) ||
+    url.hostname.toLowerCase().endsWith('.media.plivo.com') ||
+    url.hostname.toLowerCase().endsWith('.plivo.com');
+
+  // Prevent arbitrary server-side URL fetching (SSRF protection).
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    !isAllowedHost
+  ) {
+    throw new Error('Untrusted recording URL');
+  }
+
   const fetchHeaders: Record<string, string> = {
     'User-Agent': 'Pilvo-Downloader/1.0',
     'ngrok-skip-browser-warning': 'true',
   };
-  
-  let response = await fetch(url, { headers: fetchHeaders });
 
-  // If carrier requires basic auth, retry with Plivo credentials
+  let response = await fetch(url, {
+    cache: 'no-store',
+    redirect: 'error',
+    signal: AbortSignal.timeout(60_000),
+    headers: fetchHeaders,
+  });
+
+  // If carrier bucket requires Basic Auth, retry with Plivo credentials
   if (
     !response.ok &&
     (response.status === 401 || response.status === 403) &&
@@ -101,151 +145,150 @@ export async function fetchAudioFromUrl(url: string): Promise<{ buffer: Buffer; 
       `${process.env.PLIVO_AUTH_ID}:${process.env.PLIVO_AUTH_TOKEN}`
     ).toString('base64');
     response = await fetch(url, {
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(60_000),
       headers: { ...fetchHeaders, Authorization: `Basic ${basicAuth}` },
     });
   }
 
   if (!response.ok) {
-    throw new Error(`Failed to download audio from Plivo URL: HTTP ${response.status} ${response.statusText}`);
+    throw new Error(`Recording download failed: ${response.status}`);
   }
 
-  const contentType = response.headers.get('content-type') || '';
-  if (
-    contentType.includes('text/html') ||
-    contentType.includes('application/xhtml') ||
-    contentType.includes('application/xml')
-  ) {
-    throw new Error(`Carrier URL returned a document (${contentType}) instead of an audio file. This often happens with ngrok interstitial pages or unauthorized endpoints.`);
+  const declaredSize = Number(response.headers.get('content-length') ?? 0);
+  if (declaredSize > MAX_AUDIO_BYTES) {
+    throw new Error('Recording needs compression or chunking');
   }
 
-  const arrayBuffer = await response.arrayBuffer();
-  
-  if (arrayBuffer.byteLength < 1000) {
-    throw new Error(`Downloaded audio file is suspiciously small (${arrayBuffer.byteLength} bytes). It may be empty or invalid.`);
+  const audioBuffer = Buffer.from(await response.arrayBuffer());
+  if (audioBuffer.length > MAX_AUDIO_BYTES) {
+    throw new Error('Recording needs compression or chunking');
   }
 
-  const buffer = Buffer.from(arrayBuffer);
+  const file = await toFile(audioBuffer, 'recording.mp3', {
+    type: 'audio/mpeg',
+  });
 
-  // Extract or infer filename with extension
-  const urlPath = new URL(url).pathname;
-  let filename = urlPath.split('/').pop() || 'recording.mp3';
-  if (!/\.(mp3|wav|m4a|ogg|webm|flac)$/i.test(filename)) {
-    filename += '.mp3';
+  const openai = new OpenAI({
+    apiKey: options.apiKey || process.env.OPENAI_API_KEY,
+    baseURL: options.baseUrl || process.env.OPENAI_BASE_URL,
+  });
+
+  const model =
+    options.model ||
+    process.env.OPENAI_TRANSCRIPTION_MODEL ||
+    'gpt-4o-transcribe';
+
+  const params: any = {
+    file,
+    model,
+  };
+
+  const isoLang = normalizeToIso639_1(options.language);
+  if (isoLang) {
+    params.language = isoLang;
+  }
+  if (options.prompt) {
+    params.prompt = options.prompt;
   }
 
-  return { buffer, filename };
+  try {
+    const result = await openai.audio.transcriptions.create(params);
+    return result.text;
+  } catch (err: any) {
+    // If gpt-4o-transcribe is not supported on a specific API key tier, fallback to whisper-1
+    if (model !== 'whisper-1' && err.message?.toLowerCase().includes('model')) {
+      console.warn(`[OpenAI Transcribe] Model '${model}' failed. Retrying with 'whisper-1' fallback.`);
+      const fallbackResult = await openai.audio.transcriptions.create({
+        ...params,
+        model: 'whisper-1',
+      });
+      return fallbackResult.text;
+    }
+    throw err;
+  }
 }
 
 /**
- * Main transcription routine sending audio payload to OpenAI Whisper.
+ * Convenience wrapper returning structured result with text & raw payload.
+ */
+export async function transcribeAudioFromUrl(
+  mediaUrl: string,
+  options: OpenAiTranscriptionOptions = {}
+): Promise<OpenAiTranscriptionResult> {
+  const text = await transcribeRecording(mediaUrl, options);
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  return {
+    text,
+    rawPayload: {
+      text,
+      model: options.model || process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe',
+      wordCount,
+    },
+  };
+}
+
+/**
+ * Transcribes raw in-memory audio buffers (WAV / MP3) using the official OpenAI SDK.
  */
 export async function transcribeAudioWithOpenAi(
   audioBuffer: Buffer | Uint8Array | ArrayBuffer,
   filename = 'recording.mp3',
   options: OpenAiTranscriptionOptions = {}
 ): Promise<OpenAiTranscriptionResult> {
-  const apiKey = options.apiKey || process.env.OPENAI_API_KEY;
-  if (!apiKey || !apiKey.trim()) {
-    throw new Error('OPENAI_API_KEY is not configured. Please supply a valid OpenAI API key.');
+  const buf = Buffer.isBuffer(audioBuffer) ? audioBuffer : Buffer.from(audioBuffer as any);
+  if (buf.length > MAX_AUDIO_BYTES) {
+    throw new Error('Recording needs compression or chunking');
   }
 
-  const baseUrl = (
-    options.baseUrl ||
-    process.env.OPENAI_BASE_URL ||
-    'https://api.openai.com/v1'
-  ).replace(/\/+$/, '');
-
-  const requestedModel = options.model || process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1';
-
-  const audioSize =
-    audioBuffer instanceof ArrayBuffer
-      ? audioBuffer.byteLength
-      : audioBuffer.length;
-
-  console.log(
-    `[Whisper] Processing ${audioSize} bytes (${filename}) | Model: ${requestedModel} | BaseURL: ${baseUrl}`
-  );
-
-  // Construct standard File instance for FormData upload
-  const file = new File([audioBuffer as any], filename, {
+  const file = await toFile(buf, filename, {
     type: filename.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg',
   });
 
-  // Neutral travel context prompt to guide technical & travel terms without forcing hallucination loops
-  const defaultPrompt =
-    options.prompt ||
-    'Customer call discussing travel itinerary, vacation destination, flights, hotels, booking package, budget, dates.';
+  const openai = new OpenAI({
+    apiKey: options.apiKey || process.env.OPENAI_API_KEY,
+    baseURL: options.baseUrl || process.env.OPENAI_BASE_URL,
+  });
 
-  const sendRequest = async (modelName: string) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('model', modelName);
-    formData.append('response_format', 'verbose_json');
-    formData.append('temperature', (options.temperature ?? 0).toString());
-    formData.append('prompt', defaultPrompt);
+  const model =
+    options.model ||
+    process.env.OPENAI_TRANSCRIPTION_MODEL ||
+    'gpt-4o-transcribe';
 
-    const isoLang = normalizeToIso639_1(options.language);
-    if (isoLang) {
-      formData.append('language', isoLang);
-    }
-
-    return fetch(`${baseUrl}/audio/transcriptions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey.trim()}`,
-      },
-      body: formData,
-    });
+  const params: any = {
+    file,
+    model,
   };
 
-  let response = await sendRequest(requestedModel);
+  const isoLang = normalizeToIso639_1(options.language);
+  if (isoLang) {
+    params.language = isoLang;
+  }
+  if (options.prompt) {
+    params.prompt = options.prompt;
+  }
 
-  // Fallback check if standard endpoint rejects model name variants
-  if (!response.ok && (requestedModel === 'large-v3' || requestedModel === 'whisper-large-v3')) {
-    try {
-      const errClone = response.clone();
-      const errJson = await errClone.json();
-      const msg = (errJson.error?.message || '').toLowerCase();
-      if (msg.includes('does not exist') || msg.includes('model')) {
-        console.warn(`[Whisper] Model '${requestedModel}' not found. Falling back to default 'whisper-1'.`);
-        response = await sendRequest('whisper-1');
-      }
-    } catch {
-      // Continue with primary response error handling
+  let text = '';
+  try {
+    const result = await openai.audio.transcriptions.create(params);
+    text = result.text;
+  } catch (err: any) {
+    if (model !== 'whisper-1' && err.message?.toLowerCase().includes('model')) {
+      console.warn(`[OpenAI Transcribe] Model '${model}' failed. Retrying with 'whisper-1' fallback.`);
+      const fallback = await openai.audio.transcriptions.create({
+        ...params,
+        model: 'whisper-1',
+      });
+      text = fallback.text;
+    } else {
+      throw err;
     }
   }
 
-  if (!response.ok) {
-    let errorDetail = `OpenAI API returned HTTP ${response.status}`;
-    try {
-      const errJson = await response.json();
-      if (errJson.error?.message) {
-        errorDetail = errJson.error.message;
-      }
-    } catch { }
-    console.error(`[Whisper Error] ${errorDetail}`);
-    throw new Error(`OpenAI Whisper error: ${errorDetail}`);
-  }
-
-  const data = await response.json();
-  const text = (data.text || '').trim();
-
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
   return {
-    text,
-    language: data.language,
-    duration: data.duration,
-    segments: data.segments,
-    rawPayload: data,
+    text: text.trim(),
+    rawPayload: { text, model, wordCount },
   };
-}
-
-/**
- * Convenience wrapper to fetch and transcribe a audio directly from a URL (e.g., Plivo).
- */
-export async function transcribeAudioFromUrl(
-  mediaUrl: string,
-  options: OpenAiTranscriptionOptions = {}
-): Promise<OpenAiTranscriptionResult> {
-  const { buffer, filename } = await fetchAudioFromUrl(mediaUrl);
-  return transcribeAudioWithOpenAi(buffer, filename, options);
 }
