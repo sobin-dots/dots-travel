@@ -3,6 +3,10 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { getTelephonyProvider } from '@/lib/telephony';
+import {
+  transcribeAudioWithOpenAi,
+  generateSyntheticWavBuffer,
+} from '@/lib/openai-transcribe';
 
 export const runtime = 'nodejs';
 
@@ -26,6 +30,173 @@ export async function POST(
     );
   }
 
+  let body: any = {};
+  try {
+    body = await req.json();
+  } catch {
+    // Body is optional
+  }
+
+  const url = new URL(req.url);
+  const requestedProvider =
+    body.provider ||
+    url.searchParams.get('provider') ||
+    (process.env.OPENAI_API_KEY ? 'openai' : 'plivo');
+
+  // ─────────────────────────────────────────────────────────────
+  // 1. OPENAI WHISPER TRANSCRIPTION
+  // ─────────────────────────────────────────────────────────────
+  if (requestedProvider === 'openai') {
+    try {
+      let audioBuffer: Buffer | null = null;
+      let filename = `recording_${recording.id}.mp3`;
+
+      // Attempt to download the audio from the recording URL
+      if (recording.recordingUrl && recording.recordingUrl.startsWith('http')) {
+        let audioRes = await fetch(recording.recordingUrl);
+
+        // If carrier requires basic auth, retry with Plivo credentials
+        if (
+          !audioRes.ok &&
+          (audioRes.status === 401 || audioRes.status === 403) &&
+          process.env.PLIVO_AUTH_ID &&
+          process.env.PLIVO_AUTH_TOKEN
+        ) {
+          const basicAuth = Buffer.from(
+            `${process.env.PLIVO_AUTH_ID}:${process.env.PLIVO_AUTH_TOKEN}`
+          ).toString('base64');
+          audioRes = await fetch(recording.recordingUrl, {
+            headers: { Authorization: `Basic ${basicAuth}` },
+          });
+        }
+
+        if (audioRes.ok) {
+          const arrayBuf = await audioRes.arrayBuffer();
+          audioBuffer = Buffer.from(arrayBuf);
+          const contentType = audioRes.headers.get('content-type') || '';
+          if (contentType.includes('wav')) {
+            filename = `recording_${recording.id}.wav`;
+          }
+        }
+      }
+
+      // Fallback for simulator mode or testing
+      if (!audioBuffer) {
+        if (
+          process.env.TELEPHONY_MODE === 'simulator' ||
+          !recording.recordingUrl?.startsWith('http')
+        ) {
+          audioBuffer = generateSyntheticWavBuffer(
+            Math.min(recording.durationSeconds || 3, 5)
+          );
+          filename = `recording_${recording.id}.wav`;
+        } else {
+          return NextResponse.json(
+            {
+              api_id: 'media_not_found',
+              error:
+                'Could not retrieve recording audio file from carrier. The recording may still be encoding on Plivo servers.',
+            },
+            { status: 400 }
+          );
+        }
+      }
+
+      // Call OpenAI Whisper API
+      const result = await transcribeAudioWithOpenAi(audioBuffer, filename, {
+        apiKey: body.apiKey,
+        language: body.language,
+        prompt: body.prompt || 'Customer and agent telephone travel consultation.',
+      });
+
+      // Upsert Transcription record in database
+      const existingTranscription = await db.transcription.findFirst({
+        where: {
+          recordingId: recording.id,
+          organizationId: auth!.organizationId,
+        },
+      });
+
+      let transcription;
+      if (existingTranscription) {
+        transcription = await db.transcription.update({
+          where: { id: existingTranscription.id },
+          data: {
+            text: result.text,
+            status: 'completed',
+            language: result.language || 'en',
+            wordCount: (result.text || '').split(/\s+/).filter(Boolean).length,
+            segments: result.segments as any || null,
+            source: 'openai_whisper',
+            rawPayload: result.rawPayload,
+            updatedAt: new Date(),
+          },
+        });
+      } else {
+        transcription = await db.transcription.create({
+          data: {
+            organizationId: auth!.organizationId,
+            recordingId: recording.id,
+            callId: recording.callId,
+            plivoTranscriptionId: `whisper_${crypto.randomBytes(8).toString('hex')}`,
+            recordingSid: recording.plivoRecordingId,
+            type: 'transcription',
+            status: 'completed',
+            language: result.language || 'en',
+            text: result.text,
+            segments: result.segments as any || null,
+            wordCount: (result.text || '').split(/\s+/).filter(Boolean).length,
+            source: 'openai_whisper',
+            rawPayload: result.rawPayload,
+          },
+        });
+      }
+
+      // Mark transcription on call record
+      if (recording.callId) {
+        await db.call.update({
+          where: { id: recording.callId },
+          data: {
+            transcriptionEnabled: true,
+            transcriptionLanguage: result.language || 'en',
+          },
+        });
+      }
+
+      await logAuditEvent({
+        organizationId: auth!.organizationId,
+        actorUserId: auth!.userId,
+        action: 'transcription.create_openai',
+        targetType: 'Recording',
+        targetId: recording.id,
+        metadata: {
+          recordingId: recording.plivoRecordingId,
+          transcriptionId: transcription.id,
+          wordCount: transcription.wordCount,
+          language: transcription.language,
+        },
+      });
+
+      return NextResponse.json({
+        api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
+        message: 'Transcription generated successfully with OpenAI Whisper',
+        transcription,
+      });
+    } catch (err: any) {
+      console.error('OpenAI transcription error:', err);
+      return NextResponse.json(
+        {
+          api_id: 'openai_err',
+          error: err.message || 'Failed to generate transcription with OpenAI',
+        },
+        { status: 500 }
+      );
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // 2. PLIVO NATIVE TRANSCRIPTION FALLBACK
+  // ─────────────────────────────────────────────────────────────
   try {
     const provider = getTelephonyProvider();
     const publicBase = process.env.PUBLIC_BASE_URL || 'http://localhost:3000';
@@ -59,7 +230,7 @@ export async function POST(
 
     return NextResponse.json({
       api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
-      message: 'On-demand transcription requested successfully',
+      message: 'On-demand Plivo transcription requested successfully',
       transcription,
     });
   } catch (err: any) {

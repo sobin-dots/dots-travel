@@ -103,6 +103,7 @@ export default function OperationsConsole() {
   const [callLoading, setCallLoading] = useState(false);
   const [selectedCallDetail, setSelectedCallDetail] = useState<any | null>(null);
   const [callDetailSyncing, setCallDetailSyncing] = useState<boolean>(false);
+  const [transcribingRecId, setTranscribingRecId] = useState<string | null>(null);
 
   const refreshCallDetail = async (callId: string) => {
     if (!callId) return;
@@ -810,15 +811,32 @@ export default function OperationsConsole() {
     alert(`Sent DTMF digits ${digits}`);
   };
 
-  // Transcribe On-Demand
-  const handleTranscribeNow = async (recordingId: string) => {
-    const res = await fetch(`/api/v1/recordings/${recordingId}/transcribe`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${bearerToken}` },
-    });
-    if (res.ok) {
-      alert('Transcription request queued!');
-      fetchData();
+  // Transcribe On-Demand (OpenAI Whisper or Plivo)
+  const handleTranscribeNow = async (recordingId: string, provider: 'openai' | 'plivo' = 'openai') => {
+    setTranscribingRecId(recordingId);
+    try {
+      const res = await fetch(`/api/v1/recordings/${recordingId}/transcribe`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`,
+        },
+        body: JSON.stringify({ provider }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || 'Transcription generated successfully with OpenAI Whisper!');
+        fetchData();
+        if (selectedCallDetail) {
+          refreshCallDetail(selectedCallDetail.id);
+        }
+      } else {
+        alert(data.error || 'Failed to transcribe recording');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Transcription request failed');
+    } finally {
+      setTranscribingRecId(null);
     }
   };
 
@@ -1926,14 +1944,19 @@ export default function OperationsConsole() {
                     <div className="flex items-center justify-between pt-2 border-t border-zinc-800/80">
                       <div className="text-[11px] text-zinc-500">Storage: $0.0003/mo</div>
                       <div className="flex gap-2">
-                        {rec.transcriptions?.length === 0 && (
-                          <button
-                            onClick={() => handleTranscribeNow(rec.id)}
-                            className="text-[11px] bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 px-2.5 py-1 rounded border border-indigo-500/30 transition"
-                          >
-                            Transcribe Now
-                          </button>
-                        )}
+                        <button
+                          onClick={() => handleTranscribeNow(rec.id, 'openai')}
+                          disabled={transcribingRecId === rec.id}
+                          className="text-[11px] bg-gradient-to-r from-emerald-600/20 to-teal-600/20 hover:from-emerald-600/30 hover:to-teal-600/30 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 flex items-center gap-1.5 transition disabled:opacity-50"
+                          title="Generate high-accuracy transcription using OpenAI Whisper"
+                        >
+                          <Sparkles className="w-3 h-3 text-emerald-400" />
+                          <span>
+                            {transcribingRecId === rec.id
+                              ? 'Transcribing...'
+                              : (rec.transcriptions?.length > 0 ? 'Re-transcribe (OpenAI)' : 'Transcribe (OpenAI)')}
+                          </span>
+                        </button>
                         <a
                           href={rec.streamUrl}
                           download
@@ -2731,16 +2754,34 @@ export default function OperationsConsole() {
                   <FileText className="w-3.5 h-3.5 text-indigo-400" />
                   Call Speech Transcription
                 </span>
-                {selectedCallDetail.transcriptions?.length > 0 ? (
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950 text-indigo-400 border border-indigo-800/60">
-                    {selectedCallDetail.transcriptions[0].language || 'en-US'} Ready
-                  </span>
-                ) : (
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950/80 text-purple-400 border border-purple-800/50 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
-                    Transcribing
-                  </span>
-                )}
+                <div className="flex items-center gap-2">
+                  {selectedCallDetail.recordings?.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleTranscribeNow(selectedCallDetail.recordings[0].id, 'openai')}
+                      disabled={transcribingRecId === selectedCallDetail.recordings[0].id}
+                      className="text-[10px] bg-gradient-to-r from-emerald-600/20 to-teal-600/20 hover:from-emerald-600/30 hover:to-teal-600/30 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 flex items-center gap-1.5 transition disabled:opacity-50"
+                      title="Transcribe recording audio using OpenAI Whisper"
+                    >
+                      <Sparkles className="w-3 h-3 text-emerald-400" />
+                      <span>
+                        {transcribingRecId === selectedCallDetail.recordings[0].id
+                          ? 'Transcribing with OpenAI...'
+                          : (selectedCallDetail.transcriptions?.length > 0 ? 'Re-transcribe with OpenAI' : 'Transcribe with OpenAI')}
+                      </span>
+                    </button>
+                  )}
+                  {selectedCallDetail.transcriptions?.length > 0 ? (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950 text-indigo-400 border border-indigo-800/60">
+                      {selectedCallDetail.transcriptions[0].source === 'openai_whisper' ? 'OpenAI Whisper' : 'ASR'} Ready
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950/80 text-purple-400 border border-purple-800/50 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+                      Ready to Transcribe
+                    </span>
+                  )}
+                </div>
               </div>
               {selectedCallDetail.transcriptions?.length > 0 ? (
                 selectedCallDetail.transcriptions.map((tr: any) => (
@@ -2749,7 +2790,7 @@ export default function OperationsConsole() {
                       {tr.text || '(Empty audio transcript)'}
                     </div>
                     <div className="flex items-center justify-between text-[10px] text-zinc-500">
-                      <span>Status: {tr.status}</span>
+                      <span>Status: {tr.status} • Source: {tr.source || 'default'}</span>
                       <span>Word Count: {tr.wordCount || 0}</span>
                     </div>
                   </div>
@@ -2759,25 +2800,30 @@ export default function OperationsConsole() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-indigo-400 font-semibold text-xs">
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Transcribing Speech & Audio...</span>
+                      <span>Ready for Transcription</span>
                     </div>
                     <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950/80 text-indigo-400 border border-indigo-800/50 flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
-                      Plivo ASR + DeepSeek
+                      <Sparkles className="w-3 h-3 text-emerald-400" />
+                      OpenAI Whisper Engine
                     </span>
                   </div>
 
-                  {/* Shimmer skeleton lines */}
-                  <div className="space-y-2 py-1">
-                    <div className="h-2.5 bg-zinc-800/90 rounded animate-pulse w-full" />
-                    <div className="h-2.5 bg-zinc-800/70 rounded animate-pulse w-5/6" />
-                    <div className="h-2.5 bg-zinc-800/50 rounded animate-pulse w-3/4" />
-                  </div>
-
                   <p className="text-[11px] text-zinc-400 leading-relaxed text-center">
-                    Converting caller and agent audio stream into verbatim text. DeepSeek AI will use this transcript to synthesize the travel itinerary.
+                    Extract verbatim audio text from the dual-channel call recording using OpenAI Whisper. DeepSeek AI uses this transcript to generate the customer travel itinerary.
                   </p>
-
+                  {selectedCallDetail.recordings?.length > 0 && (
+                    <div className="pt-1 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => handleTranscribeNow(selectedCallDetail.recordings[0].id, 'openai')}
+                        disabled={transcribingRecId === selectedCallDetail.recordings[0].id}
+                        className="px-4 py-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition disabled:opacity-50"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>{transcribingRecId === selectedCallDetail.recordings[0].id ? 'Transcribing...' : 'Transcribe Recording with OpenAI'}</span>
+                      </button>
+                    </div>
+                  )}
                   <div className="pt-1 flex items-center justify-between border-t border-zinc-800/60 text-[10px] text-zinc-500">
                     <span>Auto-checking transcription webhook</span>
                     <button
@@ -3091,7 +3137,7 @@ export default function OperationsConsole() {
               <div className="flex items-center gap-2">
                 {/* PDF Quick Download Links */}
                 <a
-                  href={`/api/v1/leads/${selectedLead.id}/pdf?type=customer`}
+                  href={`/api/v1/leads/${selectedLead.id}/pdf?type=customer&token=${bearerToken}`}
                   target="_blank"
                   rel="noreferrer"
                   className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700 flex items-center gap-1.5 transition"
@@ -3101,7 +3147,7 @@ export default function OperationsConsole() {
                   <span>Customer PDF</span>
                 </a>
                 <a
-                  href={`/api/v1/leads/${selectedLead.id}/pdf?type=supplier`}
+                  href={`/api/v1/leads/${selectedLead.id}/pdf?type=supplier&token=${bearerToken}`}
                   target="_blank"
                   rel="noreferrer"
                   className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700 flex items-center gap-1.5 transition"

@@ -24,8 +24,18 @@ export async function authenticateRequest(
   req: Request | NextRequest,
   requiredRole: 'viewer' | 'operator' | 'admin' | 'owner' = 'viewer'
 ): Promise<{ auth?: AuthContext; errorResponse?: NextResponse }> {
+  let token: string | null = null;
   const authHeader = req.headers.get('authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7).trim();
+  } else {
+    try {
+      const url = new URL(req.url);
+      token = url.searchParams.get('token') || url.searchParams.get('access_token');
+    } catch {}
+  }
+
+  if (!token) {
     return {
       errorResponse: NextResponse.json(
         { api_id: 'auth_err', error: 'Missing or malformed Authorization header. Bearer token required.' },
@@ -33,8 +43,6 @@ export async function authenticateRequest(
       ),
     };
   }
-
-  const token = authHeader.substring(7).trim();
   const payload = await verifyAccessToken(token);
 
   if (!payload) {
