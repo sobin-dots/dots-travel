@@ -58,8 +58,14 @@ export function CallModal() {
               <Phone className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">Outbound Voice Calling</h3>
-              <p className="text-[11px] text-zinc-400">Connect live with customers & record audio for AI itineraries</p>
+              <h3 className="text-sm font-bold text-white">
+                {webPhoneStatus === 'connected' ? 'Live In-Browser Voice Call' : 'Outbound Voice Calling'}
+              </h3>
+              <p className="text-[11px] text-zinc-400">
+                {webPhoneStatus === 'connected'
+                  ? 'Connected live via WebRTC • 2-way cloud recording active'
+                  : 'Connect live with customers & record audio for AI itineraries'}
+              </p>
             </div>
           </div>
           <button

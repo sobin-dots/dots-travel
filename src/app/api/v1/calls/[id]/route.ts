@@ -92,51 +92,6 @@ export async function GET(
       } catch (err: any) {
         console.warn('Live recording sync notice:', err.message);
       }
-    } else if (!isLive && call.status === 'completed') {
-      // Auto-populate simulated recording & transcript for testing
-      try {
-        const simRecId = `rec_sim_${call.id.slice(0, 8)}`;
-        const rec = await db.recording.upsert({
-          where: { plivoRecordingId: simRecId },
-          update: {},
-          create: {
-            organizationId: call.organizationId,
-            callId: call.id,
-            plivoRecordingId: simRecId,
-            recordingUrl: `https://media.pilvo.local/recordings/${simRecId}.mp3`,
-            durationSeconds: call.durationSeconds || 45,
-            status: 'completed',
-          },
-        });
-
-        if (call.transcriptions.length === 0) {
-          const defaultTranscript = `Hi, I am planning a 7-day family vacation to Japan for 4 people (2 adults, 2 kids) next month. We would love to spend 3 days exploring Tokyo (Shinjuku, Akihabara, and teamLab), take the Shinkansen bullet train to Kyoto for temples and bamboo groves, and finish with a day trip to Mount Fuji. Our budget is around $8,000 including 4-star hotels and private transfers.`;
-          await db.transcription.create({
-            data: {
-              organizationId: call.organizationId,
-              callId: call.id,
-              recordingId: rec.id,
-              plivoTranscriptionId: `tr_sim_${call.id.slice(0, 8)}`,
-              recordingSid: simRecId,
-              status: 'completed',
-              text: defaultTranscript,
-              wordCount: defaultTranscript.split(/\s+/).length,
-              source: 'carrier_asr',
-            },
-          });
-        }
-
-        // Reload
-        call = await db.call.findFirst({
-          where: { id: call.id },
-          include: {
-            phoneNumber: true,
-            events: { orderBy: { occurredAt: 'asc' } },
-            recordings: { include: { transcriptions: true } },
-            transcriptions: true,
-          },
-        });
-      } catch { }
     }
   }
 

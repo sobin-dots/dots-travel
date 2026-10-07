@@ -61,7 +61,7 @@ export async function processIncomingWebhook(
   const authToken =
     process.env.PLIVO_WEBHOOK_AUTH_TOKEN ||
     process.env.PLIVO_AUTH_TOKEN ||
-    'simulator-auth-token-2026';
+    '';
 
   // Resolve actual public URL that Plivo signed against (supports ngrok and reverse proxies)
   const originalUrlObj = new URL(req.url);

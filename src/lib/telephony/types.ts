@@ -137,7 +137,7 @@ export interface TranscriptionResultDTO {
 }
 
 export interface TelephonyProvider {
-  readonly mode: 'simulator' | 'live';
+  readonly mode: 'live' | 'simulator';
 
   verifyCredentials(authId: string, authToken: string): Promise<AccountVerificationResult>;
   searchNumbers(params: SearchNumbersParams): Promise<AvailableNumberDTO[]>;

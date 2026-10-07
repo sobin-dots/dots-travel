@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
-    telephonyMode: process.env.TELEPHONY_MODE || 'simulator',
+    telephonyMode: 'live',
     organization: org,
   });
 }

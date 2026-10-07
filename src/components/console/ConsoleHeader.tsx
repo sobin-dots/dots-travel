@@ -8,7 +8,6 @@ import { useConsole } from '@/context/ConsoleContext';
 export function ConsoleHeader() {
   const {
     settings,
-    systemMode,
     loading,
     fetchData,
     currentOrg,
@@ -17,8 +16,6 @@ export function ConsoleHeader() {
     isMobileMenuOpen,
     setIsMobileMenuOpen,
   } = useConsole();
-
-  const isLive = (settings?.telephonyMode || systemMode) === 'live';
 
   return (
     <header className="border-b border-zinc-800 bg-zinc-900/80 backdrop-blur sticky top-0 z-30 px-3 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between">
@@ -45,24 +42,12 @@ export function ConsoleHeader() {
 
         <div className="h-4 w-px bg-zinc-800 mx-1 sm:mx-2 hidden sm:block" />
 
-        {/* Telephony Mode Badge */}
-        <div
-          className={`hidden sm:flex items-center gap-1.5 sm:gap-2 border px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-full text-[10px] sm:text-xs transition ${
-            isLive ? 'bg-emerald-950/80 border-emerald-700/80' : 'bg-zinc-950 border-zinc-800'
-          }`}
-        >
-          <span
-            className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${
-              isLive ? 'bg-emerald-400 shadow-sm shadow-emerald-400' : 'bg-amber-400'
-            } animate-pulse`}
-          />
-          <span className="text-zinc-300 font-medium text-[10px] sm:text-[11px] hidden md:inline">Mode:</span>
-          <span
-            className={`font-semibold uppercase tracking-wider text-[10px] sm:text-[11px] ${
-              isLive ? 'text-emerald-400' : 'text-amber-400'
-            }`}
-          >
-            {isLive ? 'LIVE' : 'SIM'}
+        {/* Live Carrier Connection Badge */}
+        <div className="hidden sm:flex items-center gap-1.5 sm:gap-2 border border-emerald-700/80 bg-emerald-950/80 px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-full text-[10px] sm:text-xs">
+          <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400 animate-pulse" />
+          <span className="text-zinc-300 font-medium text-[10px] sm:text-[11px] hidden md:inline">Carrier:</span>
+          <span className="font-semibold uppercase tracking-wider text-[10px] sm:text-[11px] text-emerald-400">
+            PLIVO LIVE
           </span>
         </div>
       </div>

@@ -34,7 +34,6 @@ export interface SendSupplierEmailParams {
 export interface EmailDispatchResult {
   success: boolean;
   id?: string;
-  simulated?: boolean;
   error?: string;
 }
 
@@ -51,13 +50,9 @@ export async function sendCustomerItineraryEmail(
   const cleanFilename = `${destination.replace(/[^a-zA-Z0-9]/g, '_')}_Itinerary.pdf`;
 
   if (!resend) {
-    console.log(
-      `[Email:Simulator] RESEND_API_KEY not configured. Simulating customer itinerary dispatch to ${to} (${pdfBuffer.byteLength} bytes attached)`
-    );
     return {
-      success: true,
-      id: `sim_cust_${Date.now()}`,
-      simulated: true,
+      success: false,
+      error: 'RESEND_API_KEY is not configured for live email delivery.',
     };
   }
 
@@ -132,13 +127,9 @@ export async function sendSupplierRfqEmail(
   const cleanFilename = `RFQ_${destination.replace(/[^a-zA-Z0-9]/g, '_')}_Quotation.pdf`;
 
   if (!resend) {
-    console.log(
-      `[Email:Simulator] RESEND_API_KEY not configured. Simulating supplier RFQ dispatch to ${to} (${supplierName}, ${pdfBuffer.byteLength} bytes attached)`
-    );
     return {
-      success: true,
-      id: `sim_supp_${Date.now()}`,
-      simulated: true,
+      success: false,
+      error: 'RESEND_API_KEY is not configured for live email delivery.',
     };
   }
 

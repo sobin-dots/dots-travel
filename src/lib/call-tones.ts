@@ -127,6 +127,58 @@ export class CallToneGenerator {
   }
 
   /**
+   * Plays the incoming call ringtone when someone calls the agent's web phone.
+   * Cadence: Upbeat modern electronic ring (587Hz D5 + 880Hz A5) chime pattern.
+   */
+  startIncomingRingtone() {
+    this.stop();
+    const ctx = this.getAudioContext();
+    if (!ctx) return;
+
+    const playIncomingCycle = () => {
+      try {
+        if (!this.ctx || this.ctx.state === 'closed') return;
+        const now = this.ctx.currentTime;
+
+        const pulse = (timeOffset: number) => {
+          if (!this.ctx) return;
+          const osc1 = this.ctx.createOscillator();
+          const osc2 = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+
+          osc1.type = 'triangle';
+          osc1.frequency.setValueAtTime(587.33, now + timeOffset); // D5
+          osc2.type = 'sine';
+          osc2.frequency.setValueAtTime(880, now + timeOffset); // A5
+
+          gain.gain.setValueAtTime(0.001, now + timeOffset);
+          gain.gain.linearRampToValueAtTime(0.12, now + timeOffset + 0.05);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + timeOffset + 0.42);
+
+          osc1.connect(gain);
+          osc2.connect(gain);
+          gain.connect(this.ctx.destination);
+
+          this.activeOscs.push(osc1, osc2);
+          this.activeGains.push(gain);
+
+          osc1.start(now + timeOffset);
+          osc2.start(now + timeOffset);
+          osc1.stop(now + timeOffset + 0.45);
+          osc2.stop(now + timeOffset + 0.45);
+        };
+
+        pulse(0);
+        pulse(0.35);
+        pulse(0.7);
+      } catch {}
+    };
+
+    playIncomingCycle();
+    this.intervalId = setInterval(playIncomingCycle, 2800);
+  }
+
+  /**
    * Immediately stops all active tones and loops.
    */
   stop() {

@@ -159,7 +159,11 @@ export class PlivoXmlBuilder {
           if (el.callbackUrl) attrs += ` callbackUrl="${escapeXml(el.callbackUrl)}"`;
           if (el.callbackMethod) attrs += ` callbackMethod="${el.callbackMethod}"`;
           parts.push(`  <Dial${attrs}>`);
-          parts.push(`    <Number>${escapeXml(el.number)}</Number>`);
+          if (el.number.startsWith('sip:') || el.number.includes('@')) {
+            parts.push(`    <User>${escapeXml(el.number)}</User>`);
+          } else {
+            parts.push(`    <Number>${escapeXml(el.number)}</Number>`);
+          }
           parts.push(`  </Dial>`);
           break;
         }

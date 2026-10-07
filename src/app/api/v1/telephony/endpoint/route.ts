@@ -8,23 +8,13 @@ export async function GET(req: NextRequest) {
   const { auth, errorResponse } = await authenticateRequest(req, 'viewer');
   if (errorResponse) return errorResponse;
 
-  const mode = process.env.TELEPHONY_MODE || 'simulator';
   const callerId = process.env.PLIVO_CALLER_ID || '+918065531234';
-
-  if (mode === 'simulator') {
-    return NextResponse.json({
-      mode: 'simulator',
-      username: 'simulated_browser_agent',
-      password: 'simulated_password',
-      callerId,
-    });
-  }
 
   try {
     const client = new (plivo as any).Client(process.env.PLIVO_AUTH_ID, process.env.PLIVO_AUTH_TOKEN);
     const endpoints = await client.endpoints.list();
     const endpoint = endpoints[0];
-    const password = process.env.PLIVO_ENDPOINT_PASSWORD || 'PlivoWebRTCSecret2026!';
+    const password = endpoint.password || process.env.PLIVO_ENDPOINT_PASSWORD || 'PlivoWebRTCSecret2026!';
 
     if (!endpoint) {
       return NextResponse.json({
@@ -38,6 +28,7 @@ export async function GET(req: NextRequest) {
       password,
       callerId,
       alias: endpoint.alias,
+      sipUri: endpoint.sipUri || `sip:${endpoint.username}@phone.plivo.com`,
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || 'Failed to retrieve endpoint' }, { status: 500 });

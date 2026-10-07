@@ -45,38 +45,7 @@ export async function DELETE(
       },
     });
 
-    // Automatically provision simulated recording and transcription in simulator mode
-    if (call.recordingEnabled) {
-      const recId = `rec_${crypto.randomBytes(8).toString('hex')}`;
-      const recording = await db.recording.create({
-        data: {
-          organizationId: auth!.organizationId,
-          callId: call.id,
-          plivoRecordingId: recId,
-          recordingUrl: `https://media.plivo.com/recordings/${call.plivoCallUuid}.mp3`,
-          durationSeconds: duration,
-          fileFormat: 'mp3',
-          channelType: 'mono',
-          status: 'completed',
-        },
-      });
-
-      if (call.transcriptionEnabled) {
-        await db.transcription.create({
-          data: {
-            organizationId: auth!.organizationId,
-            callId: call.id,
-            recordingId: recording.id,
-            plivoTranscriptionId: `tr_${crypto.randomBytes(8).toString('hex')}`,
-            status: 'completed',
-            language: call.transcriptionLanguage || 'en-US',
-            text: 'Operator: Thank you for calling the Plivo Communications Platform. How can I help you today?\nCustomer: Hello, I wanted to verify our secure voice line connection.\nOperator: Everything is securely connected, recorded, and transcribed. Have a wonderful day!\nCustomer: Perfect, thank you!',
-            wordCount: 42,
-            source: 'callback',
-          },
-        });
-      }
-    }
+    // Real recording & transcription are delivered via Plivo webhooks (/webhooks/voice/record)
 
     await db.callEvent.create({
       data: {

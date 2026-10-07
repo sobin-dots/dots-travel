@@ -33,6 +33,8 @@ export function ConsoleSidebar() {
     numbers,
     isMobileMenuOpen,
     setIsMobileMenuOpen,
+    incomingCall,
+    webPhoneStatus,
   } = useConsole();
 
   const navItems = [
@@ -70,11 +72,10 @@ export function ConsoleSidebar() {
             onClick={() => {
               if (isMobile) setIsMobileMenuOpen(false);
             }}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition ${
-              isActive
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
-            }`}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition ${isActive
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
+              }`}
           >
             <div className="flex items-center gap-2.5">
               <Icon className="w-4 h-4 shrink-0" />
@@ -100,10 +101,35 @@ export function ConsoleSidebar() {
       <aside className="hidden md:flex w-60 border-r border-zinc-800/80 bg-zinc-900/30 p-4 space-y-1 shrink-0 flex-col justify-between">
         {renderNavList(false)}
 
-        <div className="p-3 bg-zinc-950/60 border border-zinc-800/80 rounded-lg text-[11px] text-zinc-400 space-y-1">
-          <div className="font-semibold text-zinc-300">Carrier Security</div>
-          <div>HMAC-SHA256 V3: Active</div>
-          <div>AES-256-GCM Vault: Locked</div>
+        <div className="space-y-2">
+          <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-lg text-[11px] flex items-center justify-between">
+            <div className="flex items-center gap-2 min-w-0">
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 ${incomingCall
+                  ? 'bg-emerald-400 animate-ping'
+                  : webPhoneStatus === 'connected'
+                    ? 'bg-emerald-400 animate-pulse'
+                    : 'bg-emerald-400'
+                  }`}
+              />
+              <div className="min-w-0">
+                <span className="font-semibold text-white block truncate">
+                  {incomingCall ? 'Incoming Call...' : webPhoneStatus === 'connected' ? 'Call in Progress' : 'Inbound Ready'}
+                </span>
+                <span className="text-[10px] text-zinc-400 font-mono truncate block">+918065531234</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-mono font-bold shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              LIVE
+            </div>
+          </div>
+
+          <div className="p-3 bg-zinc-950/60 border border-zinc-800/80 rounded-lg text-[11px] text-zinc-400 space-y-1">
+            <div className="font-semibold text-zinc-300">Carrier Security</div>
+            <div>HMAC-SHA256 V3: Active</div>
+            <div>AES-256-GCM Vault: Locked</div>
+          </div>
         </div>
       </aside>
 
@@ -138,10 +164,31 @@ export function ConsoleSidebar() {
               {renderNavList(true)}
             </div>
 
-            <div className="p-3 bg-zinc-950/60 border border-zinc-800/80 rounded-lg text-[11px] text-zinc-400 space-y-1">
-              <div className="font-semibold text-zinc-300">Carrier Security</div>
-              <div>HMAC-SHA256 V3: Active</div>
-              <div>AES-256-GCM Vault: Locked</div>
+            <div className="space-y-2">
+              <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-lg text-[11px] flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className={`w-2 h-2 rounded-full shrink-0 ${incomingCall
+                      ? 'bg-emerald-400 animate-ping'
+                      : webPhoneStatus === 'connected'
+                        ? 'bg-emerald-400 animate-pulse'
+                        : 'bg-emerald-400'
+                      }`}
+                  />
+                  <div className="min-w-0">
+                    <span className="font-semibold text-white block truncate">
+                      {incomingCall ? 'Incoming Call...' : webPhoneStatus === 'connected' ? 'Call in Progress' : 'Inbound Ready'}
+                    </span>
+                    <span className="text-[10px] text-zinc-400 font-mono truncate block">+918065531234</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-mono font-bold shrink-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  LIVE
+                </div>
+              </div>
+
+
             </div>
           </aside>
         </div>

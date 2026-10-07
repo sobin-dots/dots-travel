@@ -22,7 +22,6 @@ import {
 export default function LoginPage() {
   const router = useRouter();
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
-  const [telephonyMode, setTelephonyMode] = useState<'live' | 'simulator'>('live');
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -31,13 +30,6 @@ export default function LoginPage() {
         setMode('signup');
       }
     }
-    // Probe backend ready state to detect live vs simulator
-    fetch('/api/v1/ready')
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.telephonyMode) setTelephonyMode(d.telephonyMode);
-      })
-      .catch(() => {});
   }, []);
 
   // Signin fields
@@ -185,19 +177,10 @@ export default function LoginPage() {
             <BookOpen className="w-3.5 h-3.5 text-emerald-400" />
             <span>API Docs (/docs)</span>
           </Link>
-          <div
-            className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full border text-[11px] font-mono ${
-              telephonyMode === 'live'
-                ? 'bg-emerald-950/80 border-emerald-700/80 text-emerald-400'
-                : 'bg-amber-950/80 border-amber-800 text-amber-400'
-            }`}
-          >
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                telephonyMode === 'live' ? 'bg-emerald-400 shadow-sm shadow-emerald-400' : 'bg-amber-400'
-              } animate-pulse`}
-            />
-            <span>{telephonyMode === 'live' ? 'Live Carrier (Plivo)' : 'Simulator Active'}</span>
+          {/* Live Carrier Badge */}
+          <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full border text-[11px] font-mono bg-emerald-950/80 border-emerald-700/80 text-emerald-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400 animate-pulse" />
+            <span>Live Carrier (Plivo)</span>
           </div>
         </div>
       </header>

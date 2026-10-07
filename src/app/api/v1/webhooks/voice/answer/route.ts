@@ -82,9 +82,26 @@ async function handleAnswer(req: NextRequest) {
         playBeep: true,
       });
   } else {
-    // Travel Concierge Interactive Voice Line
+    // Inbound call from customer/client to our virtual phone number!
+    const callerPhone = params.From || params.from || '+918065531234';
+    const sipEndpoint = process.env.PLIVO_SIP_ENDPOINT || 'sip:threedotsagent115368431818055514989946@phone.plivo.com';
+
     builder
-      .speak('Hello! Welcome to the AI Travel Concierge. Please describe your dream vacation, destination, dates, and budget after the beep. We will record your inquiry and synthesize your custom itinerary.', {
+      .record({
+        action: recordActionUrl,
+        startOnDialAnswer: true,
+        redirect: false,
+        maxLength: 3600,
+        transcriptionType: 'auto',
+        transcriptionUrl: transcriptionUrl,
+        playBeep: false,
+      })
+      .dial(sipEndpoint, {
+        callerId: callerPhone,
+        timeLimit: 3600,
+      })
+      // Fallback if not answered or declined:
+      .speak('Hello! Welcome to the AI Travel Concierge. The agent is currently unavailable. Please describe your dream vacation, destination, dates, and budget after the beep.', {
         voice: 'WOMAN',
         language: 'en-US',
       })
@@ -147,6 +164,41 @@ async function handleAnswer(req: NextRequest) {
             from: callerId,
             to: destinationNumber || 'Unknown',
             direction: 'outbound',
+            status: 'in-progress',
+            recordingEnabled: true,
+            transcriptionEnabled: true,
+            transcriptionLanguage: 'en-US',
+            answeredAt: new Date(),
+          },
+        });
+
+        await db.callEvent.create({
+          data: {
+            organizationId: org.id,
+            callId: newCall.id,
+            eventType: 'answer',
+            status: 'in-progress',
+            payload: params,
+            occurredAt: new Date(),
+            webhookEventId,
+          },
+        });
+      }
+    } else {
+      // Inbound call from customer to virtual number
+      const org =
+        (await db.organization.findFirst({ where: { slug: '3dots' } })) ||
+        (await db.organization.findFirst());
+      if (org) {
+        const callerPhone = params.From || params.from || 'Unknown Caller';
+        const calledNumber = destinationNumber || params.To || params.to || '+918065531234';
+        const newCall = await db.call.create({
+          data: {
+            organizationId: org.id,
+            plivoCallUuid: callUuid,
+            from: callerPhone,
+            to: calledNumber,
+            direction: 'inbound',
             status: 'in-progress',
             recordingEnabled: true,
             transcriptionEnabled: true,

@@ -161,7 +161,6 @@ export async function POST(
         supplierPdfSize: supplierPdfBytes?.length,
         customerEmailId: customerEmailResult.id,
         supplierEmailId: supplierEmailResult?.id,
-        simulated: customerEmailResult.simulated || supplierEmailResult?.simulated,
       },
     });
 
@@ -174,7 +173,6 @@ export async function POST(
       supplierSent: supplier ? supplierEmailResult?.success : false,
       supplierEmailId: supplierEmailResult?.id,
       supplierName: supplier?.name,
-      simulated: customerEmailResult.simulated,
       message: supplier
         ? `Itinerary PDF dispatched via Resend to customer (${emailToSend}) and Quotation Request PDF sent to supplier (${supplier.email})`
         : `Itinerary PDF dispatched via Resend to customer (${emailToSend}) successfully`,

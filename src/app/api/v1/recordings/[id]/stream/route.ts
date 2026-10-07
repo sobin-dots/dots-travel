@@ -4,48 +4,7 @@ import { verifySignedMediaRequest } from '@/lib/media-urls';
 
 export const runtime = 'nodejs';
 
-/**
- * Generates a minimal, valid 1-second 440Hz PCM mono WAV file buffer.
- * Used for offline simulator playback and zero-credential demonstrations.
- */
-function generateSyntheticWavBuffer(durationSeconds = 2): Buffer {
-  const sampleRate = 8000;
-  const numSamples = sampleRate * durationSeconds;
-  const byteRate = sampleRate * 2;
-  const blockAlign = 2;
-  const bitsPerSample = 16;
-  const dataSize = numSamples * 2;
-  const buffer = Buffer.alloc(44 + dataSize);
 
-  // RIFF header
-  buffer.write('RIFF', 0);
-  buffer.writeUInt32LE(36 + dataSize, 4);
-  buffer.write('WAVE', 8);
-
-  // fmt subchunk
-  buffer.write('fmt ', 12);
-  buffer.writeUInt32LE(16, 16); // Subchunk1Size (16 for PCM)
-  buffer.writeUInt16LE(1, 20);  // AudioFormat (1 for PCM)
-  buffer.writeUInt16LE(1, 22);  // NumChannels (1 mono)
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(byteRate, 28);
-  buffer.writeUInt16LE(blockAlign, 32);
-  buffer.writeUInt16LE(bitsPerSample, 34);
-
-  // data subchunk
-  buffer.write('data', 36);
-  buffer.writeUInt32LE(dataSize, 40);
-
-  // Sine wave sample generation
-  const frequency = 440; // A4 tone
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    const sample = Math.sin(2 * Math.PI * frequency * t) * 16000;
-    buffer.writeInt16LE(Math.round(sample), 44 + i * 2);
-  }
-
-  return buffer;
-}
 
 export async function GET(
   req: NextRequest,
@@ -79,36 +38,21 @@ export async function GET(
     );
   }
 
-  const mode = process.env.TELEPHONY_MODE || 'simulator';
-
-  // In simulator mode, stream synthetic audio buffer
-  if (mode === 'simulator' || !recording.recordingUrl.startsWith('http')) {
-    const wav = generateSyntheticWavBuffer(Math.min(recording.durationSeconds || 3, 5));
-    return new NextResponse(new Uint8Array(wav), {
-      status: 200,
-      headers: {
-        'content-type': 'audio/wav',
-        'content-length': wav.length.toString(),
-        'accept-ranges': 'bytes',
-        'cache-control': 'public, max-age=3600',
-      },
-    });
+  if (!recording.recordingUrl || !recording.recordingUrl.startsWith('http')) {
+    return NextResponse.json(
+      { error: 'Recording audio URL is not yet available from carrier.' },
+      { status: 404 }
+    );
   }
 
   // In live mode, stream from remote Plivo URL server-side
   try {
     const remoteRes = await fetch(recording.recordingUrl);
     if (!remoteRes.ok) {
-      // Fallback to synthetic if remote audio not yet processed
-      const wav = generateSyntheticWavBuffer(3);
-      return new NextResponse(new Uint8Array(wav), {
-        status: 200,
-        headers: {
-          'content-type': 'audio/wav',
-          'content-length': wav.length.toString(),
-          'accept-ranges': 'bytes',
-        },
-      });
+      return NextResponse.json(
+        { error: 'Recording audio is currently being processed by carrier. Please retry in a moment.' },
+        { status: 503 }
+      );
     }
 
     const contentType = remoteRes.headers.get('content-type') || 'audio/mpeg';

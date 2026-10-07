@@ -5,6 +5,7 @@ import Script from 'next/script';
 import { ConsoleProvider, useConsole } from '@/context/ConsoleContext';
 import { ConsoleHeader } from '@/components/console/ConsoleHeader';
 import { ConsoleSidebar } from '@/components/console/ConsoleSidebar';
+import { IncomingCallModal } from '@/components/console/IncomingCallModal';
 import { CallModal } from '@/components/console/CallModal';
 import { CallDetailDrawer } from '@/components/console/CallDetailDrawer';
 import { LeadDetailDrawer } from '@/components/console/LeadDetailDrawer';
@@ -23,6 +24,7 @@ function ConsoleLayoutContent({ children }: { children: React.ReactNode }) {
         </main>
       </div>
 
+      <IncomingCallModal />
       <CallModal />
       <CallDetailDrawer />
       <LeadDetailDrawer />

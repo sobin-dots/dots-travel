@@ -20,7 +20,7 @@ export async function GET() {
     );
   }
 
-  const mode = process.env.TELEPHONY_MODE || 'simulator';
+  const mode = 'live';
 
   return NextResponse.json({
     ready: true,

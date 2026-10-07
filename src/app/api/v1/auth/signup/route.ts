@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
 
     const passwordHash = await hashPassword(password);
 
-    // Create Organization, User, Membership, and Initial Simulator Phone Number in transaction
+    // Create Organization, User, Membership, and Initial Live Carrier Phone Number in transaction
     const result = await db.$transaction(async (tx) => {
       const org = await tx.organization.create({
         data: {
@@ -82,14 +82,9 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Provision Plivo Account (Live carrier credentials when TELEPHONY_MODE === 'live')
-      const isLive = process.env.TELEPHONY_MODE === 'live' && !!process.env.PLIVO_AUTH_ID;
-      const rawAuthId = isLive
-        ? process.env.PLIVO_AUTH_ID!
-        : `MAMOCK${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
-      const rawAuthToken = isLive
-        ? (process.env.PLIVO_AUTH_TOKEN || '')
-        : `sim-token-${crypto.randomBytes(12).toString('hex')}`;
+      // Provision Plivo Account (Live carrier credentials)
+      const rawAuthId = process.env.PLIVO_AUTH_ID || 'MAMDRKYZNKYTATZWQYMC';
+      const rawAuthToken = process.env.PLIVO_AUTH_TOKEN || '';
       const { encryptData } = await import('@/lib/crypto');
       const encAuthId = encryptData(rawAuthId);
       const encAuthToken = encryptData(rawAuthToken);
@@ -97,7 +92,7 @@ export async function POST(req: NextRequest) {
       const plivoAccount = await tx.plivoAccount.create({
         data: {
           organizationId: org.id,
-          label: isLive ? 'Live Carrier Account (Plivo)' : 'Primary Account (Simulated)',
+          label: 'Live Carrier Account (Plivo)',
           authIdEncrypted: encAuthId.ciphertext,
           authIdLast4: rawAuthId.slice(-4),
           authTokenEncrypted: encAuthToken.ciphertext,
@@ -113,30 +108,30 @@ export async function POST(req: NextRequest) {
         data: {
           organizationId: org.id,
           plivoAccountId: plivoAccount.id,
-          plivoAppId: isLive ? `app-live-${crypto.randomBytes(6).toString('hex')}` : `app-sim-${crypto.randomBytes(6).toString('hex')}`,
-          name: `${organizationName} Default App`,
+          plivoAppId: '29798030248980726',
+          name: `${organizationName} Web Phone App`,
           answerUrl: `${process.env.PUBLIC_BASE_URL || 'http://localhost:3000'}/api/v1/webhooks/voice/answer`,
           defaultNumberApp: true,
         },
       });
 
-      // Provision starter phone line: real line when live, simulated demo line otherwise
-      const activeLine = isLive ? '+918065531234' : `+1415555${Math.floor(1000 + Math.random() * 9000)}`;
+      // Provision starter phone line: live Plivo carrier line
+      const activeLine = process.env.PLIVO_CALLER_ID || '+918065531234';
       await tx.phoneNumber.create({
         data: {
           organizationId: org.id,
           plivoAccountId: plivoAccount.id,
           applicationId: app.id,
           e164: activeLine,
-          countryIso: isLive ? 'IN' : 'US',
+          countryIso: 'IN',
           numberType: 'local',
           status: 'active',
-          friendlyName: isLive ? `Plivo Carrier Line (${activeLine})` : `${organizationName} Main Line`,
+          friendlyName: `Plivo Carrier Line (${activeLine})`,
           recordCalls: true,
           transcribeEnabled: true,
-          monthlyRental: '1.0000',
-          smsRate: '0.0075',
-          voiceRate: '0.0120',
+          monthlyRental: '2.5000',
+          smsRate: '0.0000',
+          voiceRate: '0.0078',
         },
       });
 
