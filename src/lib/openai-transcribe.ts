@@ -25,6 +25,69 @@ export interface OpenAiTranscriptionResult {
   rawPayload: any;
 }
 
+const LANGUAGE_NAME_TO_ISO: Record<string, string> = {
+  tamil: 'ta',
+  english: 'en',
+  hindi: 'hi',
+  telugu: 'te',
+  kannada: 'kn',
+  malayalam: 'ml',
+  marathi: 'mr',
+  bengali: 'bn',
+  gujarati: 'gu',
+  punjabi: 'pa',
+  urdu: 'ur',
+  spanish: 'es',
+  french: 'fr',
+  german: 'de',
+  italian: 'it',
+  portuguese: 'pt',
+  russian: 'ru',
+  chinese: 'zh',
+  mandarin: 'zh',
+  cantonese: 'yue',
+  japanese: 'ja',
+  korean: 'ko',
+  arabic: 'ar',
+  turkish: 'tr',
+  vietnamese: 'vi',
+  thai: 'th',
+  indonesian: 'id',
+  dutch: 'nl',
+  polish: 'pl',
+  swedish: 'sv',
+  tagalog: 'tl',
+  filipino: 'tl',
+};
+
+/**
+ * Converts language names (e.g. 'tamil', 'english') or locales (e.g. 'en-US', 'ta-IN')
+ * into OpenAI Whisper's strictly required ISO-639-1 two-letter code (e.g. 'ta', 'en').
+ */
+export function normalizeToIso639_1(input?: string): string | undefined {
+  if (!input) return undefined;
+  const clean = input.trim().toLowerCase();
+  if (!clean) return undefined;
+
+  // Direct lookup for language name
+  if (LANGUAGE_NAME_TO_ISO[clean]) {
+    return LANGUAGE_NAME_TO_ISO[clean];
+  }
+
+  // Handle locale codes like 'en-US', 'ta_IN', 'hi-IN'
+  const primary = clean.split(/[-_]/)[0];
+  if (LANGUAGE_NAME_TO_ISO[primary]) {
+    return LANGUAGE_NAME_TO_ISO[primary];
+  }
+
+  // If already a 2-letter ISO code
+  if (primary.length === 2) {
+    return primary;
+  }
+
+  return clean;
+}
+
 /**
  * Generates a minimal, valid PCM mono WAV buffer for testing or simulator mode.
  */
@@ -101,8 +164,9 @@ export async function transcribeAudioWithOpenAi(
     formData.append('file', file);
     formData.append('model', modelName);
     formData.append('response_format', 'verbose_json');
-    if (options.language) {
-      formData.append('language', options.language);
+    const isoLang = normalizeToIso639_1(options.language);
+    if (isoLang) {
+      formData.append('language', isoLang);
     }
     if (options.prompt) {
       formData.append('prompt', options.prompt);

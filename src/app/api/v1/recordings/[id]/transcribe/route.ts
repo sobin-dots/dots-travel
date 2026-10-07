@@ -6,6 +6,7 @@ import { getTelephonyProvider } from '@/lib/telephony';
 import {
   transcribeAudioWithOpenAi,
   generateSyntheticWavBuffer,
+  normalizeToIso639_1,
 } from '@/lib/openai-transcribe';
 
 export const runtime = 'nodejs';
@@ -122,12 +123,12 @@ export async function POST(
         );
       }
 
-      // Explicitly define target language (default to English 'en' or call language to prevent Whisper from guessing Tamil on line hiss)
-      const effectiveLanguage =
+      // Explicitly define target language in ISO-639-1 (e.g. 'ta', 'en', 'hi')
+      const rawLanguage =
         body.language ||
-        (recording.call?.transcriptionLanguage
-          ? recording.call.transcriptionLanguage.split('-')[0].toLowerCase()
-          : 'en');
+        recording.call?.transcriptionLanguage ||
+        'en';
+      const effectiveLanguage = normalizeToIso639_1(rawLanguage) || 'en';
 
       const requestedModel = body.model || 'large-v3';
 
