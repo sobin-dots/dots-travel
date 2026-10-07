@@ -44,11 +44,15 @@ export async function POST(req: NextRequest) {
       ? transcription.text.trim()
       : defaultText;
 
-    // Match contact by phone number
+    // Match contact by phone number (exact match or stripped digits)
+    const cleanTarget = targetPhone.replace(/\D/g, '');
     const contact = await db.contact.findFirst({
       where: {
         organizationId: auth!.organizationId,
-        phone: targetPhone,
+        OR: [
+          { phone: targetPhone },
+          ...(cleanTarget ? [{ phone: `+${cleanTarget}` }, { phone: cleanTarget }] : []),
+        ],
       },
     });
 

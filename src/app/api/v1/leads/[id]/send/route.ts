@@ -20,6 +20,7 @@ export async function POST(
     include: {
       contact: true,
       organization: true,
+      call: true,
     },
   });
 
@@ -31,13 +32,41 @@ export async function POST(
     const body = await req.json();
     const { customerEmail, supplierId } = body;
 
-    const emailToSend = customerEmail || lead.customerEmail || lead.contact?.email;
+    let emailToSend = customerEmail || lead.customerEmail || lead.contact?.email;
+
+    // If still missing, check if the call has a contact with email
+    if (!emailToSend && lead.call) {
+      const counterpart = lead.call.direction === 'outbound' ? lead.call.to : lead.call.from;
+      if (counterpart) {
+        const cleanPhone = counterpart.replace(/\D/g, '');
+        const matched = await db.contact.findFirst({
+          where: {
+            organizationId: auth!.organizationId,
+            OR: [
+              { phone: counterpart },
+              ...(cleanPhone ? [{ phone: `+${cleanPhone}` }, { phone: cleanPhone }] : []),
+            ],
+          },
+        });
+        if (matched?.email) {
+          emailToSend = matched.email;
+        }
+      }
+    }
 
     if (!emailToSend) {
       return NextResponse.json(
         { api_id: 'missing_email', error: 'Please provide an email address for the customer before sending' },
         { status: 400 }
       );
+    }
+
+    // Persist email if lead didn't have it saved
+    if (!lead.customerEmail && emailToSend) {
+      await db.lead.update({
+        where: { id: lead.id },
+        data: { customerEmail: emailToSend },
+      }).catch(() => {});
     }
 
     // 1. Generate Customer Itinerary PDF

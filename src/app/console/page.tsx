@@ -44,6 +44,7 @@ import {
   Mail,
   FileCheck,
   PhoneCall,
+  X,
 } from 'lucide-react';
 import { analyzeMessageEncoding } from '@/lib/telephony/messaging/encoder';
 import { VisualItinerary } from '@/components/VisualItinerary';
@@ -78,6 +79,7 @@ export default function OperationsConsole() {
   const [leadSelectedSupplierId, setLeadSelectedSupplierId] = useState<string>('');
   const [leadRevising, setLeadRevising] = useState<boolean>(false);
   const [leadSending, setLeadSending] = useState<boolean>(false);
+  const [showSendConfirmModal, setShowSendConfirmModal] = useState<boolean>(false);
 
   // Supplier modal state
   const [showSupplierModal, setShowSupplierModal] = useState<boolean>(false);
@@ -840,6 +842,34 @@ export default function OperationsConsole() {
     }
   };
 
+  // Helper to resolve customer email from lead record, linked contact, or call counterpart phone
+  const resolveCustomerEmailForLead = (lead: any, contacts: any[] = contactsList): { email: string; contactName?: string } => {
+    if (!lead) return { email: '' };
+    if (lead.customerEmail && lead.customerEmail.includes('@')) {
+      return { email: lead.customerEmail, contactName: lead.contact?.name };
+    }
+    if (lead.contact?.email && lead.contact.email.includes('@')) {
+      return { email: lead.contact.email, contactName: lead.contact.name };
+    }
+    // Check call counterpart phone number
+    const customerPhone = lead.call
+      ? (lead.call.direction === 'outbound' ? lead.call.to : lead.call.from)
+      : (lead.contact?.phone || null);
+
+    if (customerPhone && contacts && contacts.length > 0) {
+      const cleanTarget = customerPhone.replace(/\D/g, '');
+      const matched = contacts.find((c: any) => {
+        if (!c.phone) return false;
+        const cClean = c.phone.replace(/\D/g, '');
+        return c.phone === customerPhone || (cleanTarget && cClean === cleanTarget);
+      });
+      if (matched?.email && matched.email.includes('@')) {
+        return { email: matched.email, contactName: matched.name };
+      }
+    }
+    return { email: '', contactName: lead.contact?.name };
+  };
+
   // Generate Itinerary from Call Transcription
   const handleGenerateItinerary = async (callId: string) => {
     setGeneratingItineraryCallId(callId);
@@ -862,12 +892,14 @@ export default function OperationsConsole() {
         if (leadDetailRes.ok) {
           const detailData = await leadDetailRes.json();
           setSelectedLead(detailData.lead);
-          setLeadCustomerEmail(detailData.lead.customerEmail || detailData.lead.contact?.email || '');
+          const resolved = resolveCustomerEmailForLead(detailData.lead, contactsList);
+          setLeadCustomerEmail(resolved.email);
           setLeadSelectedSupplierId(detailData.lead.selectedSupplierId || (suppliersList[0]?.id || ''));
           setLeadRevisionNotes(detailData.lead.revisionNotes || '');
         } else {
           setSelectedLead(data.lead);
-          setLeadCustomerEmail(data.lead.customerEmail || data.lead.contact?.email || '');
+          const resolved = resolveCustomerEmailForLead(data.lead, contactsList);
+          setLeadCustomerEmail(resolved.email);
         }
         setSelectedCallDetail(null);
         setActiveTab('leads');
@@ -875,7 +907,7 @@ export default function OperationsConsole() {
         alert(data.error || 'Failed to generate itinerary');
       }
     } catch (err: any) {
-      alert(err.message || 'Error communicating with DeepSeek service');
+      alert(err.message || 'Error communicating with itinerary service');
     } finally {
       setGeneratingItineraryCallId(null);
     }
@@ -890,7 +922,8 @@ export default function OperationsConsole() {
       if (res.ok) {
         const data = await res.json();
         setSelectedLead(data.lead);
-        setLeadCustomerEmail(data.lead.customerEmail || data.lead.contact?.email || '');
+        const resolved = resolveCustomerEmailForLead(data.lead, contactsList);
+        setLeadCustomerEmail(resolved.email);
         setLeadSelectedSupplierId(data.lead.selectedSupplierId || (suppliersList[0]?.id || ''));
         setLeadRevisionNotes(data.lead.revisionNotes || '');
       }
@@ -3200,10 +3233,21 @@ export default function OperationsConsole() {
 
                   {/* Customer Email Input */}
                   <div className="pt-2 border-t border-zinc-800/60 space-y-1.5">
-                    <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1">
-                      <Mail className="w-3.5 h-3.5 text-indigo-400" />
-                      Customer Email (Required to Send PDF) *
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1">
+                        <Mail className="w-3.5 h-3.5 text-indigo-400" />
+                        Customer Email (Required to Send PDF) *
+                      </label>
+                      {(() => {
+                        const resolved = resolveCustomerEmailForLead(selectedLead, contactsList);
+                        return resolved.contactName ? (
+                          <span className="text-[10px] text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-full flex items-center gap-1 font-medium">
+                            <CheckCircle2 className="w-2.5 h-2.5" />
+                            Linked: {resolved.contactName}
+                          </span>
+                        ) : null;
+                      })()}
+                    </div>
                     <input
                       type="email"
                       required
@@ -3438,7 +3482,13 @@ export default function OperationsConsole() {
                     </div>
                     <button
                       type="button"
-                      onClick={handleApproveAndSendItinerary}
+                      onClick={() => {
+                        if (!leadCustomerEmail || !leadCustomerEmail.includes('@')) {
+                          alert('Please enter or verify a valid customer email address before dispatching.');
+                          return;
+                        }
+                        setShowSendConfirmModal(true);
+                      }}
                       disabled={leadSending || !leadCustomerEmail}
                       className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-lg text-xs font-bold flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
                     >
@@ -3457,6 +3507,126 @@ export default function OperationsConsole() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CONFIRM ITINERARY DISPATCH */}
+      {showSendConfirmModal && selectedLead && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-zinc-800/80 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Confirm Itinerary Dispatch</h3>
+                  <p className="text-[11px] text-zinc-400">Review recipient details before official PDF dispatch.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSendConfirmModal(false)}
+                className="text-zinc-500 hover:text-zinc-300 p-1 rounded-lg hover:bg-zinc-800 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              {/* Itinerary info card */}
+              <div className="bg-zinc-950/80 border border-zinc-800/80 rounded-lg p-3 space-y-1.5">
+                <div className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">Itinerary & Destination</div>
+                <div className="font-semibold text-zinc-200">{selectedLead.title}</div>
+                <div className="text-[11px] text-indigo-400 flex items-center gap-1 font-medium">
+                  <Compass className="w-3 h-3" />
+                  <span>{selectedLead.destination || 'Luxury Destination'}</span>
+                </div>
+              </div>
+
+              {/* Recipients card */}
+              <div className="bg-zinc-950/80 border border-zinc-800/80 rounded-lg p-3 space-y-2.5 divide-y divide-zinc-800/50">
+                <div className="space-y-1">
+                  <div className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold flex items-center justify-between">
+                    <span>Customer Recipient</span>
+                    <span className="text-[10px] text-emerald-400 font-normal">Customer Itinerary PDF</span>
+                  </div>
+                  <div className="font-medium text-emerald-400 flex items-center gap-1.5 font-mono text-[11px]">
+                    <Mail className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>{leadCustomerEmail}</span>
+                  </div>
+                  {(() => {
+                    const resolved = resolveCustomerEmailForLead(selectedLead, contactsList);
+                    return resolved.contactName ? (
+                      <div className="text-[11px] text-zinc-400">
+                        Linked Contact: <span className="text-zinc-300 font-medium">{resolved.contactName}</span>
+                      </div>
+                    ) : null;
+                  })()}
+                </div>
+
+                <div className="pt-2 space-y-1">
+                  <div className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold flex items-center justify-between">
+                    <span>Supplier Partner RFQ</span>
+                    <span className="text-[10px] text-indigo-400 font-normal">Supplier RFQ PDF</span>
+                  </div>
+                  {leadSelectedSupplierId ? (
+                    (() => {
+                      const supp = suppliersList.find((s) => s.id === leadSelectedSupplierId);
+                      return supp ? (
+                        <div className="space-y-0.5">
+                          <div className="font-medium text-indigo-300">{supp.name}</div>
+                          <div className="text-[11px] text-zinc-400 font-mono">{supp.email}</div>
+                        </div>
+                      ) : (
+                        <div className="text-zinc-500 italic">Supplier selected ({leadSelectedSupplierId})</div>
+                      );
+                    })()
+                  ) : (
+                    <div className="text-zinc-500 italic text-[11px]">No supplier selected (Customer PDF only)</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-[11px] text-emerald-300 flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <span>
+                  Clicking <strong>Confirm & Dispatch</strong> will generate the branded PDF documents and dispatch them via email.
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-zinc-800/80">
+              <button
+                type="button"
+                onClick={() => setShowSendConfirmModal(false)}
+                disabled={leadSending}
+                className="px-4 py-2 text-xs rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setShowSendConfirmModal(false);
+                  await handleApproveAndSendItinerary();
+                }}
+                disabled={leadSending}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2 rounded-lg text-xs font-bold flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition"
+              >
+                {leadSending ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Sending...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Confirm & Dispatch PDFs</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
