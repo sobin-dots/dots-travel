@@ -1,0 +1,517 @@
+// Multi-tenant Plivo communications platform.
+// Invariants: every row is organisation-scoped; Plivo credentials are encrypted at rest;
+// provider identifiers are unique (idempotency backbone); raw payloads are retained.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── tenancy & identity ────────────────────────────────────────────────────────
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // policy
+  transcriptionDefaultEnabled Boolean  @default(true)
+  transcriptionLanguage       String   @default("en-US")
+  recordingRetentionDays      Int?
+  notificationEmail           String?
+  redactMessageContent        Boolean  @default(false)   // maps to Plivo `log: false`
+
+  members         Membership[]
+  plivoAccounts   PlivoAccount[]
+  applications    Application[]
+  numbers         PhoneNumber[]
+  calls           Call[]
+  callEvents      CallEvent[]
+  messages        Message[]
+  messageThreads  MessageThread[]
+  recordings      Recording[]
+  transcriptions  Transcription[]
+  apiKeys         ApiKey[]
+  webhookEvents   WebhookEvent[]
+  auditLogs       AuditLog[]
+  contacts        Contact[]
+  leads           Lead[]
+  suppliers       Supplier[]
+
+  @@map("organizations")
+}
+
+model User {
+  id               String    @id @default(uuid())
+  email            String    @unique
+  name             String
+  passwordHash     String
+  mfaSecretEnc     String?                        // TOTP secret, encrypted
+  mfaEnabled       Boolean   @default(false)
+  mfaRecoveryCodes String[]  @default([])         // hashed recovery codes
+  status           String    @default("active")   // active | disabled
+  lastLoginAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  memberships Membership[]
+  sessions    Session[]
+  apiKeys     ApiKey[]
+  auditLogs   AuditLog[]
+
+  @@map("users")
+}
+
+model Membership {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  role           String   @default("operator") // owner | admin | operator | viewer
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@map("memberships")
+}
+
+model Session {                                  // console sessions (Auth.js) + refresh families
+  id              String   @id @default(uuid())
+  userId          String
+  organizationId  String?
+  kind            String   @default("console")   // console | api_refresh
+  tokenHash       String   @unique
+  familyId        String?
+  rotatedFromId   String?
+  revokedAt       DateTime?
+  expiresAt       DateTime
+  userAgent       String?
+  ip              String?
+  createdAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind])
+  @@map("sessions")
+}
+
+model ApiKey {                                    // server-to-server / mobile long-lived keys
+  id              String    @id @default(uuid())
+  organizationId  String
+  createdByUserId String?
+  name            String
+  prefix          String    @unique              // shown in UI, e.g. "cms_ab12…"
+  secretHash      String                         // sha256 of the secret half
+  scopes          String[]  @default([])         // e.g. ["calls:write","messages:read"]
+  lastUsedAt      DateTime?
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@map("api_keys")
+}
+
+// ─── provider configuration ────────────────────────────────────────────────────
+
+model PlivoAccount {
+  id                 String   @id @default(uuid())
+  organizationId     String
+  label              String   @default("Primary")
+  authIdEncrypted    String                     // AES-256-GCM ciphertext (base64)
+  authIdLast4        String                     // for masked display only
+  authTokenEncrypted String
+  encIv              String
+  encAuthTag         String
+  encKeyVersion      Int      @default(1)
+  isSubaccount       Boolean  @default(false)
+  status             String   @default("unverified") // unverified | verified | failed
+  lastVerifiedAt     DateTime?
+  lastVerifyError    String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  numbers      PhoneNumber[]
+  applications Application[]
+
+  @@unique([organizationId, authIdLast4, label])
+  @@map("plivo_accounts")
+}
+
+model Application {                               // Plivo application = answer_url + urls
+  id                String   @id @default(uuid())
+  organizationId    String
+  plivoAccountId    String
+  plivoAppId        String   @unique
+  name              String
+  answerUrl         String
+  answerMethod      String   @default("POST")
+  fallbackAnswerUrl String?
+  hangupUrl         String?
+  messageUrl        String?
+  defaultNumberApp  Boolean  @default(false)
+  rawPayload        Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plivoAccount PlivoAccount  @relation(fields: [plivoAccountId], references: [id], onDelete: Cascade)
+  numbers      PhoneNumber[]
+
+  @@index([organizationId])
+  @@map("applications")
+}
+
+model PhoneNumber {
+  id                    String   @id @default(uuid())
+  organizationId        String
+  plivoAccountId        String
+  applicationId         String?
+  e164                  String
+  countryIso            String
+  numberType            String   @default("local")   // local | tollfree | mobile | shortcode
+  region                String?
+  city                  String?
+  friendlyName          String?
+  // behaviour
+  answerUrlOverride     String?
+  recordCalls           Boolean  @default(true)
+  recordChannelType     String   @default("stereo")  // mono | stereo
+  recordSession         Boolean  @default(true)
+  machineDetection      Boolean  @default(false)
+  transcribeEnabled     Boolean  @default(true)
+  transcriptionLanguage String   @default("en-US")
+  voicemailEnabled      Boolean  @default(false)
+  forwardTo             String?
+  // costs reported by Plivo
+  monthlyRental         Decimal? @db.Decimal(10, 4)
+  smsRate               Decimal? @db.Decimal(10, 4)
+  mmsRate               Decimal? @db.Decimal(10, 4)
+  voiceRate             Decimal? @db.Decimal(10, 4)
+  // lifecycle
+  status                String   @default("active")  // active | released
+  source                String   @default("purchased") // purchased | ported
+  purchasedAt           DateTime?
+  releasedAt            DateTime?
+  rawPayload            Json?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plivoAccount PlivoAccount  @relation(fields: [plivoAccountId], references: [id], onDelete: Cascade)
+  application  Application?  @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  calls        Call[]
+  messages     Message[]
+
+  @@unique([organizationId, e164])
+  @@index([organizationId, status])
+  @@map("phone_numbers")
+}
+
+// ─── voice ─────────────────────────────────────────────────────────────────────
+
+model Call {
+  id                   String    @id @default(uuid())
+  organizationId       String
+  phoneNumberId        String?
+  // provider truth
+  plivoCallUuid        String    @unique
+  parentCallUuid       String?
+  aledUuid             String?
+  requestUuid          String?
+  direction            String                       // inbound | outbound
+  status               String    @default("queued") // queued|ringing|in-progress|completed|busy|no-answer|failed|timeout|canceled
+  from                 String
+  to                   String
+  // measured
+  startedAt            DateTime  @default(now())
+  answeredAt           DateTime?
+  endedAt              DateTime?
+  durationSeconds      Int?
+  billDurationSeconds  Int?
+  ringDurationSeconds  Int?
+  totalCost            Decimal?  @db.Decimal(12, 6)
+  hangupCauseCode      Int?
+  hangupCauseName      String?
+  hangupSource         String?
+  stirAttestation      String?
+  // policy actually applied (so the UI can explain outcomes)
+  recordingEnabled     Boolean   @default(false)
+  transcriptionEnabled Boolean   @default(false)
+  transcriptionLanguage String?
+  machineDetected      String?                      // human | machine | unknown
+  // what we asked for
+  requestedMode        String?                      // twiml-inline | forward | url | voicemail
+  requestedParams      Json?
+  rawPayload           Json?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  phoneNumber  PhoneNumber?  @relation(fields: [phoneNumberId], references: [id], onDelete: SetNull)
+  events       CallEvent[]
+  recordings   Recording[]
+  transcriptions Transcription[]
+  leads        Lead[]
+
+  @@index([organizationId, startedAt])
+  @@index([organizationId, status])
+  @@index([organizationId, direction])
+  @@map("calls")
+}
+
+model CallEvent {                                  // append-only projection of callbacks
+  id              String   @id @default(uuid())
+  organizationId  String
+  callId          String
+  eventType       String                          // ring | answer | hangup | recording | machine_detection | action | stream
+  status          String?
+  payload         Json
+  occurredAt      DateTime
+  webhookEventId  String?
+  createdAt       DateTime @default(now())
+
+  call         Call           @relation(fields: [callId], references: [id], onDelete: Cascade)
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([callId, occurredAt])
+  @@map("call_events")
+}
+
+// ─── media & transcription ─────────────────────────────────────────────────────
+
+model Recording {
+  id                String   @id @default(uuid())
+  organizationId    String
+  callId            String?
+  plivoRecordingId  String   @unique
+  recordingUrl      String                        // Plivo-side URL; never sent to a browser
+  durationSeconds   Int?
+  fileFormat        String   @default("mp3")
+  channelType       String?                       // mono | stereo
+  sizeBytes         Int?
+  status            String   @default("completed") // in-progress | completed | failed | deleted
+  storageCost       Decimal? @db.Decimal(12, 6)
+  startedAt         DateTime?
+  endedAt           DateTime?
+  deletedAt         DateTime?
+  rawPayload        Json?
+  createdAt         DateTime @default(now())
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  call           Call?          @relation(fields: [callId], references: [id], onDelete: SetNull)
+  transcriptions Transcription[]
+
+  @@index([organizationId, createdAt])
+  @@map("recordings")
+}
+
+model Transcription {
+  id                   String   @id @default(uuid())
+  organizationId       String
+  recordingId          String?
+  callId               String?
+  plivoTranscriptionId String?  @unique
+  recordingSid         String?                       // Plivo keys transcriptions by recording id
+  type                 String   @default("transcription") // transcription | raw | diarized
+  status               String   @default("queued")   // queued | in-progress | completed | failed
+  language             String?
+  text                 String?  @db.Text
+  segments             Json?                         // speaker-tagged segments when diarized
+  wordCount            Int?
+  errorCode            String?
+  errorMessage         String?
+  source               String   @default("callback")  // callback | on_demand
+  rawPayload           Json?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recording    Recording?   @relation(fields: [recordingId], references: [id], onDelete: Cascade)
+  call         Call?        @relation(fields: [callId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@map("transcriptions")
+}
+
+// ─── messaging ─────────────────────────────────────────────────────────────────
+
+model Message {
+  id                String   @id @default(uuid())
+  organizationId    String
+  phoneNumberId     String?
+  threadId          String?
+  plivoMessageUuid  String   @unique
+  direction         String                        // inbound | outbound
+  type              String   @default("sms")      // sms | mms | whatsapp
+  from              String
+  to                String
+  body              String?  @db.Text
+  status            String   @default("queued")   // queued|sent|delivered|undelivered|failed|received|read
+  errorCode         String?
+  units             Int?
+  totalRate         Decimal? @db.Decimal(12, 6)
+  totalAmount       Decimal? @db.Decimal(12, 6)
+  mcc               String?
+  mnc               String?
+  redacted          Boolean  @default(false)
+  mediaUrls         String[] @default([])
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  rawPayload        Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  phoneNumber  PhoneNumber?   @relation(fields: [phoneNumberId], references: [id], onDelete: SetNull)
+  thread       MessageThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status])
+  @@map("messages")
+}
+
+model MessageThread {                              // derived grouping: our number + counterpart
+  id               String   @id @default(uuid())
+  organizationId   String
+  ownNumberE164    String
+  counterpartE164  String
+  lastMessageAt    DateTime @default(now())
+  unreadCount      Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  messages     Message[]
+
+  @@unique([organizationId, ownNumberE164, counterpartE164])
+  @@map("message_threads")
+}
+
+// ─── platform plumbing ─────────────────────────────────────────────────────────
+
+model WebhookEvent {                               // raw, deduped, replayable
+  id             String   @id @default(uuid())
+  organizationId String?
+  provider       String   @default("plivo")
+  kind           String                            // voice | message | recording | transcription | stream
+  eventType      String?
+  dedupeKey      String                            // CallUUID | MessageUUID | RecordingID | StreamID+event
+  signatureValid Boolean
+  headers        Json
+  rawBody        String   @db.Text
+  contentType    String?
+  sourceIp       String?
+  status         String   @default("received")     // received | processed | ignored | failed | rejected
+  error          String?
+  attempts       Int      @default(0)
+  receivedAt     DateTime @default(now())
+  processedAt    DateTime?
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, dedupeKey, kind])
+  @@index([status])
+  @@map("webhook_events")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String?
+  actorUserId    String?
+  actorType      String   @default("user")         // user | api_key | system | webhook
+  actorLabel     String?
+  action         String                            // call.create | message.send | number.buy | settings.update | auth.login …
+  targetType     String?
+  targetId       String?
+  metadata       Json?
+  ip             String?
+  userAgent      String?
+  result         String   @default("success")      // success | failure
+  createdAt      DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User?         @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@map("audit_logs")
+}
+
+model Contact {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  phone          String   // E.164
+  email          String?
+  company        String?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leads        Lead[]
+
+  @@unique([organizationId, phone])
+  @@index([organizationId])
+  @@map("contacts")
+}
+
+model Lead {
+  id                   String    @id @default(uuid())
+  organizationId       String
+  contactId            String?
+  callId               String?
+  title                String
+  destination          String?
+  status               String    @default("pending_approval") // draft | pending_approval | approved | sent_to_customer | sent_to_supplier
+  itinerary            String    @db.Text
+  revisionNotes        String?   @db.Text
+  customerEmail        String?
+  customerSentAt       DateTime?
+  supplierSentAt       DateTime?
+  selectedSupplierId   String?
+  metadata             Json?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  call         Call?        @relation(fields: [callId], references: [id], onDelete: SetNull)
+  supplier     Supplier?    @relation(fields: [selectedSupplierId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status])
+  @@map("leads")
+}
+
+model Supplier {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  category       String   @default("hotels") // hotels | flights | transport | activities | packages
+  email          String
+  phone          String?
+  contactPerson  String?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leads        Lead[]
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+  @@map("suppliers")
+}
+
+

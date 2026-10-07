@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: plivo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: plivo_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - plivo-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d plivo_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - plivo-network
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: plivo-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/plivo_db?schema=public
+      - PUBLIC_BASE_URL=http://localhost:3000
+      - TELEPHONY_MODE=simulator
+      - ENCRYPTION_KEK=MQ9UAL70vTOhxqnQG/rdtV1xBVY3JJgc79+9toGAKtQ=
+      - ENCRYPTION_KEK_VERSION=1
+      - AUTH_SECRET=4289a01f8d95e7b2339d2cbb54d6fa08d3e230cb28c6152a
+      - JWT_ACCESS_SECRET=c9b0e27a9cf18635e8d6411ab728fbcd45e69e0618035bc3
+      - ACCESS_TOKEN_TTL=900
+      - REFRESH_TOKEN_TTL_DAYS=30
+      - MEDIA_URL_SECRET=a8b3879f82d1c68e30b62d8544e5cc9d07e157ea1b4c6534
+      - MEDIA_URL_TTL_SECONDS=300
+      - RATE_LIMIT_MAX=300
+      - RATE_LIMIT_WINDOW_MS=5000
+    networks:
+      - plivo-network
+
+networks:
+  plivo-network:
+    driver: bridge
+
+volumes:
+  plivo-pgdata:
+    driver: local
