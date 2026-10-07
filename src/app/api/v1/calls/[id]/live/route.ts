@@ -45,7 +45,7 @@ export async function DELETE(
       },
     });
 
-    // Automatically provision recording and transcription if requested
+    // Automatically provision simulated recording and transcription in simulator mode
     if (call.recordingEnabled) {
       const recId = `rec_${crypto.randomBytes(8).toString('hex')}`;
       const recording = await db.recording.create({

@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Automatically provision recording and transcription if call was recorded
+      // Automatically provision simulated recording and transcription in simulator mode
       if (existingCall.recordingEnabled) {
         const existingRec = await db.recording.findFirst({ where: { callId: existingCall.id } });
         if (!existingRec) {
