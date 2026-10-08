@@ -160,7 +160,7 @@ export default function LoginPage() {
           </div>
           <div>
             <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-              Plivo Platform
+              Travel Agent
               <span className="text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-400 border border-emerald-800/60">
                 v1.0.0
               </span>
@@ -199,11 +199,10 @@ export default function LoginPage() {
                   setError(null);
                   setSuccessMsg(null);
                 }}
-                className={`flex-1 pb-3 text-sm font-semibold transition-all relative ${
-                  mode === 'signin'
+                className={`flex-1 pb-3 text-sm font-semibold transition-all relative ${mode === 'signin'
                     ? 'text-emerald-400 border-b-2 border-emerald-500'
                     : 'text-slate-400 hover:text-slate-200'
-                }`}
+                  }`}
               >
                 Sign In
               </button>
@@ -214,11 +213,10 @@ export default function LoginPage() {
                   setError(null);
                   setSuccessMsg(null);
                 }}
-                className={`flex-1 pb-3 text-sm font-semibold transition-all relative ${
-                  mode === 'signup'
+                className={`flex-1 pb-3 text-sm font-semibold transition-all relative ${mode === 'signup'
                     ? 'text-emerald-400 border-b-2 border-emerald-500'
                     : 'text-slate-400 hover:text-slate-200'
-                }`}
+                  }`}
               >
                 Create Account
               </button>

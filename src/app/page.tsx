@@ -46,8 +46,8 @@ export default function LandingPage() {
       const orgStr = localStorage.getItem('plivo_org');
       if (token) {
         setHasAuthToken(true);
-        try { if (userStr) setCurrentUser(JSON.parse(userStr)); } catch {}
-        try { if (orgStr) setCurrentOrg(JSON.parse(orgStr)); } catch {}
+        try { if (userStr) setCurrentUser(JSON.parse(userStr)); } catch { }
+        try { if (orgStr) setCurrentOrg(JSON.parse(orgStr)); } catch { }
       }
     }
   }, []);
@@ -96,7 +96,7 @@ export default function LandingPage() {
               P
             </div>
             <div>
-              <span className="font-bold text-sm tracking-tight text-white block">Plivo Platform</span>
+              <span className="font-bold text-sm tracking-tight text-white block">Travel Agent</span>
               <span className="text-[10px] text-zinc-400 block -mt-0.5">Enterprise Operations & AI Concierge</span>
             </div>
           </Link>
@@ -437,7 +437,7 @@ export default function LandingPage() {
       {/* Footer */}
       <footer className="border-t border-zinc-800/80 py-6 px-6 lg:px-12 bg-zinc-950 text-xs text-zinc-500 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-2">
-          <span className="font-bold text-zinc-300">Plivo Platform</span>
+          <span className="font-bold text-zinc-300">Travel Agent</span>
           <span>•</span>
           <span>Enterprise Operations & Travel Concierge</span>
         </div>

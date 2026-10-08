@@ -32,10 +32,10 @@ export function ConsoleHeader() {
 
         <Link href="/console" className="flex items-center gap-2 sm:gap-2.5">
           <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center font-bold text-xs sm:text-sm text-white shadow-lg shadow-indigo-500/20 shrink-0">
-            P
+            TA
           </div>
           <div>
-            <span className="font-bold text-xs sm:text-sm tracking-tight text-white block">Plivo Platform</span>
+            <span className="font-bold text-xs sm:text-sm tracking-tight text-white block">Travel Agent</span>
             <span className="text-[9px] sm:text-[10px] text-zinc-400 hidden xs:block -mt-0.5">Enterprise Operations Console</span>
           </div>
         </Link>
