@@ -82,7 +82,8 @@ export async function POST(
   } catch {}
 
   const url = new URL(req.url);
-  const provider = body.provider || url.searchParams.get('provider') || 'plivo';
+  const provider = body.provider || url.searchParams.get('provider') || 'openai';
+  const model = body.model || url.searchParams.get('model');
 
   const recUrl = new URL(`/api/v1/recordings/${latestRecording.id}/transcribe`, req.url);
   const authHeader = req.headers.get('authorization') || '';
@@ -92,7 +93,7 @@ export async function POST(
       'Content-Type': 'application/json',
       ...(authHeader ? { Authorization: authHeader } : {}),
     },
-    body: JSON.stringify({ ...body, provider }),
+    body: JSON.stringify({ ...body, provider, ...(model ? { model } : {}) }),
   });
   const data = await response.json();
   return NextResponse.json(data, { status: response.status });

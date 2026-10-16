@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { CreateCallRequestSchema } from '@/lib/schemas';
-import { getTelephonyProvider } from '@/lib/telephony';
+import { getTelephonyProvider, getTenantTelephonyProvider } from '@/lib/telephony';
 
 export const runtime = 'nodejs';
 
@@ -133,14 +133,14 @@ export async function POST(req: NextRequest) {
     if (mode === 'url' && url) {
       answerUrl = url;
     } else {
-      answerUrl = `${publicBase}/api/v1/webhooks/voice/answer?mode=${mode}`;
+      answerUrl = `${publicBase}/api/v1/webhooks/voice/answer?mode=${mode}&orgId=${auth!.organizationId}`;
       if ((mode === 'forward' || mode === 'bridge') && forwardTo) {
         answerUrl += `&forwardTo=${encodeURIComponent(forwardTo)}`;
       }
     }
 
-    const ringUrl = `${publicBase}/api/v1/webhooks/voice/status`;
-    const hangupUrl = `${publicBase}/api/v1/webhooks/voice/hangup`;
+    const ringUrl = `${publicBase}/api/v1/webhooks/voice/status?orgId=${auth!.organizationId}`;
+    const hangupUrl = `${publicBase}/api/v1/webhooks/voice/hangup?orgId=${auth!.organizationId}`;
 
     // Initialize Call record with temporary UUID
     const tempUuid = `temp_${crypto.randomBytes(12).toString('hex')}`;
@@ -166,8 +166,8 @@ export async function POST(req: NextRequest) {
     });
     createdCallId = initialCall.id;
 
-    // Invoke Telephony Provider
-    const provider = getTelephonyProvider();
+    // Invoke Telephony Provider for tenant
+    const provider = await getTenantTelephonyProvider(auth!.organizationId);
     const result = await provider.createCall({
       from: phoneNumber.e164,
       to,

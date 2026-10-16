@@ -370,6 +370,102 @@ async function main() {
     },
   });
 
+  // 12. Seed Tenant Integrations for starter Organization
+  if (process.env.OPENAI_API_KEY) {
+    const encOpenAi = encryptData(JSON.stringify({ apiKey: process.env.OPENAI_API_KEY }));
+    await db.tenantIntegration.upsert({
+      where: {
+        organizationId_provider: {
+          organizationId: org.id,
+          provider: 'openai',
+        },
+      },
+      update: {
+        credentialsEncrypted: encOpenAi.ciphertext,
+        encIv: encOpenAi.iv,
+        encAuthTag: encOpenAi.authTag,
+        status: 'verified',
+        lastVerifiedAt: new Date(),
+      },
+      create: {
+        organizationId: org.id,
+        provider: 'openai',
+        category: 'transcription',
+        label: 'OpenAI Transcription',
+        credentialsEncrypted: encOpenAi.ciphertext,
+        encIv: encOpenAi.iv,
+        encAuthTag: encOpenAi.authTag,
+        maskedDetails: { apiKeyLast4: process.env.OPENAI_API_KEY.slice(-4), model: 'gpt-4o-transcribe' },
+        status: 'verified',
+        lastVerifiedAt: new Date(),
+        metadata: { model: 'gpt-4o-transcribe' },
+      },
+    });
+  }
+
+  if (process.env.DEEPSEEK_API_KEY) {
+    const encDeepSeek = encryptData(JSON.stringify({ apiKey: process.env.DEEPSEEK_API_KEY }));
+    await db.tenantIntegration.upsert({
+      where: {
+        organizationId_provider: {
+          organizationId: org.id,
+          provider: 'deepseek',
+        },
+      },
+      update: {
+        credentialsEncrypted: encDeepSeek.ciphertext,
+        encIv: encDeepSeek.iv,
+        encAuthTag: encDeepSeek.authTag,
+        status: 'verified',
+        lastVerifiedAt: new Date(),
+      },
+      create: {
+        organizationId: org.id,
+        provider: 'deepseek',
+        category: 'intelligence',
+        label: 'DeepSeek Travel Intelligence',
+        credentialsEncrypted: encDeepSeek.ciphertext,
+        encIv: encDeepSeek.iv,
+        encAuthTag: encDeepSeek.authTag,
+        maskedDetails: { apiKeyLast4: process.env.DEEPSEEK_API_KEY.slice(-4), model: 'deepseek-chat' },
+        status: 'verified',
+        lastVerifiedAt: new Date(),
+        metadata: { model: 'deepseek-chat' },
+      },
+    });
+  }
+
+  if (rawAuthId && rawAuthToken) {
+    const encPlivo = encryptData(JSON.stringify({ authId: rawAuthId, authToken: rawAuthToken, callerId: process.env.PLIVO_CALLER_ID || '+918065531234' }));
+    await db.tenantIntegration.upsert({
+      where: {
+        organizationId_provider: {
+          organizationId: org.id,
+          provider: 'plivo',
+        },
+      },
+      update: {
+        credentialsEncrypted: encPlivo.ciphertext,
+        encIv: encPlivo.iv,
+        encAuthTag: encPlivo.authTag,
+        status: 'verified',
+        lastVerifiedAt: new Date(),
+      },
+      create: {
+        organizationId: org.id,
+        provider: 'plivo',
+        category: 'telephony',
+        label: 'Plivo Carrier Account',
+        credentialsEncrypted: encPlivo.ciphertext,
+        encIv: encPlivo.iv,
+        encAuthTag: encPlivo.authTag,
+        maskedDetails: { authIdLast4: rawAuthId.slice(-4), callerId: process.env.PLIVO_CALLER_ID || '+918065531234' },
+        status: 'verified',
+        lastVerifiedAt: new Date(),
+      },
+    });
+  }
+
   console.log('[Seed] Database seeding completed successfully.');
 }
 

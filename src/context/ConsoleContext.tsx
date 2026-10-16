@@ -16,6 +16,17 @@ interface ConsoleContextType {
   fetchData: () => Promise<void>;
   handleSignOut: () => void;
 
+  // Organizations & Multi-tenancy
+  organizationsList: any[];
+  setOrganizationsList: React.Dispatch<React.SetStateAction<any[]>>;
+  showOrgModal: boolean;
+  setShowOrgModal: (show: boolean) => void;
+  handleSwitchOrganization: (orgId: string) => Promise<void>;
+  handleCreateOrganization: (name: string) => Promise<void>;
+  integrationsSummary: any;
+  setIntegrationsSummary: React.Dispatch<React.SetStateAction<any>>;
+  fetchIntegrations: () => Promise<void>;
+
   // Telephony data
   numbers: any[];
   setNumbers: React.Dispatch<React.SetStateAction<any[]>>;
@@ -88,12 +99,21 @@ interface ConsoleContextType {
   setTranscribingRecId: (id: string | null) => void;
   transcribingProvider: 'openai' | 'plivo' | null;
   setTranscribingProvider: (provider: 'openai' | 'plivo' | null) => void;
-  handleTriggerTranscription: (recordingId: string, provider?: 'openai' | 'plivo') => Promise<void>;
+  handleTriggerTranscription: (recordingId: string, provider?: 'openai' | 'plivo', model?: string) => Promise<void>;
+  handleTriggerCallTranscription: (callId: string, provider?: 'openai' | 'plivo', model?: string) => Promise<void>;
   handleRefetchPlivoTranscriptionForCall: (callId: string) => Promise<void>;
   handleGenerateItinerary: (callId: string) => Promise<void>;
   generatingItineraryCallId: string | null;
   handleHangupLiveCall: (callId: string) => Promise<void>;
   handleSendDtmf: (callId: string, digits: string) => Promise<void>;
+
+  // Itinerary Intake Modal
+  showItineraryIntakeModal: boolean;
+  setShowItineraryIntakeModal: (show: boolean) => void;
+  intakeCallTarget: any | null;
+  setIntakeCallTarget: (call: any | null) => void;
+  openItineraryIntakeModal: (call: any) => void;
+  handleGenerateItineraryWithParams: (callId: string, params: any) => Promise<void>;
 
   // Leads & AI Itinerary review drawer
   selectedLead: any | null;
@@ -197,6 +217,9 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [bearerToken, setBearerToken] = useState<string>('');
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [currentOrg, setCurrentOrg] = useState<any>(null);
+  const [organizationsList, setOrganizationsList] = useState<any[]>([]);
+  const [showOrgModal, setShowOrgModal] = useState<boolean>(false);
+  const [integrationsSummary, setIntegrationsSummary] = useState<any>(null);
   const [settings, setSettings] = useState<any>(null);
   const [systemMode] = useState<'live'>('live');
   const [loading, setLoading] = useState<boolean>(true);
@@ -224,6 +247,15 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [leadRevising, setLeadRevising] = useState<boolean>(false);
   const [leadSending, setLeadSending] = useState<boolean>(false);
   const [showSendConfirmModal, setShowSendConfirmModal] = useState<boolean>(false);
+
+  // Itinerary Intake Modal state
+  const [showItineraryIntakeModal, setShowItineraryIntakeModal] = useState<boolean>(false);
+  const [intakeCallTarget, setIntakeCallTarget] = useState<any | null>(null);
+
+  const openItineraryIntakeModal = (call: any) => {
+    setIntakeCallTarget(call);
+    setShowItineraryIntakeModal(true);
+  };
 
   // Supplier modal state
   const [showSupplierModal, setShowSupplierModal] = useState<boolean>(false);
@@ -378,6 +410,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         fetch('/api/v1/contacts', { headers }).then((r) => r.json()),
         fetch('/api/v1/leads', { headers }).then((r) => r.json()),
         fetch('/api/v1/suppliers', { headers }).then((r) => r.json()),
+        fetch('/api/v1/organizations', { headers }).then((r) => r.json()),
+        fetch('/api/v1/settings/integrations', { headers }).then((r) => r.json()),
       ]);
     };
 
@@ -420,7 +454,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      const [numRes, callRes, threadRes, recRes, transRes, setRes, auditRes, staffRes, contactRes, leadRes, suppRes] = results;
+      const [numRes, callRes, threadRes, recRes, transRes, setRes, auditRes, staffRes, contactRes, leadRes, suppRes, orgsRes, integRes] = results;
 
       if (numRes.objects) {
         setNumbers(numRes.objects);
@@ -437,7 +471,10 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       }
       if (recRes.objects) setRecordings(recRes.objects);
       if (transRes.objects) setTranscripts(transRes.objects);
-      if (setRes.organization) setSettings(setRes);
+      if (setRes.organization) {
+        setSettings(setRes);
+        setCurrentOrg(setRes.organization);
+      }
       if (auditRes.objects) setAuditLogs(auditRes.objects);
       if (staffRes.objects) setStaffList(staffRes.objects);
       if (contactRes.objects) {
@@ -453,8 +490,104 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           setLeadSelectedSupplierId(suppRes.objects[0].id);
         }
       }
+      if (orgsRes?.organizations) {
+        setOrganizationsList(orgsRes.organizations);
+      }
+      if (integRes?.integrations) {
+        setIntegrationsSummary(integRes);
+      }
     } catch (err) {
       console.error('Data fetch error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchIntegrations = async () => {
+    let token: string = bearerToken || (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') || '' : '');
+    if (!token) return;
+    try {
+      const res = await fetch('/api/v1/settings/integrations', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'ngrok-skip-browser-warning': 'true',
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIntegrationsSummary(data);
+      }
+    } catch (err) {
+      console.error('Failed to refresh integrations:', err);
+    }
+  };
+
+  const handleSwitchOrganization = async (orgId: string) => {
+    let token: string = bearerToken || (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') || '' : '');
+    if (!token) return;
+
+    try {
+      setLoading(true);
+      const res = await fetch('/api/v1/organizations/switch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: JSON.stringify({ organizationId: orgId }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.accessToken) {
+        localStorage.setItem('plivo_access_token', data.accessToken);
+        if (data.refreshToken) {
+          localStorage.setItem('plivo_refresh_token', data.refreshToken);
+        }
+        if (data.organization) {
+          localStorage.setItem('plivo_org', JSON.stringify(data.organization));
+          setCurrentOrg(data.organization);
+        }
+        if (data.user) {
+          localStorage.setItem('plivo_user', JSON.stringify(data.user));
+          setCurrentUser(data.user);
+        }
+        setBearerToken(data.accessToken);
+      } else {
+        alert(data.error || 'Failed to switch organization');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error switching organization');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateOrganization = async (name: string) => {
+    let token: string = bearerToken || (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') || '' : '');
+    if (!token) return;
+
+    try {
+      setLoading(true);
+      const res = await fetch('/api/v1/organizations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'ngrok-skip-browser-warning': 'true',
+        },
+        body: JSON.stringify({ name }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.organization) {
+        setShowOrgModal(false);
+        await handleSwitchOrganization(data.organization.id);
+      } else {
+        alert(data.error || 'Failed to create organization');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error creating organization');
     } finally {
       setLoading(false);
     }
@@ -1052,21 +1185,39 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     alert(`Sent DTMF digits ${digits}`);
   };
 
-  const handleTriggerTranscription = async (recordingId: string, provider: 'openai' | 'plivo' = 'openai') => {
+  const handleTriggerTranscription = async (
+    recordingId: string,
+    provider: 'openai' | 'plivo' = 'openai',
+    model?: string
+  ) => {
     setTranscribingRecId(recordingId);
     setTranscribingProvider(provider);
     try {
+      const targetModel =
+        model ||
+        (provider === 'openai'
+          ? integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai')?.metadata?.model
+          : undefined);
+
       const res = await fetch(`/api/v1/recordings/${recordingId}/transcribe`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${bearerToken}`,
         },
-        body: JSON.stringify({ provider }),
+        body: JSON.stringify({
+          provider,
+          ...(targetModel ? { model: targetModel } : {}),
+        }),
       });
       const data = await res.json();
       if (res.ok) {
-        alert(data.message || (provider === 'plivo' ? 'Transcription refetched from Plivo successfully!' : 'Transcription generated successfully with OpenAI Whisper!'));
+        alert(
+          data.message ||
+            (provider === 'plivo'
+              ? 'Transcription refetched from Plivo successfully!'
+              : `Transcription generated successfully with OpenAI (${data.model || targetModel || 'primary model'})!`)
+        );
         await fetchData();
         if (selectedCallDetail) {
           await refreshCallDetail(selectedCallDetail.id);
@@ -1078,6 +1229,50 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       alert(err.message || 'Transcription request failed');
     } finally {
       setTranscribingRecId(null);
+      setTranscribingProvider(null);
+    }
+  };
+
+  const handleTriggerCallTranscription = async (
+    callId: string,
+    provider: 'openai' | 'plivo' = 'openai',
+    model?: string
+  ) => {
+    setTranscribingProvider(provider);
+    try {
+      const targetModel =
+        model ||
+        (provider === 'openai'
+          ? integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai')?.metadata?.model
+          : undefined);
+
+      const res = await fetch(`/api/v1/calls/${callId}/transcribe`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`,
+        },
+        body: JSON.stringify({
+          provider,
+          ...(targetModel ? { model: targetModel } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(
+          data.message ||
+            (provider === 'plivo'
+              ? 'Transcription refetched from Plivo successfully!'
+              : `Transcription generated successfully with OpenAI (${data.model || targetModel || 'primary model'})!`)
+        );
+        await fetchData();
+        await refreshCallDetail(callId);
+      } else {
+        alert(data.error || 'Failed to trigger call transcription');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Call transcription request failed');
+    } finally {
       setTranscribingProvider(null);
     }
   };
@@ -1149,6 +1344,49 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       });
       const data = await res.json();
       if (res.ok && data.lead) {
+        await fetchData();
+        const leadDetailRes = await fetch(`/api/v1/leads/${data.lead.id}`, {
+          headers: { Authorization: `Bearer ${bearerToken}` },
+        });
+        if (leadDetailRes.ok) {
+          const detailData = await leadDetailRes.json();
+          setSelectedLead(detailData.lead);
+          const resolved = resolveCustomerEmailForLead(detailData.lead, contactsList);
+          setLeadCustomerEmail(resolved.email);
+          setLeadSelectedSupplierId(detailData.lead.selectedSupplierId || (suppliersList[0]?.id || ''));
+          setLeadRevisionNotes(detailData.lead.revisionNotes || '');
+        } else {
+          setSelectedLead(data.lead);
+          const resolved = resolveCustomerEmailForLead(data.lead, contactsList);
+          setLeadCustomerEmail(resolved.email);
+        }
+        setSelectedCallDetail(null);
+      } else {
+        alert(data.error || 'Failed to generate itinerary');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error communicating with itinerary service');
+    } finally {
+      setGeneratingItineraryCallId(null);
+    }
+  };
+
+  // Generate Itinerary with Customized Intake Parameters
+  const handleGenerateItineraryWithParams = async (callId: string, params: any) => {
+    setGeneratingItineraryCallId(callId);
+    try {
+      const res = await fetch('/api/v1/leads/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`,
+        },
+        body: JSON.stringify({ callId, ...params }),
+      });
+      const data = await res.json();
+      if (res.ok && data.lead) {
+        setShowItineraryIntakeModal(false);
+        setIntakeCallTarget(null);
         await fetchData();
         const leadDetailRes = await fetch(`/api/v1/leads/${data.lead.id}`, {
           headers: { Authorization: `Bearer ${bearerToken}` },
@@ -1430,9 +1668,16 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         transcribingProvider,
         setTranscribingProvider,
         handleTriggerTranscription,
+        handleTriggerCallTranscription,
         handleRefetchPlivoTranscriptionForCall,
         handleGenerateItinerary,
         generatingItineraryCallId,
+        showItineraryIntakeModal,
+        setShowItineraryIntakeModal,
+        intakeCallTarget,
+        setIntakeCallTarget,
+        openItineraryIntakeModal,
+        handleGenerateItineraryWithParams,
         handleHangupLiveCall,
         handleSendDtmf,
         selectedLead,
@@ -1521,6 +1766,15 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         setIncomingCall,
         handleAnswerIncomingCall,
         handleRejectIncomingCall,
+        organizationsList,
+        setOrganizationsList,
+        showOrgModal,
+        setShowOrgModal,
+        handleSwitchOrganization,
+        handleCreateOrganization,
+        integrationsSummary,
+        setIntegrationsSummary,
+        fetchIntegrations,
       }}
     >
       {children}

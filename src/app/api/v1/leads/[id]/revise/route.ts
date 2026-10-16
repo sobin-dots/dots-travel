@@ -42,7 +42,7 @@ export async function POST(
       );
     }
 
-    const revisedItinerary = await reviseItineraryWithDeepSeek(lead.itinerary, notes);
+    const revisedItinerary = await reviseItineraryWithDeepSeek(lead.itinerary, notes, auth!.organizationId);
 
     const updated = await db.lead.update({
       where: { id: lead.id },

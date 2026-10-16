@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { SendMessageRequestSchema } from '@/lib/schemas';
-import { getTelephonyProvider } from '@/lib/telephony';
+import { getTelephonyProvider, getTenantTelephonyProvider } from '@/lib/telephony';
 import { analyzeMessageEncoding } from '@/lib/telephony/messaging/encoder';
 
 export const runtime = 'nodejs';
@@ -46,10 +46,10 @@ export async function POST(req: NextRequest) {
 
     // Prepare status callback URL
     const publicBase = process.env.PUBLIC_BASE_URL || 'http://localhost:3000';
-    const callbackUrl = statusCallbackUrl || `${publicBase}/api/v1/webhooks/messages/status`;
+    const callbackUrl = statusCallbackUrl || `${publicBase}/api/v1/webhooks/messages/status?orgId=${auth!.organizationId}`;
 
-    // Invoke provider
-    const provider = getTelephonyProvider();
+    // Invoke tenant telephony provider
+    const provider = await getTenantTelephonyProvider(auth!.organizationId);
     const sendResult = await provider.sendMessage({
       src: phoneNumber.e164,
       dst: to,

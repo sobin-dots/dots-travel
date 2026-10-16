@@ -64,14 +64,16 @@ export async function POST(
         effectiveLanguage = normalizeToIso639_1(body.language);
       }
 
-      const requestedModel = body.model || process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1';
+      const isExplicitModel = Boolean(body.model && body.model !== 'configured' && body.model !== 'default');
+      const requestedModel = isExplicitModel ? body.model : undefined;
 
       console.log(
-        `[Transcription] Sending recording ${recording.id} (language: ${effectiveLanguage || 'auto-detect'}, model: ${requestedModel}) to OpenAI Whisper via Plivo URL`
+        `[Transcription] Sending recording ${recording.id} (language: ${effectiveLanguage || 'auto-detect'}, model: ${requestedModel || 'tenant-configured'}) to OpenAI STT via Plivo URL`
       );
 
       // Call OpenAI Whisper API via convenience wrapper
       const result = await transcribeAudioFromUrl(recording.recordingUrl, {
+        organizationId: auth!.organizationId,
         apiKey: body.apiKey,
         model: requestedModel,
         language: effectiveLanguage,
@@ -143,13 +145,15 @@ export async function POST(
           transcriptionId: transcription.id,
           wordCount: transcription.wordCount,
           language: transcription.language,
+          model: result.model,
         },
       });
 
       return NextResponse.json({
         api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
-        message: 'Transcription generated successfully with OpenAI Whisper',
+        message: `Transcription generated successfully with OpenAI (${result.model || 'configured model'})`,
         transcription,
+        model: result.model,
       });
     } catch (err: any) {
       console.error('OpenAI transcription error:', err);

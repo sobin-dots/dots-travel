@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Phone, PhoneIncoming, Radio } from 'lucide-react';
+import { Phone, PhoneIncoming, Radio, Sparkles } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
 export default function CallsPage() {
@@ -11,7 +11,14 @@ export default function CallsPage() {
     bearerToken,
     setSelectedCallDetail,
     handleHangupLiveCall,
+    integrationsSummary,
+    openItineraryIntakeModal,
   } = useConsole();
+
+  const openaiInteg = integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai');
+  const configuredTranscriptionModel = openaiInteg?.metadata?.model || 'gpt-4o-transcribe';
+  const primaryCarrier =
+    integrationsSummary?.primaryTelephonyProvider === 'msg91' ? 'MSG91 Live' : 'Plivo Live SIP Trunk';
 
   return (
     <div className="space-y-6 max-w-6xl">
@@ -44,9 +51,13 @@ export default function CallsPage() {
             <span className="text-zinc-300"> ring this browser console directly with WebRTC audio & live transcription.</span>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
           <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono text-[10px] font-semibold">
-            ● Plivo Live SIP Trunk Active
+            ● {primaryCarrier} Active
+          </span>
+          <span className="px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 font-mono text-[10px] font-semibold flex items-center gap-1">
+            <Sparkles className="w-2.5 h-2.5 text-indigo-400" />
+            <span>Primary ASR: OpenAI ({configuredTranscriptionModel})</span>
           </span>
         </div>
       </div>
@@ -100,7 +111,12 @@ export default function CallsPage() {
                     <td className="py-3.5 px-4 font-mono">{call.totalCost ? `$${call.totalCost}` : '$0.00'}</td>
                     <td className="py-3.5 px-4">
                       <div className="text-[11px] text-zinc-400">
-                        Rec: {call.recordingEnabled ? 'Yes' : 'No'} | Trans: {call.transcriptionEnabled ? 'Yes' : 'No'}
+                        Rec: {call.recordingEnabled ? 'Yes' : 'No'} | Trans:{' '}
+                        {call.transcriptionEnabled ? (
+                          <span className="text-emerald-400 font-medium">OpenAI ({configuredTranscriptionModel})</span>
+                        ) : (
+                          'No'
+                        )}
                       </div>
                     </td>
                     <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
@@ -113,15 +129,30 @@ export default function CallsPage() {
                           const data = await res.json();
                           setSelectedCallDetail(data.call);
                         }}
-                        className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-2.5 py-1 rounded border border-zinc-700"
+                        className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-2.5 py-1 rounded border border-zinc-700 cursor-pointer"
                       >
                         Detail
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const res = await fetch(`/api/v1/calls/${call.id}`, {
+                            headers: { Authorization: `Bearer ${bearerToken}` },
+                          });
+                          const data = await res.json();
+                          openItineraryIntakeModal(data.call || call);
+                        }}
+                        className="text-xs bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 px-2.5 py-1 rounded border border-indigo-500/30 inline-flex items-center gap-1 cursor-pointer transition"
+                        title="Open Itinerary Builder with prefilled transcription parameters"
+                      >
+                        <Sparkles className="w-3 h-3 text-indigo-400" />
+                        <span>Itinerary</span>
                       </button>
                       {call.status === 'in-progress' && (
                         <button
                           type="button"
                           onClick={() => handleHangupLiveCall(call.id)}
-                          className="text-xs bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 px-2.5 py-1 rounded border border-rose-500/30"
+                          className="text-xs bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 px-2.5 py-1 rounded border border-rose-500/30 cursor-pointer"
                         >
                           Hang Up
                         </button>

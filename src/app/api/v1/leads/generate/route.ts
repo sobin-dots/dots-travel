@@ -12,7 +12,21 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { callId } = body;
+    const {
+      callId,
+      destination: customDestination,
+      departureDate,
+      returnDate,
+      durationDays,
+      headcountAdults,
+      headcountChildren,
+      headcountInfants,
+      targetBudget,
+      hotelTier,
+      specialRequests,
+      customerEmail: customEmail,
+      customerName: customName,
+    } = body;
 
     if (!callId) {
       return NextResponse.json({ api_id: 'val_err', error: 'Missing required field: callId' }, { status: 400 });
@@ -56,24 +70,59 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Generate Itinerary with DeepSeek
-    const result = await generateItineraryFromTranscript(transcriptText, {
-      name: contact?.name || 'Valued Client',
-      phone: targetPhone,
-      company: contact?.company || undefined,
-    });
+    const customParams = {
+      destination: customDestination,
+      departureDate,
+      returnDate,
+      durationDays: durationDays ? Number(durationDays) : undefined,
+      headcountAdults: headcountAdults != null ? Number(headcountAdults) : undefined,
+      headcountChildren: headcountChildren != null ? Number(headcountChildren) : undefined,
+      headcountInfants: headcountInfants != null ? Number(headcountInfants) : undefined,
+      targetBudget: targetBudget ? Number(targetBudget) : undefined,
+      hotelTier,
+      specialRequests,
+      customerName: customName || contact?.name,
+      customerEmail: customEmail || contact?.email,
+      customerPhone: targetPhone,
+    };
 
-    // Create Lead record
+    // Generate Itinerary with DeepSeek adhering to confirmed parameters
+    const result = await generateItineraryFromTranscript(
+      transcriptText,
+      {
+        name: customName || contact?.name || 'Valued Client',
+        phone: targetPhone,
+        email: customEmail || contact?.email || undefined,
+        company: contact?.company || undefined,
+      },
+      auth!.organizationId,
+      customParams
+    );
+
+    // Create Lead record with rich structured trip parameters
+    const parsedDeparture = departureDate ? new Date(departureDate) : null;
+    const parsedReturn = returnDate ? new Date(returnDate) : null;
+
     const lead = await db.lead.create({
       data: {
         organizationId: auth!.organizationId,
         contactId: contact?.id || null,
         callId: call.id,
         title: result.title,
-        destination: result.destination,
+        destination: result.destination || customDestination || 'Curated Destination',
+        departureDate: parsedDeparture,
+        returnDate: parsedReturn,
+        durationDays: durationDays ? Number(durationDays) : 5,
+        headcountAdults: headcountAdults != null ? Number(headcountAdults) : 2,
+        headcountChildren: headcountChildren != null ? Number(headcountChildren) : 0,
+        headcountInfants: headcountInfants != null ? Number(headcountInfants) : 0,
+        targetBudget: targetBudget ? Number(targetBudget) : null,
+        hotelTier: hotelTier || null,
+        specialRequests: specialRequests || null,
         status: 'pending_approval',
+        stage: 'quote_prep',
         itinerary: result.itinerary,
-        customerEmail: contact?.email || null,
+        customerEmail: customEmail || contact?.email || null,
       },
       include: {
         contact: true,

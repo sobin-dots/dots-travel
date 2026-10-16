@@ -140,21 +140,7 @@ async function finalizeSession(sessionKey: string) {
     const wavBuffer = convertMulawChunksToWav(session.chunks, { sampleRate: 16000 });
     console.log(`[Plivo Stream] Converted to 16kHz PCM WAV: ${wavBuffer.length} bytes`);
 
-    // 2. Transcribe via OpenAI Whisper
-    const whisperResult = await transcribeAudioWithOpenAi(
-      wavBuffer,
-      `stream_${session.callId || session.streamId}.wav`,
-      {
-        model: process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1',
-        prompt: 'Customer phone consultation regarding vacation travel itinerary, flight booking, and hotel accommodations.',
-      }
-    );
-
-    console.log(
-      `[Plivo Stream] Whisper transcription completed: ${whisperResult.text.length} chars | Lang: ${whisperResult.language}`
-    );
-
-    // 3. Find matching Call record in DB
+    // 2. Find matching Call record in DB to resolve tenant organization
     let call = null;
     if (session.callId) {
       call = await db.call.findFirst({
@@ -169,13 +155,27 @@ async function finalizeSession(sessionKey: string) {
       });
     }
 
-    // Fallback: If not found by UUID, find the latest active/completed call
     if (!call) {
       call = await db.call.findFirst({
         orderBy: { createdAt: 'desc' },
         include: { recordings: true },
       });
     }
+
+    // 3. Transcribe via OpenAI Whisper using tenant's credentials
+    const whisperResult = await transcribeAudioWithOpenAi(
+      wavBuffer,
+      `stream_${session.callId || session.streamId}.wav`,
+      {
+        organizationId: call?.organizationId,
+        model: process.env.OPENAI_TRANSCRIPTION_MODEL || 'whisper-1',
+        prompt: 'Customer phone consultation regarding vacation travel itinerary, flight booking, and hotel accommodations.',
+      }
+    );
+
+    console.log(
+      `[Plivo Stream] Whisper transcription completed: ${whisperResult.text.length} chars | Lang: ${whisperResult.language}`
+    );
 
     if (call) {
       const recordingId = call.recordings?.[0]?.id || null;

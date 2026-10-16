@@ -1,4 +1,5 @@
 import OpenAI, { toFile } from 'openai';
+import { getTenantIntegration } from './integrations/credentials-manager';
 
 /**
  * OpenAI Speech-to-Text Transcription Service
@@ -7,6 +8,7 @@ import OpenAI, { toFile } from 'openai';
  */
 
 export interface OpenAiTranscriptionOptions {
+  organizationId?: string;
   apiKey?: string;
   model?: string;
   baseUrl?: string;
@@ -15,8 +17,55 @@ export interface OpenAiTranscriptionOptions {
   temperature?: number;
 }
 
+export async function resolveTenantOpenAiConfig(options: OpenAiTranscriptionOptions = {}): Promise<{
+  apiKey: string;
+  model: string;
+  baseUrl?: string;
+}> {
+  const isExplicitModel = Boolean(
+    options.model && options.model !== 'configured' && options.model !== 'default'
+  );
+
+  if (options.apiKey) {
+    return {
+      apiKey: options.apiKey,
+      model: isExplicitModel ? options.model! : (process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe'),
+      baseUrl: options.baseUrl || process.env.OPENAI_BASE_URL,
+    };
+  }
+
+  if (options.organizationId) {
+    const integration = await getTenantIntegration(options.organizationId, 'openai');
+    if (integration && integration.credentials?.apiKey) {
+      // Prioritize explicit model if passed by caller, otherwise tenant's primary model configured in Settings, fallback to env/gpt-4o-transcribe
+      const tenantConfiguredModel = integration.metadata?.model;
+      const effectiveModel = isExplicitModel
+        ? options.model!
+        : (tenantConfiguredModel || process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe');
+
+      return {
+        apiKey: integration.credentials.apiKey,
+        model: effectiveModel,
+        baseUrl: options.baseUrl || integration.metadata?.baseUrl || process.env.OPENAI_BASE_URL,
+      };
+    }
+  }
+
+  const fallbackKey = process.env.OPENAI_API_KEY;
+  if (fallbackKey) {
+    return {
+      apiKey: fallbackKey,
+      model: isExplicitModel ? options.model! : (process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe'),
+      baseUrl: options.baseUrl || process.env.OPENAI_BASE_URL,
+    };
+  }
+
+  throw new Error('OpenAI transcription is not configured for this organization. Please add your OpenAI API Key in Settings > Integrations.');
+}
+
 export interface OpenAiTranscriptionResult {
   text: string;
+  model?: string;
   language?: string;
   duration?: number;
   segments?: Array<{
@@ -97,7 +146,7 @@ export function normalizeToIso639_1(input?: string): string | undefined {
 export async function transcribeRecording(
   recordingUrl: string,
   options: OpenAiTranscriptionOptions = {}
-): Promise<string> {
+): Promise<{ text: string; model: string }> {
   const url = new URL(recordingUrl);
 
   const userAllowedHosts = (process.env.RECORDING_ALLOWED_HOSTS ?? '')
@@ -170,15 +219,12 @@ export async function transcribeRecording(
     type: 'audio/mpeg',
   });
 
-  const openai = new OpenAI({
-    apiKey: options.apiKey || process.env.OPENAI_API_KEY,
-    baseURL: options.baseUrl || process.env.OPENAI_BASE_URL,
-  });
+  const { apiKey, model, baseUrl } = await resolveTenantOpenAiConfig(options);
 
-  const model =
-    options.model ||
-    process.env.OPENAI_TRANSCRIPTION_MODEL ||
-    'gpt-4o-transcribe';
+  const openai = new OpenAI({
+    apiKey,
+    baseURL: baseUrl || undefined,
+  });
 
   const params: any = {
     file,
@@ -193,9 +239,11 @@ export async function transcribeRecording(
     params.prompt = options.prompt;
   }
 
+  let text = '';
+  let finalModel = model;
   try {
     const result = await openai.audio.transcriptions.create(params);
-    return result.text;
+    text = result.text;
   } catch (err: any) {
     // If gpt-4o-transcribe is not supported on a specific API key tier, fallback to whisper-1
     if (model !== 'whisper-1' && err.message?.toLowerCase().includes('model')) {
@@ -204,10 +252,14 @@ export async function transcribeRecording(
         ...params,
         model: 'whisper-1',
       });
-      return fallbackResult.text;
+      text = fallbackResult.text;
+      finalModel = 'whisper-1';
+    } else {
+      throw err;
     }
-    throw err;
   }
+
+  return { text, model: finalModel };
 }
 
 /**
@@ -217,13 +269,14 @@ export async function transcribeAudioFromUrl(
   mediaUrl: string,
   options: OpenAiTranscriptionOptions = {}
 ): Promise<OpenAiTranscriptionResult> {
-  const text = await transcribeRecording(mediaUrl, options);
+  const { text, model } = await transcribeRecording(mediaUrl, options);
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   return {
     text,
+    model,
     rawPayload: {
       text,
-      model: options.model || process.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-4o-transcribe',
+      model,
       wordCount,
     },
   };
@@ -246,15 +299,12 @@ export async function transcribeAudioWithOpenAi(
     type: filename.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg',
   });
 
-  const openai = new OpenAI({
-    apiKey: options.apiKey || process.env.OPENAI_API_KEY,
-    baseURL: options.baseUrl || process.env.OPENAI_BASE_URL,
-  });
+  const { apiKey, model, baseUrl } = await resolveTenantOpenAiConfig(options);
 
-  const model =
-    options.model ||
-    process.env.OPENAI_TRANSCRIPTION_MODEL ||
-    'gpt-4o-transcribe';
+  const openai = new OpenAI({
+    apiKey,
+    baseURL: baseUrl || undefined,
+  });
 
   const params: any = {
     file,
@@ -270,6 +320,7 @@ export async function transcribeAudioWithOpenAi(
   }
 
   let text = '';
+  let finalModel = model;
   try {
     const result = await openai.audio.transcriptions.create(params);
     text = result.text;
@@ -281,6 +332,7 @@ export async function transcribeAudioWithOpenAi(
         model: 'whisper-1',
       });
       text = fallback.text;
+      finalModel = 'whisper-1';
     } else {
       throw err;
     }
@@ -289,6 +341,7 @@ export async function transcribeAudioWithOpenAi(
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   return {
     text: text.trim(),
-    rawPayload: { text, model, wordCount },
+    model: finalModel,
+    rawPayload: { text, model: finalModel, wordCount },
   };
 }

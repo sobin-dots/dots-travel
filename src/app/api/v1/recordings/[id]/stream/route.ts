@@ -57,12 +57,34 @@ export async function GET(
 
     const contentType = remoteRes.headers.get('content-type') || 'audio/mpeg';
     const body = await remoteRes.arrayBuffer();
+    const totalSize = body.byteLength;
+    const rangeHeader = req.headers.get('range');
+
+    if (rangeHeader && rangeHeader.startsWith('bytes=')) {
+      const parts = rangeHeader.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+
+      if (!isNaN(start) && start < totalSize) {
+        const chunk = body.slice(start, Math.min(end + 1, totalSize));
+        return new NextResponse(chunk, {
+          status: 206,
+          headers: {
+            'content-type': contentType,
+            'content-length': chunk.byteLength.toString(),
+            'content-range': `bytes ${start}-${Math.min(end, totalSize - 1)}/${totalSize}`,
+            'accept-ranges': 'bytes',
+            'cache-control': 'public, max-age=3600',
+          },
+        });
+      }
+    }
 
     return new NextResponse(body, {
       status: 200,
       headers: {
         'content-type': contentType,
-        'content-length': body.byteLength.toString(),
+        'content-length': totalSize.toString(),
         'accept-ranges': 'bytes',
         'cache-control': 'public, max-age=3600',
       },

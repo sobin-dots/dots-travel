@@ -25,8 +25,40 @@ async function handleAnswer(req: NextRequest) {
     `${req.headers.get('x-forwarded-proto') || 'https'}://${req.headers.get('x-forwarded-host') || req.headers.get('host')}`
   ).trim().replace(/\/+$/, '');
 
-  const recordActionUrl = `${publicBase}/api/v1/webhooks/voice/record`;
-  const transcriptionUrl = `${publicBase}/api/v1/webhooks/transcription`;
+  // Resolve tenant organization via hybrid approach (query param -> DID lookup -> fallback)
+  const queryOrgId = urlObj.searchParams.get('orgId') || params.orgId;
+  const destinationNumber = params.To || params.to;
+  let resolvedOrg: any = null;
+
+  if (queryOrgId) {
+    resolvedOrg = await db.organization.findFirst({
+      where: { OR: [{ id: queryOrgId }, { slug: queryOrgId }] },
+    });
+  }
+
+  if (!resolvedOrg && destinationNumber) {
+    const cleanNumber = String(destinationNumber).replace(/\D/g, '');
+    const phoneRecord = await db.phoneNumber.findFirst({
+      where: {
+        OR: [
+          { e164: destinationNumber },
+          ...(cleanNumber ? [{ e164: `+${cleanNumber}` }, { e164: cleanNumber }] : []),
+        ],
+      },
+      include: { organization: true },
+    });
+    if (phoneRecord?.organization) {
+      resolvedOrg = phoneRecord.organization;
+    }
+  }
+
+  if (!resolvedOrg) {
+    resolvedOrg = await db.organization.findFirst();
+  }
+
+  const effectiveOrgId = resolvedOrg?.id;
+  const recordActionUrl = `${publicBase}/api/v1/webhooks/voice/record${effectiveOrgId ? `?orgId=${effectiveOrgId}` : ''}`;
+  const transcriptionUrl = `${publicBase}/api/v1/webhooks/transcription${effectiveOrgId ? `?orgId=${effectiveOrgId}` : ''}`;
 
   const builder = new PlivoXmlBuilder();
 
@@ -56,7 +88,6 @@ async function handleAnswer(req: NextRequest) {
     params['X-PH-callerId'] ||
     params['x-ph-callerid']
   );
-  const destinationNumber = params.To || params.to;
 
   if (isSipEndpointCall && destinationNumber) {
     // In-browser WebRTC call originating from Plivo Web Phone!
@@ -183,14 +214,11 @@ async function handleAnswer(req: NextRequest) {
         },
       });
     } else if (isSipEndpointCall) {
-      const org =
-        (await db.organization.findFirst({ where: { slug: '3dots' } })) ||
-        (await db.organization.findFirst());
-      if (org) {
+      if (resolvedOrg) {
         const callerId = process.env.PLIVO_CALLER_ID || '+918065531234';
         const newCall = await db.call.create({
           data: {
-            organizationId: org.id,
+            organizationId: resolvedOrg.id,
             plivoCallUuid: callUuid,
             from: callerId,
             to: destinationNumber || 'Unknown',
@@ -205,7 +233,7 @@ async function handleAnswer(req: NextRequest) {
 
         await db.callEvent.create({
           data: {
-            organizationId: org.id,
+            organizationId: resolvedOrg.id,
             callId: newCall.id,
             eventType: 'answer',
             status: 'in-progress',
@@ -217,15 +245,12 @@ async function handleAnswer(req: NextRequest) {
       }
     } else {
       // Inbound call from customer to virtual number
-      const org =
-        (await db.organization.findFirst({ where: { slug: '3dots' } })) ||
-        (await db.organization.findFirst());
-      if (org) {
+      if (resolvedOrg) {
         const callerPhone = params.From || params.from || 'Unknown Caller';
         const calledNumber = destinationNumber || params.To || params.to || '+918065531234';
         const newCall = await db.call.create({
           data: {
-            organizationId: org.id,
+            organizationId: resolvedOrg.id,
             plivoCallUuid: callUuid,
             from: callerPhone,
             to: calledNumber,
@@ -240,7 +265,7 @@ async function handleAnswer(req: NextRequest) {
 
         await db.callEvent.create({
           data: {
-            organizationId: org.id,
+            organizationId: resolvedOrg.id,
             callId: newCall.id,
             eventType: 'answer',
             status: 'in-progress',

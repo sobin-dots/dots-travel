@@ -25,6 +25,20 @@ export async function GET(req: NextRequest) {
           lastVerifyError: true,
         },
       },
+      integrations: {
+        select: {
+          id: true,
+          provider: true,
+          category: true,
+          label: true,
+          maskedDetails: true,
+          status: true,
+          isDefault: true,
+          metadata: true,
+          lastVerifiedAt: true,
+          lastVerifyError: true,
+        },
+      },
     },
   });
 

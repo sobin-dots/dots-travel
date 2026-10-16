@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
-import { getTelephonyProvider } from '@/lib/telephony';
+import { getTenantTelephonyProvider } from '@/lib/telephony';
 
 export const runtime = 'nodejs';
 
@@ -37,7 +37,7 @@ export async function POST(
   }
 
   try {
-    const provider = getTelephonyProvider();
+    const provider = await getTenantTelephonyProvider(auth!.organizationId);
     await provider.sendDigits(call.plivoCallUuid, digits, leg);
 
     return NextResponse.json({

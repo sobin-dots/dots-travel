@@ -10,7 +10,11 @@ export default function RecordingsPage() {
     handleTriggerTranscription,
     transcribingRecId,
     transcribingProvider,
+    integrationsSummary,
   } = useConsole();
+
+  const openaiInteg = integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai');
+  const configuredTranscriptionModel = openaiInteg?.metadata?.model || 'gpt-4o-transcribe';
 
   return (
     <div className="space-y-6 max-w-6xl">
@@ -91,18 +95,19 @@ export default function RecordingsPage() {
                     </button>
 
                     {/* Transcribe with OpenAI Whisper */}
+                    {/* Transcribe with Primary OpenAI Model */}
                     <button
                       type="button"
-                      onClick={() => handleTriggerTranscription(rec.id, 'openai')}
+                      onClick={() => handleTriggerTranscription(rec.id, 'openai', configuredTranscriptionModel)}
                       disabled={transcribingRecId === rec.id}
-                      className="text-[11px] bg-gradient-to-r from-emerald-600/20 to-teal-600/20 hover:from-emerald-600/30 hover:to-teal-600/30 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 flex items-center gap-1.5 transition disabled:opacity-50"
-                      title="Generate high-accuracy transcription using OpenAI Whisper"
+                      className="text-[11px] bg-gradient-to-r from-emerald-600/20 to-teal-600/20 hover:from-emerald-600/30 hover:to-teal-600/30 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 flex items-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
+                      title={`Generate high-accuracy transcription using OpenAI primary model (${configuredTranscriptionModel})`}
                     >
                       <Sparkles className="w-3 h-3 text-emerald-400" />
                       <span>
                         {transcribingRecId === rec.id && transcribingProvider === 'openai'
                           ? 'Transcribing...'
-                          : (hasTranscription ? 'Re-transcribe' : 'Transcribe (OpenAI)')}
+                          : (hasTranscription ? `Re-transcribe (${configuredTranscriptionModel})` : `Transcribe (${configuredTranscriptionModel})`)}
                       </span>
                     </button>
 

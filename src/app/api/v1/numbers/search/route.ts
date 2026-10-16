@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { authenticateRequest } from '@/lib/api-auth';
-import { getTelephonyProvider } from '@/lib/telephony';
+import { getTenantTelephonyProvider } from '@/lib/telephony';
 
 export const runtime = 'nodejs';
 
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
   const offset = Number(url.searchParams.get('offset') || '0');
 
   try {
-    const provider = getTelephonyProvider();
+    const provider = await getTenantTelephonyProvider(auth!.organizationId);
     const numbers = await provider.searchNumbers({
       countryIso,
       type,

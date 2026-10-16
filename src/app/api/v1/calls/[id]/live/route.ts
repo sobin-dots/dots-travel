@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
-import { getTelephonyProvider } from '@/lib/telephony';
+import { getTenantTelephonyProvider } from '@/lib/telephony';
 
 export const runtime = 'nodejs';
 
@@ -26,7 +26,7 @@ export async function DELETE(
   }
 
   try {
-    const provider = getTelephonyProvider();
+    const provider = await getTenantTelephonyProvider(auth!.organizationId);
     await provider.hangupCall(call.plivoCallUuid);
 
     const now = new Date();

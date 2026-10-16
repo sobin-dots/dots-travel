@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { BuyNumberRequestSchema } from '@/lib/schemas';
-import { getTelephonyProvider } from '@/lib/telephony';
+import { getTelephonyProvider, getTenantTelephonyProvider } from '@/lib/telephony';
 
 export const runtime = 'nodejs';
 
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Provision via provider
-    const provider = getTelephonyProvider();
+    const provider = await getTenantTelephonyProvider(auth!.organizationId);
     const buyResult = await provider.buyNumber({
       number: e164,
       appId: applicationId,
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
     const newNumber = await db.phoneNumber.create({
       data: {
         organizationId: auth!.organizationId,
-        plivoAccountId: plivoAccount.id,
+        plivoAccountId: plivoAccount?.id || null,
         applicationId,
         e164,
         countryIso,

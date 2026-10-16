@@ -111,6 +111,10 @@ export async function GET(
     api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
     call: {
       ...call,
+      recordings: call.recordings.map((rec) => ({
+        ...rec,
+        streamUrl: `/api/v1/recordings/${rec.id}/stream`,
+      })),
       isRecordingProcessing,
       isTranscriptionProcessing,
       hangupExplanation: getHangupExplanation(call.hangupCauseCode),
