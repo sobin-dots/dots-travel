@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
+import { getTenantIntegration } from '@/lib/integrations/credentials-manager';
+import { transcribeAudioFromUrl } from '@/lib/openai-transcribe';
 
 import * as plivo from 'plivo';
 
@@ -54,10 +56,20 @@ export async function GET(
 
   // Carrier Realtime Sync: If call has no recordings yet, query Plivo API for any pending recordings
   if (call.recordings.length === 0 && call.plivoCallUuid) {
-    const isLive = process.env.TELEPHONY_MODE === 'live';
-    if (isLive && process.env.PLIVO_AUTH_ID && process.env.PLIVO_AUTH_TOKEN) {
+    let plivoAuthId = process.env.PLIVO_AUTH_ID;
+    let plivoAuthToken = process.env.PLIVO_AUTH_TOKEN;
+
+    try {
+      const tenantPlivo = await getTenantIntegration(call.organizationId, 'plivo');
+      if (tenantPlivo?.credentials?.authId && tenantPlivo?.credentials?.authToken) {
+        plivoAuthId = tenantPlivo.credentials.authId;
+        plivoAuthToken = tenantPlivo.credentials.authToken;
+      }
+    } catch {}
+
+    if (plivoAuthId && plivoAuthToken) {
       try {
-        const client = new (plivo as any).Client(process.env.PLIVO_AUTH_ID, process.env.PLIVO_AUTH_TOKEN);
+        const client = new (plivo as any).Client(plivoAuthId, plivoAuthToken);
         const plivoRecs = await client.recordings.list({ call_uuid: call.plivoCallUuid });
         if (plivoRecs && Array.isArray(plivoRecs) && plivoRecs.length > 0) {
           for (const rec of plivoRecs) {
@@ -95,6 +107,72 @@ export async function GET(
     }
   }
 
+  // Direct OpenAI Auto-Transcription: If call has a recording and no OpenAI transcription yet, transcribe directly using OpenAI
+  if (
+    call &&
+    call.recordings.length > 0 &&
+    !call.transcriptions.some((t) => t.source === 'openai_whisper' && t.text && t.text.trim().length > 0)
+  ) {
+    const latestRec = call.recordings[0];
+    if (latestRec?.recordingUrl && latestRec.recordingUrl.startsWith('http')) {
+      try {
+        const result = await transcribeAudioFromUrl(latestRec.recordingUrl, {
+          organizationId: call.organizationId,
+        });
+        if (result.text) {
+          const existingTr = await db.transcription.findFirst({
+            where: {
+              recordingId: latestRec.id,
+              organizationId: call.organizationId,
+            },
+          });
+          if (existingTr) {
+            await db.transcription.update({
+              where: { id: existingTr.id },
+              data: {
+                text: result.text,
+                status: 'completed',
+                language: result.language || 'en',
+                wordCount: result.text.split(/\s+/).filter(Boolean).length,
+                source: 'openai_whisper',
+                rawPayload: result.rawPayload,
+                updatedAt: new Date(),
+              },
+            });
+          } else {
+            await db.transcription.create({
+              data: {
+                organizationId: call.organizationId,
+                recordingId: latestRec.id,
+                callId: call.id,
+                plivoTranscriptionId: `whisper_${latestRec.plivoRecordingId || crypto.randomBytes(6).toString('hex')}`,
+                recordingSid: latestRec.plivoRecordingId,
+                type: 'transcription',
+                status: 'completed',
+                language: result.language || 'en',
+                text: result.text,
+                wordCount: result.text.split(/\s+/).filter(Boolean).length,
+                source: 'openai_whisper',
+                rawPayload: result.rawPayload,
+              },
+            });
+          }
+          call = await db.call.findFirst({
+            where: { id: call.id },
+            include: {
+              phoneNumber: true,
+              events: { orderBy: { occurredAt: 'asc' } },
+              recordings: { include: { transcriptions: true } },
+              transcriptions: true,
+            },
+          });
+        }
+      } catch (err: any) {
+        console.warn('[Auto OpenAI Transcription] Sync notice:', err.message);
+      }
+    }
+  }
+
   if (!call) {
     return NextResponse.json({ api_id: 'not_found', error: 'Call not found' }, { status: 404 });
   }
@@ -111,6 +189,10 @@ export async function GET(
     api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
     call: {
       ...call,
+      recordings: call.recordings.map((rec) => ({
+        ...rec,
+        streamUrl: `/api/v1/recordings/${rec.id}/stream`,
+      })),
       isRecordingProcessing,
       isTranscriptionProcessing,
       hangupExplanation: getHangupExplanation(call.hangupCauseCode),

@@ -95,6 +95,46 @@ export async function GET() {
             error: { type: 'string' },
           },
         },
+        TenantIntegrationItem: {
+          type: 'object',
+          properties: {
+            provider: { type: 'string', example: 'openai' },
+            category: { type: 'string', enum: ['transcription', 'intelligence', 'telephony'] },
+            status: { type: 'string', enum: ['unverified', 'verified', 'failed'] },
+            maskedDetails: { type: 'object' },
+            lastVerifiedAt: { type: 'string', format: 'date-time', nullable: true },
+            lastVerifyError: { type: 'string', nullable: true },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        SaveIntegrationRequest: {
+          type: 'object',
+          required: ['provider', 'credentials'],
+          properties: {
+            provider: { type: 'string', enum: ['openai', 'deepseek', 'plivo', 'msg91'] },
+            credentials: {
+              type: 'object',
+              description: 'Provider-specific API keys and secrets. Stored encrypted with AES-256-GCM.',
+            },
+            skipTest: { type: 'boolean', default: false },
+          },
+        },
+        CreateOrganizationRequest: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name: { type: 'string', example: 'Starlight Travel Group' },
+            slug: { type: 'string', example: 'starlight-travel' },
+            primaryTelephonyProvider: { type: 'string', enum: ['plivo', 'msg91'], default: 'plivo' },
+          },
+        },
+        SwitchOrganizationRequest: {
+          type: 'object',
+          required: ['organizationId'],
+          properties: {
+            organizationId: { type: 'string', format: 'uuid' },
+          },
+        },
       },
     },
     security: [
@@ -129,6 +169,76 @@ export async function GET() {
         get: {
           summary: 'Get Current Authenticated User & Tenant Profile',
           responses: { 200: { description: 'User Profile' } },
+        },
+      },
+      '/organizations': {
+        get: {
+          summary: 'List Tenant Organizations Accessible to Current User',
+          responses: { 200: { description: 'List of tenant organizations with roles and primary providers' } },
+        },
+        post: {
+          summary: 'Create New Tenant Organization',
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateOrganizationRequest' } } },
+          },
+          responses: { 201: { description: 'Organization created successfully' } },
+        },
+      },
+      '/organizations/switch': {
+        post: {
+          summary: 'Switch Active Tenant Organization Context',
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SwitchOrganizationRequest' } } },
+          },
+          responses: {
+            200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/TokenResponse' } } } },
+          },
+        },
+      },
+      '/settings/integrations': {
+        get: {
+          summary: 'List Tenant BYOK 3rd-Party Integrations (Masked)',
+          responses: { 200: { description: 'List of configured BYOK integrations and statuses' } },
+        },
+        post: {
+          summary: 'Configure / Update BYOK 3rd-Party Integration Credentials',
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SaveIntegrationRequest' } } },
+          },
+          responses: { 200: { description: 'Integration verified and saved with AES-256-GCM' } },
+        },
+      },
+      '/settings/integrations/test': {
+        post: {
+          summary: 'Test BYOK Integration Credentials Live Without Saving',
+          requestBody: {
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/SaveIntegrationRequest' } } },
+          },
+          responses: { 200: { description: 'Live test outcome' } },
+        },
+      },
+      '/settings/integrations/{provider}': {
+        delete: {
+          summary: 'Remove BYOK Integration Credentials',
+          parameters: [{ name: 'provider', in: 'path', required: true, schema: { type: 'string' } }],
+          responses: { 200: { description: 'Integration removed' } },
+        },
+      },
+      '/settings/primary-provider': {
+        patch: {
+          summary: 'Update Organization Primary Telephony Provider',
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['provider'],
+                  properties: { provider: { type: 'string', enum: ['plivo', 'msg91'] } },
+                },
+              },
+            },
+          },
+          responses: { 200: { description: 'Primary telephony provider updated' } },
         },
       },
       '/numbers': {

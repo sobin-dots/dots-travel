@@ -202,4 +202,30 @@ describe('End-to-End Call Lifecycle Driven by Signed Webhooks', () => {
     expect(finalCall?.transcriptions.length).toBe(1);
     expect(finalCall?.transcriptions[0].text).toContain('verified test transcription');
   });
+
+  it('serves fallback voice answer route with valid Plivo XML', async () => {
+    const { POST } = await import('../src/app/api/v1/webhooks/voice/fallback/route');
+    const { NextRequest } = await import('next/server');
+    const nonce = `nonce_fb_${Date.now()}`;
+    const payload = {
+      CallUUID: `fallback_${Date.now()}`,
+      To: phoneNumber.e164,
+      From: '+14155550199',
+    };
+    const url = `http://localhost:3000/api/v1/webhooks/voice/fallback?orgId=${org.id}`;
+    const sig = computeV3Signature('POST', url, nonce, token, payload);
+    const req = new NextRequest(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-plivo-signature-v3': sig,
+        'x-plivo-signature-v3-nonce': nonce,
+      },
+      body: JSON.stringify(payload),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('<Response>');
+  });
 });

@@ -7,6 +7,7 @@ import {
   Building2,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
+import { ItineraryIntakeModal } from './ItineraryIntakeModal';
 
 export function GlobalModals() {
   const {
@@ -67,7 +68,14 @@ export function GlobalModals() {
     setSupplierNotes,
     supplierLoading,
     handleCreateSupplier,
+
+    // Organization
+    showOrgModal,
+    setShowOrgModal,
+    handleCreateOrganization,
   } = useConsole();
+
+  const [newOrgName, setNewOrgName] = React.useState('');
 
   return (
     <>
@@ -413,6 +421,62 @@ export function GlobalModals() {
           </div>
         </div>
       )}
+
+      {/* MODAL: CREATE NEW ORGANIZATION */}
+      {showOrgModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-5 sm:p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <Building2 className="w-5 h-5 text-indigo-400" />
+              Create New Tenant Organization
+            </h3>
+            <p className="text-xs text-zinc-400 leading-relaxed">
+              Establish a dedicated, isolated workspace for a new client or department. You will be assigned as the Owner and can configure independent 3rd party API keys in Settings.
+            </p>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (newOrgName.trim()) {
+                  await handleCreateOrganization(newOrgName.trim());
+                  setNewOrgName('');
+                }
+              }}
+              className="space-y-4 text-xs"
+            >
+              <div>
+                <label className="text-zinc-300 font-medium block mb-1.5">Organization / Client Name *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Apex Luxury Escapes"
+                  value={newOrgName}
+                  onChange={(e) => setNewOrgName(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200 focus:outline-none focus:border-indigo-500 text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-zinc-800/80">
+                <button
+                  type="button"
+                  onClick={() => setShowOrgModal(false)}
+                  className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-indigo-600/30 transition cursor-pointer"
+                >
+                  Create & Launch
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* Itinerary Intake & Customization Modal */}
+      <ItineraryIntakeModal />
     </>
   );
 }

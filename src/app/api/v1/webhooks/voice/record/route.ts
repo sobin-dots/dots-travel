@@ -59,9 +59,9 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Automatically trigger OpenAI Whisper transcription for full-call fidelity
-      if (process.env.OPENAI_API_KEY && recordingUrl) {
-        transcribeAudioFromUrl(recordingUrl)
+      // Automatically trigger OpenAI Whisper transcription for full-call fidelity using tenant credentials
+      if (recordingUrl) {
+        transcribeAudioFromUrl(recordingUrl, { organizationId })
           .then(async (whisperResult) => {
             if (whisperResult.text) {
               const whisperId = `whisper_${recordingId}`;

@@ -20,9 +20,10 @@ import {
 } from 'lucide-react';
 
 interface VisualItineraryProps {
-  itineraryText: string;
-  destination?: string;
-  leadTitle?: string;
+  itineraryText?: string | null;
+  destination?: string | null;
+  leadTitle?: string | null;
+  durationDays?: number | null;
 }
 
 interface ParsedDay {
@@ -34,8 +35,25 @@ interface ParsedDay {
   generalActivities: string[];
 }
 
-export function parseItinerary(text: string) {
-  const lines = text.split('\n');
+export function parseItinerary(text?: string | null) {
+  if (!text || typeof text !== 'string') {
+    return {
+      title: 'Curated Bespoke Itinerary',
+      destination: 'Global Destination',
+      duration: 'Custom Duration',
+      overview: 'No itinerary details available yet.',
+      accommodations: [],
+      days: [],
+      experiences: [],
+      quotationScope: '',
+    };
+  }
+
+  // Normalize inline horizontal rules before headings (e.g. "--- ## 2. Guest Preferences")
+  const normalizedText = text
+    .replace(/\s*---\s*(#{1,3}\s+)/g, '\n$1')
+    .replace(/\s+(#{2,3}\s+\d+\.\s+)/g, '\n$1');
+  const lines = normalizedText.split('\n');
   let title = '';
   let destination = '';
   let duration = '';
@@ -53,7 +71,7 @@ export function parseItinerary(text: string) {
     const rawLine = lines[i];
     const line = rawLine.trim();
 
-    if (!line) continue;
+    if (!line || line === '---') continue;
 
     // Check top header
     if (line.startsWith('# ') && !title) {
@@ -96,19 +114,45 @@ export function parseItinerary(text: string) {
       }
 
       if (lowerHeading.includes('accommodation') || lowerHeading.includes('hotel') || lowerHeading.includes('resort')) {
+        if (currentDay) {
+          days.push(currentDay);
+          currentDay = null;
+        }
         currentSection = 'accommodations';
         continue;
       }
 
-      if (lowerHeading.includes('experience') || lowerHeading.includes('highlight') || lowerHeading.includes('activities')) {
+      if (
+        lowerHeading.includes('experience') ||
+        lowerHeading.includes('highlight') ||
+        lowerHeading.includes('activities') ||
+        lowerHeading.includes('package includes') ||
+        lowerHeading.includes('inclusions')
+      ) {
+        if (currentDay) {
+          days.push(currentDay);
+          currentDay = null;
+        }
         currentSection = 'experiences';
         continue;
       }
 
       if (lowerHeading.includes('quotation') || lowerHeading.includes('scope') || lowerHeading.includes('budget') || lowerHeading.includes('pricing')) {
+        if (currentDay) {
+          days.push(currentDay);
+          currentDay = null;
+        }
         currentSection = 'quotation';
         continue;
       }
+
+      // Any other section header (e.g. Guest Preferences, Package Excludes, Important Travel Info)
+      if (currentDay) {
+        days.push(currentDay);
+        currentDay = null;
+      }
+      currentSection = 'other';
+      continue;
     }
 
     // Check inline Day marker if not in heading (e.g. "**Day 1:** Arrival in Paris")
@@ -166,6 +210,11 @@ export function parseItinerary(text: string) {
 
     // Content for other sections
     if (currentSection === 'overview') {
+      // Skip markdown table borders/headers and redundant bullet metadata in the overview paragraph
+      if (/^\|?[\s-:|]+\|[\s-:|]*$/.test(line)) continue;
+      if (/^\|\s*item\s*\|\s*details\s*\|/i.test(line)) continue;
+      if (line.startsWith('|') && line.endsWith('|')) continue;
+      if (/^[-*•]\s*\*?\*?(destination|duration|hotel plan|meal plan|transfers|flights|pace)\s*:/i.test(line)) continue;
       overview += (overview ? ' ' : '') + line.replace(/\*\*/g, '');
     } else if (currentSection === 'accommodations') {
       const clean = line.replace(/^[-*•]\s+/, '').replace(/\*\*/g, '').trim();
@@ -192,9 +241,19 @@ export function parseItinerary(text: string) {
   };
 }
 
-export function VisualItinerary({ itineraryText, destination: propDest, leadTitle }: VisualItineraryProps) {
+export function VisualItinerary({ itineraryText, destination: propDest, leadTitle, durationDays }: VisualItineraryProps) {
   const [viewMode, setViewMode] = useState<'visual' | 'raw'>('visual');
-  const parsed = parseItinerary(itineraryText);
+  const safeText = typeof itineraryText === 'string' ? itineraryText : '';
+  const parsed = parseItinerary(safeText);
+  const effectiveDaysCount =
+    durationDays && Number(durationDays) > 0
+      ? Number(durationDays)
+      : parsed.days.length > 0
+      ? parsed.days.length
+      : null;
+  const displayDuration = effectiveDaysCount
+    ? `${effectiveDaysCount} Days / ${Math.max(1, effectiveDaysCount - 1)} Nights`
+    : parsed.duration;
 
   return (
     <div className="space-y-4">
@@ -240,7 +299,7 @@ export function VisualItinerary({ itineraryText, destination: propDest, leadTitl
 
       {viewMode === 'raw' ? (
         <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800 font-mono text-xs text-zinc-300 whitespace-pre-line leading-relaxed max-h-[500px] overflow-y-auto select-text">
-          {itineraryText}
+          {safeText || '(No itinerary details generated yet)'}
         </div>
       ) : (
         <div className="space-y-4 max-h-[520px] overflow-y-auto pr-1">
@@ -265,10 +324,10 @@ export function VisualItinerary({ itineraryText, destination: propDest, leadTitl
               <div className="text-right shrink-0">
                 <div className="text-[11px] text-zinc-400 flex items-center gap-1 justify-end">
                   <Calendar className="w-3 h-3 text-indigo-400" />
-                  <span>{parsed.duration}</span>
+                  <span>{displayDuration}</span>
                 </div>
                 <div className="text-[10px] text-zinc-500 mt-0.5">
-                  {parsed.days.length} Days Planned
+                  {effectiveDaysCount || parsed.days.length} Days Planned
                 </div>
               </div>
             </div>
@@ -316,7 +375,7 @@ export function VisualItinerary({ itineraryText, destination: propDest, leadTitl
 
             {parsed.days.length === 0 ? (
               <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800 text-xs text-zinc-400 whitespace-pre-line">
-                {itineraryText}
+                {safeText || 'No timeline activities specified.'}
               </div>
             ) : (
               <div className="space-y-3 relative before:absolute before:inset-0 before:left-4 before:w-0.5 before:bg-zinc-800/80">

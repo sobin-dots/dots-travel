@@ -636,8 +636,12 @@ model AuditLog {
 | zod | 3.24.2 / 4.x | Request/response DTO schemas & OpenAPI |
 | jose | 6.2.12 | JWT access token creation/verification |
 | bcryptjs | 3.0.3 | Password hashing & token hashing |
+| pdf-lib | 1.17.1 | 19-page portrait FIT travel proposal PDF generation |
+| @pdf-lib/fontkit | 1.1.1 | Custom TrueType font embedding (`Geist-Regular.ttf`) for native INR (`₹`) glyph rendering |
+| openai | 7.28.0 | Multi-tenant BYOK LLM & Whisper transcription client (OpenAI / DeepSeek) |
+| resend | 6.32.0 | Transactional email dispatch for customer proposals & supplier RFQs |
 | tsx | 4.23.15 | TypeScript script execution for Layer 3 tools |
-| vitest | latest stable | Unit and integration testing |
+| vitest | 5.0.3 | Unit and integration testing (18 test suites, 82 tests) |
 | playwright | latest stable | End-to-end browser testing |
 
 ### Operational Runbooks

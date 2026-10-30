@@ -12,7 +12,21 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { callId } = body;
+    const {
+      callId,
+      destination: customDestination,
+      departureDate,
+      returnDate,
+      durationDays,
+      headcountAdults,
+      headcountChildren,
+      headcountInfants,
+      targetBudget,
+      hotelTier,
+      specialRequests,
+      customerEmail: customEmail,
+      customerName: customName,
+    } = body;
 
     if (!callId) {
       return NextResponse.json({ api_id: 'val_err', error: 'Missing required field: callId' }, { status: 400 });
@@ -56,27 +70,116 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Generate Itinerary with DeepSeek
-    const result = await generateItineraryFromTranscript(transcriptText, {
-      name: contact?.name || 'Valued Client',
-      phone: targetPhone,
-      company: contact?.company || undefined,
-    });
+    const customParams = {
+      destination: customDestination,
+      departureDate,
+      returnDate,
+      durationDays: durationDays ? Number(durationDays) : undefined,
+      headcountAdults: headcountAdults != null ? Number(headcountAdults) : undefined,
+      headcountChildren: headcountChildren != null ? Number(headcountChildren) : undefined,
+      headcountInfants: headcountInfants != null ? Number(headcountInfants) : undefined,
+      targetBudget: targetBudget ? Number(targetBudget) : undefined,
+      hotelTier,
+      specialRequests,
+      customerName: customName || contact?.name,
+      customerEmail: customEmail || contact?.email,
+      customerPhone: targetPhone,
+    };
 
-    // Create Lead record
+    // Generate Itinerary with DeepSeek adhering to confirmed parameters
+    const result = await generateItineraryFromTranscript(
+      transcriptText,
+      {
+        name: customName || contact?.name || 'Valued Client',
+        phone: targetPhone,
+        email: customEmail || contact?.email || undefined,
+        company: contact?.company || undefined,
+      },
+      auth!.organizationId,
+      customParams
+    );
+
+    // Create Lead record with rich structured trip parameters connected from extraction & synthesis
+    const resolvedDurationDays = durationDays ? Number(durationDays) : (result.durationDays || 5);
+    const effectiveDepStr = departureDate || result.departureDate || null;
+    const parsedDeparture = effectiveDepStr ? new Date(effectiveDepStr) : null;
+    let parsedReturn = returnDate ? new Date(returnDate) : null;
+    if (!parsedReturn && parsedDeparture && !isNaN(parsedDeparture.getTime())) {
+      parsedReturn = new Date(parsedDeparture);
+      parsedReturn.setUTCDate(parsedReturn.getUTCDate() + Math.max(0, resolvedDurationDays - 1));
+    }
+
+    // Ensure contact is linked or updated if customerName/customerEmail was provided
+    let contactToLink = contact;
+    const resolvedCustomerName =
+      customName && customName !== 'Valued Client'
+        ? customName
+        : contact?.name || result.customerName || null;
+    const resolvedCustomerEmail = customEmail || contact?.email || result.customerEmail || null;
+
+    if (!contactToLink && targetPhone) {
+      try {
+        contactToLink = await db.contact.create({
+          data: {
+            organizationId: auth!.organizationId,
+            name: resolvedCustomerName || 'Customer',
+            phone: targetPhone,
+            email: resolvedCustomerEmail || null,
+          },
+        });
+      } catch {
+        // Ignore if concurrent creation or phone format conflict
+      }
+    } else if (contactToLink && (customName || customEmail)) {
+      try {
+        contactToLink = await db.contact.update({
+          where: { id: contactToLink.id },
+          data: {
+            ...(customName && customName !== 'Valued Client' ? { name: customName } : {}),
+            ...(customEmail ? { email: customEmail } : {}),
+          },
+        });
+      } catch {
+        // Ignore non-critical contact update error
+      }
+    }
+
     const lead = await db.lead.create({
       data: {
         organizationId: auth!.organizationId,
-        contactId: contact?.id || null,
+        contactId: contactToLink?.id || null,
         callId: call.id,
         title: result.title,
-        destination: result.destination,
+        destination: result.destination || customDestination || 'Curated Destination',
+        departureDate: parsedDeparture,
+        returnDate: parsedReturn,
+        durationDays: resolvedDurationDays,
+        headcountAdults: headcountAdults != null ? Number(headcountAdults) : (result.headcountAdults ?? 2),
+        headcountChildren: headcountChildren != null ? Number(headcountChildren) : (result.headcountChildren ?? 0),
+        headcountInfants: headcountInfants != null ? Number(headcountInfants) : (result.headcountInfants ?? 0),
+        targetBudget: targetBudget ? Number(targetBudget) : null,
+        hotelTier: hotelTier || result.hotelTier || 'luxury_5star',
+        specialRequests: specialRequests || result.specialRequests || null,
         status: 'pending_approval',
+        stage: 'new_inquiry',
         itinerary: result.itinerary,
-        customerEmail: contact?.email || null,
+        customerEmail: resolvedCustomerEmail,
+        metadata: {
+          customerName: resolvedCustomerName || undefined,
+          customerPhone: targetPhone || undefined,
+          currency: 'INR',
+        },
       },
       include: {
         contact: true,
+        supplier: true,
+        quotations: {
+          orderBy: { version: 'desc' },
+        },
+        supplierQuotations: {
+          include: { supplier: true },
+          orderBy: { createdAt: 'desc' },
+        },
         call: {
           include: {
             recordings: true,

@@ -128,7 +128,7 @@ describe('DeepSeek Concierge Itinerary & Leads Workflow', () => {
     expect(result.title).toBeDefined();
     expect(result.itinerary).toContain('Day 1');
     expect(result.itinerary.length).toBeGreaterThan(100);
-  }, 35000);
+  }, 60000);
 
   it('revises itinerary based on client correction notes', async () => {
     const initialItinerary = 'Day 1: Arrival in Zurich.\nDay 2: City tour.\nDay 3: Scenic train to Zermatt.\nDay 4: Departure.';

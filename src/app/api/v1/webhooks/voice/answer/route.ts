@@ -5,7 +5,7 @@ import { PlivoXmlBuilder } from '@/lib/telephony/xml/builder';
 
 export const runtime = 'nodejs';
 
-async function handleAnswer(req: NextRequest) {
+export async function handleAnswer(req: NextRequest) {
   const result = await processIncomingWebhook(req, 'voice', (p) => {
     return `${p.CallUUID || p.call_uuid || 'unknown'}_answer`;
   });
@@ -25,8 +25,40 @@ async function handleAnswer(req: NextRequest) {
     `${req.headers.get('x-forwarded-proto') || 'https'}://${req.headers.get('x-forwarded-host') || req.headers.get('host')}`
   ).trim().replace(/\/+$/, '');
 
-  const recordActionUrl = `${publicBase}/api/v1/webhooks/voice/record`;
-  const transcriptionUrl = `${publicBase}/api/v1/webhooks/transcription`;
+  // Resolve tenant organization via hybrid approach (query param -> DID lookup -> fallback)
+  const queryOrgId = urlObj.searchParams.get('orgId') || params.orgId;
+  const destinationNumber = params.To || params.to;
+  let resolvedOrg: any = null;
+  let phoneRecord: any = null;
+
+  if (queryOrgId) {
+    resolvedOrg = await db.organization.findFirst({
+      where: { OR: [{ id: queryOrgId }, { slug: queryOrgId }] },
+    });
+  }
+
+  if (destinationNumber) {
+    const cleanNumber = String(destinationNumber).replace(/\D/g, '');
+    phoneRecord = await db.phoneNumber.findFirst({
+      where: {
+        OR: [
+          { e164: destinationNumber },
+          ...(cleanNumber ? [{ e164: `+${cleanNumber}` }, { e164: cleanNumber }] : []),
+        ],
+      },
+      include: { organization: true },
+    });
+    if (!resolvedOrg && phoneRecord?.organization) {
+      resolvedOrg = phoneRecord.organization;
+    }
+  }
+
+  if (!resolvedOrg) {
+    resolvedOrg = await db.organization.findFirst();
+  }
+
+  const effectiveOrgId = resolvedOrg?.id;
+  const recordActionUrl = `${publicBase}/api/v1/webhooks/voice/record${effectiveOrgId ? `?orgId=${effectiveOrgId}` : ''}`;
 
   const builder = new PlivoXmlBuilder();
 
@@ -56,11 +88,15 @@ async function handleAnswer(req: NextRequest) {
     params['X-PH-callerId'] ||
     params['x-ph-callerid']
   );
-  const destinationNumber = params.To || params.to;
 
   if (isSipEndpointCall && destinationNumber) {
     // In-browser WebRTC call originating from Plivo Web Phone!
-    const callerId = process.env.PLIVO_CALLER_ID || '+918065531234';
+    const callerId =
+      params['X-PH-callerId'] ||
+      params['x-ph-callerid'] ||
+      phoneRecord?.e164 ||
+      process.env.PLIVO_CALLER_ID ||
+      '+918065531234';
     builder
       .record({
         action: recordActionUrl,
@@ -69,8 +105,6 @@ async function handleAnswer(req: NextRequest) {
         maxLength: 3600,
         recordSession: true,
         recordChannelType: 'mono',
-        transcriptionType: 'auto',
-        transcriptionUrl: transcriptionUrl,
         playBeep: false,
       })
       .dial(destinationNumber, {
@@ -90,8 +124,6 @@ async function handleAnswer(req: NextRequest) {
         maxLength: 3600,
         recordSession: true,
         recordChannelType: 'mono',
-        transcriptionType: 'auto',
-        transcriptionUrl: transcriptionUrl,
         playBeep: false,
       })
       .dial(forwardTo, {
@@ -106,44 +138,91 @@ async function handleAnswer(req: NextRequest) {
       .record({
         maxLength: 120,
         action: recordActionUrl,
-        transcriptionType: 'auto',
-        transcriptionUrl: transcriptionUrl,
         playBeep: true,
       });
   } else {
     // Inbound call from customer/client to our virtual phone number!
     const callerPhone = params.From || params.from || '+918065531234';
-    const sipEndpoint = process.env.PLIVO_SIP_ENDPOINT || 'sip:threedotsagent115368431818055514989946@phone.plivo.com';
 
-    builder
-      .record({
-        action: recordActionUrl,
-        startOnDialAnswer: true,
-        redirect: false,
-        maxLength: 3600,
-        recordSession: true,
-        recordChannelType: 'mono',
-        transcriptionType: 'auto',
-        transcriptionUrl: transcriptionUrl,
-        playBeep: false,
-      })
-      .dial(sipEndpoint, {
-        callerId: callerPhone,
-        timeLimit: 3600,
-      })
-      // Fallback if not answered or declined:
-      .speak('Hello! Welcome to the AI Travel Concierge. The agent is currently unavailable. Please describe your dream vacation, destination, dates, and budget after the beep.', {
-        voice: 'WOMAN',
-        language: 'en-US',
-      })
-      .record({
-        maxLength: 180,
-        action: recordActionUrl,
-        transcriptionType: 'auto',
-        transcriptionUrl: transcriptionUrl,
-        playBeep: true,
-      })
-      .wait(5);
+    // 1. Check if forwarding to a specific phone number is configured
+    if (forwardTo) {
+      builder
+        .record({
+          action: recordActionUrl,
+          startOnDialAnswer: true,
+          redirect: false,
+          maxLength: 3600,
+          recordSession: true,
+          recordChannelType: 'mono',
+          playBeep: false,
+        })
+        .dial(forwardTo, {
+          callerId: callerPhone,
+          timeLimit: 3600,
+          timeout: 30,
+        })
+        // Fallback if forwarding is not answered:
+        .speak('Hello! Welcome to 3dots AI Travel Concierge. Our travel specialists are currently assisting other travelers. Please describe your dream vacation, destination, dates, and budget after the beep, and we will prepare a personalized itinerary for you.', {
+          voice: 'WOMAN',
+          language: 'en-US',
+        })
+        .record({
+          maxLength: 180,
+          action: recordActionUrl,
+          playBeep: true,
+        })
+        .wait(5);
+    } else {
+      // 2. Resolve tenant's active Plivo WebRTC Web Phone SIP endpoint
+      let sipEndpoint = process.env.PLIVO_SIP_ENDPOINT;
+      if (!sipEndpoint && effectiveOrgId) {
+        try {
+          const { getTenantIntegration } = await import('@/lib/integrations/credentials-manager');
+          const plivoModule = await import('plivo');
+          const tenantInteg = await getTenantIntegration(effectiveOrgId, 'plivo');
+          if (tenantInteg?.credentials?.authId && tenantInteg?.credentials?.authToken) {
+            const client = new (plivoModule as any).Client(tenantInteg.credentials.authId, tenantInteg.credentials.authToken);
+            const eps = await client.endpoints.list();
+            if (eps && eps[0]?.username) {
+              sipEndpoint = `sip:${eps[0].username}@phone.plivo.com`;
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to resolve tenant Plivo endpoint dynamically:', err);
+        }
+      }
+
+      if (!sipEndpoint) {
+        sipEndpoint = 'sip:agent3dotsbiny442971121819099391993@phone.plivo.com';
+      }
+
+      builder
+        .record({
+          action: recordActionUrl,
+          startOnDialAnswer: true,
+          redirect: false,
+          maxLength: 3600,
+          recordSession: true,
+          recordChannelType: 'mono',
+          playBeep: false,
+        })
+        .dial(sipEndpoint, {
+          callerId: callerPhone,
+          timeLimit: 3600,
+          timeout: 25, // Ring Web Phone for up to 25s
+        })
+        // Fallback if Web Phone not answered or declined:
+        .speak('Hello! Welcome to 3dots AI Travel Concierge. Our travel specialists are currently assisting other travelers. Please describe your dream vacation, destination, dates, and budget after the beep, and we will prepare a personalized itinerary for you.', {
+          voice: 'WOMAN',
+          language: 'en-US',
+        })
+        .record({
+          maxLength: 180,
+          action: recordActionUrl,
+          playBeep: true,
+        })
+        .wait(5);
+    }
   }
 
   const xmlResponse = builder.toXml();
@@ -183,14 +262,17 @@ async function handleAnswer(req: NextRequest) {
         },
       });
     } else if (isSipEndpointCall) {
-      const org =
-        (await db.organization.findFirst({ where: { slug: '3dots' } })) ||
-        (await db.organization.findFirst());
-      if (org) {
-        const callerId = process.env.PLIVO_CALLER_ID || '+918065531234';
+      if (resolvedOrg) {
+        const callerId =
+          params['X-PH-callerId'] ||
+          params['x-ph-callerid'] ||
+          phoneRecord?.e164 ||
+          process.env.PLIVO_CALLER_ID ||
+          '+918065531234';
         const newCall = await db.call.create({
           data: {
-            organizationId: org.id,
+            organizationId: resolvedOrg.id,
+            phoneNumberId: phoneRecord?.id || null,
             plivoCallUuid: callUuid,
             from: callerId,
             to: destinationNumber || 'Unknown',
@@ -205,7 +287,7 @@ async function handleAnswer(req: NextRequest) {
 
         await db.callEvent.create({
           data: {
-            organizationId: org.id,
+            organizationId: resolvedOrg.id,
             callId: newCall.id,
             eventType: 'answer',
             status: 'in-progress',
@@ -217,15 +299,13 @@ async function handleAnswer(req: NextRequest) {
       }
     } else {
       // Inbound call from customer to virtual number
-      const org =
-        (await db.organization.findFirst({ where: { slug: '3dots' } })) ||
-        (await db.organization.findFirst());
-      if (org) {
+      if (resolvedOrg) {
         const callerPhone = params.From || params.from || 'Unknown Caller';
-        const calledNumber = destinationNumber || params.To || params.to || '+918065531234';
+        const calledNumber = destinationNumber || params.To || params.to || phoneRecord?.e164 || 'Unknown';
         const newCall = await db.call.create({
           data: {
-            organizationId: org.id,
+            organizationId: resolvedOrg.id,
+            phoneNumberId: phoneRecord?.id || null,
             plivoCallUuid: callUuid,
             from: callerPhone,
             to: calledNumber,
@@ -240,7 +320,7 @@ async function handleAnswer(req: NextRequest) {
 
         await db.callEvent.create({
           data: {
-            organizationId: org.id,
+            organizationId: resolvedOrg.id,
             callId: newCall.id,
             eventType: 'answer',
             status: 'in-progress',

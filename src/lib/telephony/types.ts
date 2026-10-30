@@ -95,7 +95,7 @@ export interface SendMessageParams {
   powerpackUuid?: string;
   dst: string | string[];
   text: string;
-  type?: 'sms' | 'mms' | 'whatsapp';
+  type?: 'sms' | 'mms';
   url?: string;
   mediaUrls?: string[];
 }
@@ -148,6 +148,7 @@ export interface PlivoTranscriptionDTO {
 }
 
 export interface TelephonyProvider {
+  readonly name?: 'plivo' | 'msg91' | 'simulator';
   readonly mode: 'live' | 'simulator';
 
   verifyCredentials(authId: string, authToken: string): Promise<AccountVerificationResult>;

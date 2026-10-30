@@ -25,6 +25,20 @@ export async function GET(req: NextRequest) {
           lastVerifyError: true,
         },
       },
+      integrations: {
+        select: {
+          id: true,
+          provider: true,
+          category: true,
+          label: true,
+          maskedDetails: true,
+          status: true,
+          isDefault: true,
+          metadata: true,
+          lastVerifiedAt: true,
+          lastVerifyError: true,
+        },
+      },
     },
   });
 
@@ -50,6 +64,15 @@ export async function PATCH(req: NextRequest) {
     }
 
     const {
+      organizationName,
+      name,
+      address,
+      phone,
+      website,
+      logoUrl,
+      letterheadUrl,
+      letterheadText,
+      brandColor,
       transcriptionDefaultEnabled,
       transcriptionLanguage,
       recordingRetentionDays,
@@ -60,6 +83,16 @@ export async function PATCH(req: NextRequest) {
     } = parsed.data;
 
     const updateData: any = {};
+    if (organizationName !== undefined) updateData.name = organizationName.trim();
+    if (name !== undefined) updateData.name = name.trim();
+    if (address !== undefined) updateData.address = address?.trim() || null;
+    if (phone !== undefined) updateData.phone = phone?.trim() || null;
+    if (website !== undefined) updateData.website = website?.trim() || null;
+    if (logoUrl !== undefined) updateData.logoUrl = logoUrl?.trim() || null;
+    if (letterheadUrl !== undefined) updateData.letterheadUrl = letterheadUrl?.trim() || null;
+    if (letterheadText !== undefined) updateData.letterheadText = letterheadText?.trim() || null;
+    if (brandColor !== undefined) updateData.brandColor = brandColor?.trim() || '#ed1b24';
+
     if (transcriptionDefaultEnabled !== undefined) updateData.transcriptionDefaultEnabled = transcriptionDefaultEnabled;
     if (transcriptionLanguage !== undefined) updateData.transcriptionLanguage = transcriptionLanguage;
     if (recordingRetentionDays !== undefined) updateData.recordingRetentionDays = recordingRetentionDays;
@@ -81,7 +114,7 @@ export async function PATCH(req: NextRequest) {
       });
 
       // Verify credentials with provider
-      const provider = getTelephonyProvider();
+      const provider = getTelephonyProvider({ authId: plivoAuthId, authToken: plivoAuthToken });
       const verifyResult = await provider.verifyCredentials(plivoAuthId, plivoAuthToken);
 
       if (existingAccount) {

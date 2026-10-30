@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { UpdatePhoneNumberSchema } from '@/lib/schemas';
-import { getTelephonyProvider } from '@/lib/telephony';
+import { getTenantTelephonyProvider } from '@/lib/telephony';
 
 export const runtime = 'nodejs';
 
@@ -114,7 +114,7 @@ export async function DELETE(
   }
 
   try {
-    const provider = getTelephonyProvider();
+    const provider = await getTenantTelephonyProvider(auth!.organizationId);
     await provider.releaseNumber(existing.e164);
 
     // Soft delete locally

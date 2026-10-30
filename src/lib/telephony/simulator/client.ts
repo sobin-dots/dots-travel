@@ -23,6 +23,7 @@ import {
 import { computeV3Signature } from '../webhook-validator';
 
 export class SimulatorProvider implements TelephonyProvider {
+  readonly name = 'simulator' as const;
   readonly mode = 'simulator' as const;
 
   // In-memory simulator ledger

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { processIncomingWebhook } from '@/lib/webhook-helper';
+import { transcribeAudioFromUrl } from '@/lib/openai-transcribe';
 
 export const runtime = 'nodejs';
 
@@ -15,73 +16,51 @@ export async function POST(req: NextRequest) {
   }
 
   const { params, webhookEventId } = result;
-  const transcriptionId = params.transcription_id || params.transcriptionId;
   const recordingId = params.recording_id || params.recordingId;
-  const status = (params.status || 'completed').toLowerCase();
-  const text = (params.transcription || params.text || params.transcription_text || '').trim();
-  const wordCount = text ? text.split(/\s+/).filter(Boolean).length : undefined;
-
-  if (!recordingId && !transcriptionId) {
-    return NextResponse.json({ status: 'ignored_missing_data' }, { status: 200 });
-  }
 
   try {
-    let recording: any = null;
+    // Plivo carrier transcription is disabled; ensure OpenAI transcription is generated directly from the recording URL if needed
     if (recordingId) {
-      recording = await db.recording.findUnique({
+      const recording = await db.recording.findUnique({
         where: { plivoRecordingId: recordingId },
       });
-    }
-
-    const organizationId = recording?.organizationId || (await db.organization.findFirst())?.id;
-
-    // Do not overwrite high-fidelity OpenAI Whisper transcription with Plivo voicemail snippet
-    if (recording?.id) {
-      const existingWhisper = await db.transcription.findFirst({
-        where: {
-          recordingId: recording.id,
-          source: 'openai_whisper',
-        },
-      });
-      if (existingWhisper && (existingWhisper.wordCount || 0) > 5) {
-        console.log(`[Transcription Webhook] Retaining OpenAI Whisper transcription for recording ${recording.id}`);
-        return NextResponse.json({ status: 'retained_whisper_transcript' }, { status: 200 });
-      }
-    }
-
-    if (organizationId) {
-      if (transcriptionId) {
-        await db.transcription.upsert({
-          where: { plivoTranscriptionId: transcriptionId },
-          update: {
-            status,
-            text,
-            wordCount,
-          },
-          create: {
-            organizationId,
-            recordingId: recording?.id,
-            callId: recording?.callId,
-            plivoTranscriptionId: transcriptionId,
-            recordingSid: recordingId,
-            status,
-            text,
-            wordCount,
-          },
-        });
-      } else if (recording) {
-        await db.transcription.create({
-          data: {
-            organizationId,
+      if (recording?.recordingUrl && recording.organizationId) {
+        const existingWhisper = await db.transcription.findFirst({
+          where: {
             recordingId: recording.id,
-            callId: recording.callId,
-            plivoTranscriptionId: `tr_callback_${Date.now()}`,
-            recordingSid: recordingId,
-            status,
-            text,
-            wordCount,
+            source: 'openai_whisper',
           },
         });
+        if (!existingWhisper) {
+          const whisperResult = await transcribeAudioFromUrl(recording.recordingUrl, {
+            organizationId: recording.organizationId,
+          });
+          if (whisperResult.text) {
+            const whisperId = `whisper_${recordingId}`;
+            await db.transcription.upsert({
+              where: { plivoTranscriptionId: whisperId },
+              update: {
+                text: whisperResult.text,
+                status: 'completed',
+                wordCount: whisperResult.text.split(/\s+/).filter(Boolean).length,
+                source: 'openai_whisper',
+                rawPayload: whisperResult.rawPayload,
+              },
+              create: {
+                organizationId: recording.organizationId,
+                recordingId: recording.id,
+                callId: recording.callId,
+                plivoTranscriptionId: whisperId,
+                recordingSid: recordingId,
+                status: 'completed',
+                text: whisperResult.text,
+                wordCount: whisperResult.text.split(/\s+/).filter(Boolean).length,
+                source: 'openai_whisper',
+                rawPayload: whisperResult.rawPayload,
+              },
+            });
+          }
+        }
       }
     }
 

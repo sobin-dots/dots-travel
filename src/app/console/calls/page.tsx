@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Phone, PhoneIncoming, Radio } from 'lucide-react';
+import { Phone, PhoneIncoming, Radio, Sparkles } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
 export default function CallsPage() {
@@ -11,7 +11,14 @@ export default function CallsPage() {
     bearerToken,
     setSelectedCallDetail,
     handleHangupLiveCall,
+    integrationsSummary,
+    openItineraryIntakeModal,
   } = useConsole();
+
+  const openaiInteg = integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai');
+  const configuredTranscriptionModel = openaiInteg?.metadata?.model || 'gpt-4o-transcribe';
+  const primaryCarrier =
+    integrationsSummary?.primaryTelephonyProvider === 'msg91' ? 'MSG91 Live' : 'Plivo Live SIP Trunk';
 
   return (
     <div className="space-y-6 max-w-6xl">
@@ -33,24 +40,7 @@ export default function CallsPage() {
         </div>
       </div>
 
-      {/* Inbound Call Monitoring Banner */}
-      <div className="p-3 sm:p-4 bg-emerald-950/20 border border-emerald-500/30 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-2.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
-          <div>
-            <span className="font-semibold text-emerald-300">Live Inbound Call Answering Active: </span>
-            <span className="text-zinc-300">Calls to </span>
-            <span className="font-mono text-emerald-400 font-semibold">+918065531234</span>
-            <span className="text-zinc-300"> ring this browser console directly with WebRTC audio & live transcription.</span>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono text-[10px] font-semibold">
-            ● Plivo Live SIP Trunk Active
-          </span>
-        </div>
-      </div>
-
+     
       {/* Calls List Table with horizontal scroll container */}
       <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
@@ -83,13 +73,12 @@ export default function CallsPage() {
                     </td>
                     <td className="py-3.5 px-4">
                       <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
-                          call.status === 'completed'
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${call.status === 'completed'
                             ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                             : call.status === 'in-progress'
-                            ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 animate-pulse'
-                            : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                        }`}
+                              ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 animate-pulse'
+                              : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                          }`}
                       >
                         {call.status}
                       </span>
@@ -100,7 +89,12 @@ export default function CallsPage() {
                     <td className="py-3.5 px-4 font-mono">{call.totalCost ? `$${call.totalCost}` : '$0.00'}</td>
                     <td className="py-3.5 px-4">
                       <div className="text-[11px] text-zinc-400">
-                        Rec: {call.recordingEnabled ? 'Yes' : 'No'} | Trans: {call.transcriptionEnabled ? 'Yes' : 'No'}
+                        Rec: {call.recordingEnabled ? 'Yes' : 'No'} | Trans:{' '}
+                        {call.transcriptionEnabled ? (
+                          <span className="text-emerald-400 font-medium">OpenAI ({configuredTranscriptionModel})</span>
+                        ) : (
+                          'No'
+                        )}
                       </div>
                     </td>
                     <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
@@ -113,15 +107,30 @@ export default function CallsPage() {
                           const data = await res.json();
                           setSelectedCallDetail(data.call);
                         }}
-                        className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-2.5 py-1 rounded border border-zinc-700"
+                        className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-2.5 py-1 rounded border border-zinc-700 cursor-pointer"
                       >
                         Detail
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const res = await fetch(`/api/v1/calls/${call.id}`, {
+                            headers: { Authorization: `Bearer ${bearerToken}` },
+                          });
+                          const data = await res.json();
+                          openItineraryIntakeModal(data.call || call);
+                        }}
+                        className="text-xs bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 px-2.5 py-1 rounded border border-indigo-500/30 inline-flex items-center gap-1 cursor-pointer transition"
+                        title="Open Itinerary Builder with prefilled transcription parameters"
+                      >
+                        <Sparkles className="w-3 h-3 text-indigo-400" />
+                        <span>Itinerary</span>
                       </button>
                       {call.status === 'in-progress' && (
                         <button
                           type="button"
                           onClick={() => handleHangupLiveCall(call.id)}
-                          className="text-xs bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 px-2.5 py-1 rounded border border-rose-500/30"
+                          className="text-xs bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 px-2.5 py-1 rounded border border-rose-500/30 cursor-pointer"
                         >
                           Hang Up
                         </button>
