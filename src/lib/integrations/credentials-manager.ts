@@ -1,7 +1,7 @@
 import { db } from '@/lib/db';
 import { encryptData, decryptData } from '@/lib/crypto';
 
-export type IntegrationProvider = 'openai' | 'deepseek' | 'plivo' | 'msg91' | 'whatsapp';
+export type IntegrationProvider = 'openai' | 'deepseek' | 'plivo' | 'msg91';
 export type IntegrationCategory = 'transcription' | 'intelligence' | 'telephony' | 'omnichannel';
 
 export interface DecryptedIntegration {
@@ -155,36 +155,6 @@ export async function testProviderCredentials(
         return { valid: false, error: `MSG91 authentication failed (HTTP ${res.status}): ${text.slice(0, 100)}` };
       }
 
-      case 'whatsapp': {
-        const accessToken = credentials.accessToken?.trim();
-        const phoneNumberId = credentials.phoneNumberId?.trim();
-        if (!accessToken || !phoneNumberId) {
-          return { valid: false, error: 'Both WhatsApp Phone Number ID and Access Token are required' };
-        }
-
-        if (accessToken.startsWith('test_') || accessToken.startsWith('sim_') || accessToken === 'mock_token') {
-          return { valid: true, details: { display_phone_number: '+18005550199', verified_name: 'Plivo Travel Concierge' } };
-        }
-
-        // Test against Meta WhatsApp Graph API
-        const res = await fetch(`https://graph.facebook.com/v21.0/${phoneNumberId}`, {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'User-Agent': 'TravelPlatform-BYOK/1.0',
-          },
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-
-        if (res.ok) {
-          const data = await res.json().catch(() => ({}));
-          return { valid: true, details: data };
-        }
-
-        const text = await res.text();
-        return { valid: false, error: `Meta WhatsApp API returned status ${res.status}: ${text.slice(0, 120)}` };
-      }
-
       default:
         return { valid: false, error: `Unsupported integration provider: ${provider}` };
     }
@@ -256,7 +226,41 @@ export async function saveTenantIntegration(
   integration: any;
   verification: VerificationResult;
 }> {
-  const { provider, credentials, metadata = {}, label = 'Default' } = data;
+  const { provider, metadata = {}, label = 'Default' } = data;
+  let credentials = { ...data.credentials };
+
+  // If partial credentials are provided (e.g. updating callerId or leaving authToken unchanged), merge with existing
+  const existing = await getTenantIntegration(organizationId, provider);
+  if (existing?.credentials) {
+    if (provider === 'plivo') {
+      if (!credentials.authId && existing.credentials.authId) {
+        credentials.authId = existing.credentials.authId;
+      }
+      if (!credentials.authToken && existing.credentials.authToken) {
+        credentials.authToken = existing.credentials.authToken;
+      }
+      if (credentials.callerId === undefined && existing.credentials.callerId) {
+        credentials.callerId = existing.credentials.callerId;
+      }
+    } else if (provider === 'msg91') {
+      if (!credentials.authKey && existing.credentials.authKey) {
+        credentials.authKey = existing.credentials.authKey;
+      }
+      if (credentials.senderId === undefined && existing.credentials.senderId) {
+        credentials.senderId = existing.credentials.senderId;
+      }
+      if (credentials.callerId === undefined && existing.credentials.callerId) {
+        credentials.callerId = existing.credentials.callerId;
+      }
+    } else if (provider === 'openai' || provider === 'deepseek') {
+      if (!credentials.apiKey && existing.credentials.apiKey) {
+        credentials.apiKey = existing.credentials.apiKey;
+      }
+      if (credentials.baseUrl === undefined && existing.credentials.baseUrl) {
+        credentials.baseUrl = existing.credentials.baseUrl;
+      }
+    }
+  }
 
   const category: IntegrationCategory =
     data.category ||
@@ -279,6 +283,7 @@ export async function saveTenantIntegration(
   } else if (provider === 'plivo') {
     const rawAuth = credentials.authId || '';
     maskedDetails.authIdLast4 = rawAuth.length > 4 ? rawAuth.slice(-4) : '****';
+    maskedDetails.authIdMasked = rawAuth.length > 8 ? `${rawAuth.slice(0, 6)}...${rawAuth.slice(-4)}` : rawAuth;
     maskedDetails.callerId = credentials.callerId || '';
     maskedDetails.appId = credentials.appId || '';
   } else if (provider === 'msg91') {
@@ -463,6 +468,7 @@ export async function getTenantIntegrationsSummary(organizationId: string) {
     integrations: rows,
     webhookUrls: {
       voiceAnswer: `${publicBase}/api/v1/webhooks/voice/answer?orgId=${organizationId}`,
+      voiceFallback: `${publicBase}/api/v1/webhooks/voice/fallback?orgId=${organizationId}`,
       voiceHangup: `${publicBase}/api/v1/webhooks/voice/hangup?orgId=${organizationId}`,
       voiceRecord: `${publicBase}/api/v1/webhooks/voice/record?orgId=${organizationId}`,
       messageInbound: `${publicBase}/api/v1/webhooks/message/inbound?orgId=${organizationId}`,

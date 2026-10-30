@@ -62,7 +62,7 @@ export async function POST(
     const {
       supplierId,
       quoteReference,
-      currency = 'USD',
+      currency = 'INR',
       totalNetCost,
       cancellationPolicy,
       inclusions = [],
@@ -128,6 +128,14 @@ export async function POST(
         lineItems: true,
       },
     });
+
+    // Advance lead stage from new_inquiry to quote_prep when supplier quote is received
+    if (lead.stage === 'new_inquiry') {
+      await db.lead.update({
+        where: { id: leadId },
+        data: { stage: 'quote_prep' },
+      });
+    }
 
     await logAuditEvent({
       organizationId: auth!.organizationId,

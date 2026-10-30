@@ -37,15 +37,23 @@ export function ItineraryIntakeModal() {
   // Intake form state
   const [destination, setDestination] = useState('');
   const [departureDate, setDepartureDate] = useState('');
+  const [returnDate, setReturnDate] = useState('');
   const [durationDays, setDurationDays] = useState(5);
   const [headcountAdults, setHeadcountAdults] = useState(2);
   const [headcountChildren, setHeadcountChildren] = useState(0);
   const [headcountInfants, setHeadcountInfants] = useState(0);
-  const [targetBudget, setTargetBudget] = useState(5000);
   const [hotelTier, setHotelTier] = useState('luxury_5star');
   const [specialRequests, setSpecialRequests] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
+
+  const computeReturnDateStr = (depStr: string, days: number) => {
+    if (!depStr) return '';
+    const d = new Date(depStr);
+    if (isNaN(d.getTime())) return '';
+    d.setUTCDate(d.getUTCDate() + Math.max(0, Number(days || 1) - 1));
+    return d.toISOString().split('T')[0];
+  };
 
   // Extract params when modal opens
   useEffect(() => {
@@ -67,16 +75,18 @@ export function ItineraryIntakeModal() {
         if (res.ok && isMounted) {
           const data = await res.json();
           const p = data.params;
-          setDestination(p.destination || 'Dubai, United Arab Emirates');
-          setDepartureDate(p.departureDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
-          setDurationDays(p.durationDays || 5);
+          const dep = p.departureDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const dur = p.durationDays || 5;
+          setDestination(p.destination || 'Singapore');
+          setDepartureDate(dep);
+          setDurationDays(dur);
+          setReturnDate(p.returnDate || computeReturnDateStr(dep, dur));
           setHeadcountAdults(p.headcountAdults ?? 2);
           setHeadcountChildren(p.headcountChildren ?? 0);
           setHeadcountInfants(p.headcountInfants ?? 0);
-          setTargetBudget(p.targetBudget || 5000);
           setHotelTier(p.hotelTier || 'luxury_5star');
           setSpecialRequests(p.specialRequests || '');
-          setCustomerName(p.customerName || 'Valued Client');
+          setCustomerName(p.customerName && p.customerName !== 'Valued Client' ? p.customerName : '');
           setCustomerEmail(p.customerEmail || '');
           setTranscriptSnippet(data.transcriptSnippet || '');
         }
@@ -103,15 +113,15 @@ export function ItineraryIntakeModal() {
     handleGenerateItineraryWithParams(intakeCallTarget.id, {
       destination,
       departureDate,
+      returnDate: returnDate || computeReturnDateStr(departureDate, durationDays),
       durationDays: Number(durationDays),
       headcountAdults: Number(headcountAdults),
       headcountChildren: Number(headcountChildren),
       headcountInfants: Number(headcountInfants),
-      targetBudget: Number(targetBudget),
       hotelTier,
       specialRequests,
-      customerName,
-      customerEmail,
+      customerName: customerName.trim() || undefined,
+      customerEmail: customerEmail.trim() || undefined,
     });
   };
 
@@ -196,7 +206,11 @@ export function ItineraryIntakeModal() {
                 type="date"
                 required
                 value={departureDate}
-                onChange={(e) => setDepartureDate(e.target.value)}
+                onChange={(e) => {
+                  const nextDep = e.target.value;
+                  setDepartureDate(nextDep);
+                  setReturnDate(computeReturnDateStr(nextDep, durationDays));
+                }}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
               />
             </div>
@@ -213,7 +227,11 @@ export function ItineraryIntakeModal() {
                 min="1"
                 max="60"
                 value={durationDays}
-                onChange={(e) => setDurationDays(Number(e.target.value))}
+                onChange={(e) => {
+                  const nextDur = Math.max(1, Number(e.target.value || 1));
+                  setDurationDays(nextDur);
+                  setReturnDate(computeReturnDateStr(departureDate, nextDur));
+                }}
                 className="w-full bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono"
               />
             </div>
@@ -258,25 +276,26 @@ export function ItineraryIntakeModal() {
             </div>
           </div>
 
-          {/* Budget & Hotel Tier */}
+          {/* Return Date & Hotel Tier */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1.5">
-                <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
-                Target Budget ($ USD)
+                <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                Target Return Date
               </label>
-              <div className="relative">
-                <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-zinc-500 font-mono text-xs">$</span>
-                <input
-                  type="number"
-                  min="500"
-                  step="100"
-                  value={targetBudget}
-                  onChange={(e) => setTargetBudget(Number(e.target.value))}
-                  placeholder="5000"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-7 pr-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
-                />
-              </div>
+              <input
+                type="date"
+                value={returnDate}
+                onChange={(e) => {
+                  const nextRet = e.target.value;
+                  setReturnDate(nextRet);
+                  if (departureDate && nextRet) {
+                    const diffDays = Math.round((new Date(nextRet).getTime() - new Date(departureDate).getTime()) / 86400000) + 1;
+                    if (diffDays >= 1 && diffDays <= 60) setDurationDays(diffDays);
+                  }
+                }}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+              />
             </div>
 
             <div>

@@ -16,6 +16,7 @@ import {
   Hash,
   Settings,
   Shield,
+  Sparkles,
   X,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
@@ -49,11 +50,17 @@ export function ConsoleSidebar() {
     { href: '/console/suppliers', label: 'Suppliers', icon: Building2, count: suppliersList.length },
     { href: '/console/contacts', label: 'Contacts', icon: BookUser, count: contactsList.length },
     { href: '/console/users', label: 'Staff Team', icon: Users, count: staffList.length },
-    { href: '/console/messages', label: 'Messages', icon: MessageSquare },
     { href: '/console/recordings', label: 'Recordings', icon: Mic, count: recordings.length },
     { href: '/console/transcripts', label: 'Transcripts', icon: FileText, count: transcripts.length },
-    { href: '/console/numbers', label: 'Numbers', icon: Hash, count: numbers.length },
-    { href: '/console/settings', label: 'Settings', icon: Settings },
+    {
+      href: '/console/settings',
+      label: 'Settings',
+      icon: Settings,
+      subItems: [
+        { href: '/console/settings', label: 'Platform & BYOK', exact: true },
+        { href: '/console/settings/itinerary-rules', label: 'Itinerary Rules', icon: Sparkles },
+      ],
+    },
     { href: '/console/audit', label: 'Audit Log', icon: Shield },
   ];
 
@@ -61,6 +68,58 @@ export function ConsoleSidebar() {
     <nav className="space-y-1">
       {navItems.map((item) => {
         const Icon = item.icon;
+
+        if (item.subItems) {
+          const isDomainActive = pathname.startsWith('/console/settings');
+          return (
+            <div key={item.href} className="space-y-0.5">
+              <Link
+                href={item.href}
+                onClick={() => {
+                  if (isMobile) setIsMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition ${isDomainActive && pathname === '/console/settings'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : isDomainActive
+                    ? 'text-zinc-200 bg-zinc-800/50'
+                    : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
+                  }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <Icon className="w-4 h-4 shrink-0" />
+                  <span>{item.label}</span>
+                </div>
+              </Link>
+
+              {/* Sub-menu items under Settings domain */}
+              <div className="pl-6 space-y-0.5 border-l border-zinc-800/80 ml-4 my-1">
+                {item.subItems.map((sub) => {
+                  const isSubActive = sub.exact ? pathname === sub.href : pathname.startsWith(sub.href);
+                  const SubIcon = sub.icon;
+                  return (
+                    <Link
+                      key={sub.href}
+                      href={sub.href}
+                      onClick={() => {
+                        if (isMobile) setIsMobileMenuOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-[11px] font-medium transition ${isSubActive
+                        ? 'bg-indigo-600 text-white shadow-sm font-semibold'
+                        : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
+                        }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {SubIcon && <SubIcon className="w-3 h-3 text-indigo-400 shrink-0" />}
+                        <span>{sub.label}</span>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        }
+
         const isActive = item.exact
           ? pathname === item.href
           : pathname === item.href || pathname.startsWith(item.href + '/');
@@ -116,7 +175,9 @@ export function ConsoleSidebar() {
                 <span className="font-semibold text-white block truncate">
                   {incomingCall ? 'Incoming Call...' : webPhoneStatus === 'connected' ? 'Call in Progress' : 'Inbound Ready'}
                 </span>
-                <span className="text-[10px] text-zinc-400 font-mono truncate block">+918065531234</span>
+                <span className="text-[10px] text-zinc-400 font-mono truncate block">
+                  {numbers[0]?.e164 || 'Live Line'}
+                </span>
               </div>
             </div>
             <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-mono font-bold shrink-0">
@@ -179,7 +240,9 @@ export function ConsoleSidebar() {
                     <span className="font-semibold text-white block truncate">
                       {incomingCall ? 'Incoming Call...' : webPhoneStatus === 'connected' ? 'Call in Progress' : 'Inbound Ready'}
                     </span>
-                    <span className="text-[10px] text-zinc-400 font-mono truncate block">+918065531234</span>
+                    <span className="text-[10px] text-zinc-400 font-mono truncate block">
+                  {numbers[0]?.e164 || 'Live Line'}
+                </span>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-mono font-bold shrink-0">

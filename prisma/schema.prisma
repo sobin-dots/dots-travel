@@ -20,6 +20,15 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // profile & branding
+  address        String?  @db.Text
+  phone          String?
+  website        String?
+  logoUrl        String?  @db.Text
+  letterheadUrl  String?  @db.Text
+  letterheadText String?  @db.Text
+  brandColor     String?  @default("#ed1b24")
+
   // policy
   transcriptionDefaultEnabled Boolean  @default(true)
   transcriptionLanguage       String   @default("en-US")
@@ -51,6 +60,7 @@ model Organization {
   paymentMilestones     PaymentMilestone[]
   visaRequirements      VisaRequirement[]
   automationLogs        AutomationLog[]
+  itineraryRules        ItineraryRule[]
 
   @@map("organizations")
 }
@@ -364,7 +374,7 @@ model Message {
   threadId          String?
   plivoMessageUuid  String   @unique
   direction         String                        // inbound | outbound
-  type              String   @default("sms")      // sms | mms | whatsapp
+  type              String   @default("sms")      // sms | mms
   from              String
   to                String
   body              String?  @db.Text
@@ -698,7 +708,7 @@ model AutomationLog {
   organizationId String
   leadId         String
   type           String    // customer_drip | supplier_chase | payment_reminder | predeparture | csat_survey | loyalty
-  channel        String    @default("whatsapp") // whatsapp | email
+  channel        String    @default("email") // email
   scheduledFor   DateTime
   executedAt     DateTime?
   status         String    @default("scheduled") // scheduled | sent | failed | cancelled
@@ -742,6 +752,28 @@ model TenantIntegration {
   @@unique([organizationId, provider])
   @@index([organizationId, category])
   @@map("tenant_integrations")
+}
+
+// ─── itinerary preparation rules ──────────────────────────────────────────────
+
+model ItineraryRule {
+  id             String       @id @default(uuid())
+  organizationId String
+  title          String
+  description    String?      @db.Text
+  category       String       @default("general") // general | pacing | accommodation | dining | activities | pricing | transportation | compliance
+  rulePrompt     String       @db.Text
+  condition      String?      // e.g. "all", "luxury", "family", "destination:paris"
+  priority       Int          @default(1) // 1 = standard, 2 = high, 3 = mandatory
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, isActive])
+  @@index([organizationId, category])
+  @@map("itinerary_rules")
 }
 
 

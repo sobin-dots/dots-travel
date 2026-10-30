@@ -31,6 +31,75 @@ const PIPELINE_STAGES = [
   { id: 'lost', label: 'Closed / Lost', color: 'from-rose-500/20 to-red-500/10', border: 'border-rose-500/30', badge: 'bg-rose-500/10 text-rose-400 border-rose-500/30' },
 ];
 
+/**
+ * Returns the lead's quoted price ONLY after a supplier quote has been received.
+ * Before getting a quote from the supplier, returns null so no premature/stray price is shown or summed.
+ */
+function getLeadQuotedPrice(lead: any): number | null {
+  const supplierQuotes = Array.isArray(lead?.supplierQuotations) ? lead.supplierQuotations : [];
+  if (supplierQuotes.length === 0) {
+    return null;
+  }
+
+  const customerQuotes = Array.isArray(lead?.quotations) ? lead.quotations : [];
+  if (customerQuotes.length > 0 && customerQuotes[0]?.finalSellingPrice != null) {
+    const selling = Number(customerQuotes[0].finalSellingPrice);
+    if (!isNaN(selling) && selling > 0) return selling;
+  }
+
+  const selectedSupplierQuote =
+    supplierQuotes.find((q: any) => q.status === 'selected') || supplierQuotes[0];
+  if (selectedSupplierQuote?.totalNetCost != null) {
+    const net = Number(selectedSupplierQuote.totalNetCost);
+    if (!isNaN(net) && net > 0) return net;
+  }
+
+  return null;
+}
+
+function getLeadDurationDays(lead: any): number {
+  const titleMatch = typeof lead?.title === 'string' ? lead.title.match(/\b(\d+)-Day\b/i) : null;
+  if (lead?.durationDays && Number(lead.durationDays) > 0) {
+    // If durationDays was left at default 5 while title explicitly specifies another day count, prefer the title's day count
+    if (titleMatch && Number(lead.durationDays) === 5 && parseInt(titleMatch[1], 10) !== 5) {
+      return parseInt(titleMatch[1], 10);
+    }
+    return Number(lead.durationDays);
+  }
+  if (titleMatch) {
+    return parseInt(titleMatch[1], 10);
+  }
+  return 5;
+}
+
+function getLeadCustomerName(lead: any): string {
+  const contactName = lead?.contact?.name?.trim();
+  if (contactName && contactName.toLowerCase() !== 'valued client') {
+    return contactName;
+  }
+  const metaName = lead?.metadata?.customerName?.trim();
+  if (metaName && metaName.toLowerCase() !== 'valued client') {
+    return metaName;
+  }
+  const email = lead?.customerEmail || lead?.contact?.email;
+  if (email && typeof email === 'string' && email.includes('@')) {
+    const local = email.split('@')[0].replace(/[._-]+/g, ' ').trim();
+    if (local) {
+      return local.replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+  }
+  return 'Customer';
+}
+
+function getLeadCustomerPhone(lead: any): string {
+  if (lead?.contact?.phone) return lead.contact.phone;
+  if (lead?.metadata?.customerPhone) return lead.metadata.customerPhone;
+  if (lead?.call) {
+    return lead.call.direction === 'outbound' ? lead.call.to : lead.call.from;
+  }
+  return '—';
+}
+
 export default function LeadsPage() {
   const {
     leadsList,
@@ -46,17 +115,18 @@ export default function LeadsPage() {
   const [viewMode, setViewMode] = useState<'kanban' | 'list'>('kanban');
   const [updatingStageId, setUpdatingStageId] = useState<string | null>(null);
 
-  // Calculate Pipeline Metrics
-  const totalLeads = leadsList.length;
-  const activePipelineValue = leadsList.reduce((sum, l) => {
-    const val = l.quotations?.[0]?.finalSellingPrice ? Number(l.quotations[0].finalSellingPrice) : (l.targetBudget ? Number(l.targetBudget) : 5000);
-    return l.stage !== 'lost' ? sum + val : sum;
+  // Calculate Pipeline Metrics strictly from leads that have received supplier quotes
+  const activeLeads = leadsList.filter((l) => l.stage !== 'lost');
+  const totalLeads = activeLeads.length;
+  const activePipelineValue = activeLeads.reduce((sum, l) => {
+    const val = getLeadQuotedPrice(l);
+    return sum + (val ?? 0);
   }, 0);
   const confirmedWonValue = leadsList
     .filter((l) => l.stage === 'confirmed' || l.status === 'converted')
     .reduce((sum, l) => {
-      const val = l.quotations?.[0]?.finalSellingPrice ? Number(l.quotations[0].finalSellingPrice) : (l.targetBudget ? Number(l.targetBudget) : 5000);
-      return sum + val;
+      const val = getLeadQuotedPrice(l);
+      return sum + (val ?? 0);
     }, 0);
 
   // Stage transition helper
@@ -136,7 +206,9 @@ export default function LeadsPage() {
         <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-4 flex items-center justify-between">
           <div>
             <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Active Inquiries</div>
-            <div className="text-xl font-bold text-white mt-1 font-mono">{totalLeads} Leads</div>
+            <div className="text-xl font-bold text-white mt-1 font-mono">
+              {totalLeads} {totalLeads === 1 ? 'Lead' : 'Leads'}
+            </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 flex items-center justify-center">
             <Users className="w-5 h-5" />
@@ -147,11 +219,11 @@ export default function LeadsPage() {
           <div>
             <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Pipeline Deal Value</div>
             <div className="text-xl font-bold text-indigo-400 mt-1 font-mono">
-              ${activePipelineValue.toLocaleString(undefined, { minimumFractionDigits: 0 })}
+              ₹{activePipelineValue.toLocaleString('en-IN', { minimumFractionDigits: 0 })}
             </div>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center">
-            <DollarSign className="w-5 h-5" />
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center font-mono font-bold text-base">
+            ₹
           </div>
         </div>
 
@@ -159,7 +231,7 @@ export default function LeadsPage() {
           <div>
             <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Confirmed Revenue</div>
             <div className="text-xl font-bold text-emerald-400 mt-1 font-mono">
-              ${confirmedWonValue.toLocaleString(undefined, { minimumFractionDigits: 0 })}
+              ₹{confirmedWonValue.toLocaleString('en-IN', { minimumFractionDigits: 0 })}
             </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
@@ -174,8 +246,8 @@ export default function LeadsPage() {
           {PIPELINE_STAGES.map((col, colIdx) => {
             const colLeads = leadsList.filter((l) => (l.stage || 'new_inquiry') === col.id);
             const colValue = colLeads.reduce((s, l) => {
-              const val = l.quotations?.[0]?.finalSellingPrice ? Number(l.quotations[0].finalSellingPrice) : (l.targetBudget ? Number(l.targetBudget) : 5000);
-              return s + val;
+              const val = getLeadQuotedPrice(l);
+              return s + (val ?? 0);
             }, 0);
 
             return (
@@ -191,9 +263,11 @@ export default function LeadsPage() {
                       {colLeads.length}
                     </span>
                   </div>
-                  <span className="text-[10px] font-mono text-zinc-400">
-                    ${(colValue / 1000).toFixed(0)}k
-                  </span>
+                  {colValue > 0 && (
+                    <span className="text-[10px] font-mono text-emerald-400 font-semibold">
+                      ₹{colValue.toLocaleString('en-IN')}
+                    </span>
+                  )}
                 </div>
 
                 {/* Column Body Cards */}
@@ -202,8 +276,9 @@ export default function LeadsPage() {
                     <div className="py-8 text-center text-[11px] text-zinc-600 italic">No leads in stage</div>
                   ) : (
                     colLeads.map((lead) => {
-                      const latestQuote = lead.quotations?.[0];
-                      const price = latestQuote ? Number(latestQuote.finalSellingPrice) : (lead.targetBudget ? Number(lead.targetBudget) : 5000);
+                      const price = getLeadQuotedPrice(lead);
+                      const durationDays = getLeadDurationDays(lead);
+                      const customerName = getLeadCustomerName(lead);
                       const isUpdating = updatingStageId === lead.id;
 
                       return (
@@ -223,8 +298,14 @@ export default function LeadsPage() {
                           </div>
 
                           <div className="flex items-center justify-between text-[10px] text-zinc-400 font-mono pt-1 border-t border-zinc-800/60">
-                            <span className="text-emerald-400 font-semibold">${price.toLocaleString()}</span>
-                            <span>{lead.durationDays || 5} Days • {lead.contact?.name || 'Customer'}</span>
+                            {price !== null ? (
+                              <span className="text-emerald-400 font-semibold">₹{price.toLocaleString('en-IN')}</span>
+                            ) : (
+                              <span className="text-zinc-500">{durationDays} Days</span>
+                            )}
+                            <span className="truncate max-w-[130px]">
+                              {price !== null ? `${durationDays} Days • ${customerName}` : customerName}
+                            </span>
                           </div>
 
                           {/* Quick Actions & Stage Transition Arrows */}
@@ -312,8 +393,10 @@ export default function LeadsPage() {
                   </tr>
                 ) : (
                   leadsList.map((lead) => {
-                    const latestQuote = lead.quotations?.[0];
-                    const price = latestQuote ? Number(latestQuote.finalSellingPrice) : (lead.targetBudget ? Number(lead.targetBudget) : 5000);
+                    const price = getLeadQuotedPrice(lead);
+                    const durationDays = getLeadDurationDays(lead);
+                    const customerName = getLeadCustomerName(lead);
+                    const customerPhone = getLeadCustomerPhone(lead);
                     const currentStageConfig = PIPELINE_STAGES.find((s) => s.id === (lead.stage || 'new_inquiry')) || PIPELINE_STAGES[0];
 
                     return (
@@ -328,8 +411,8 @@ export default function LeadsPage() {
                           </div>
                         </td>
                         <td className="py-3.5 px-4">
-                          <div className="font-medium text-zinc-200">{lead.contact?.name || 'Customer'}</div>
-                          <div className="text-[11px] text-zinc-400 font-mono">{lead.contact?.phone || '—'}</div>
+                          <div className="font-medium text-zinc-200">{customerName}</div>
+                          <div className="text-[11px] text-zinc-400 font-mono">{customerPhone}</div>
                         </td>
                         <td className="py-3.5 px-4">
                           <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border uppercase tracking-wider ${currentStageConfig.badge}`}>
@@ -337,8 +420,16 @@ export default function LeadsPage() {
                           </span>
                         </td>
                         <td className="py-3.5 px-4">
-                          <div className="font-mono font-semibold text-emerald-400 text-xs">${price.toLocaleString()}</div>
-                          <div className="text-[10px] text-zinc-500">{lead.durationDays || 5} Days • {lead.hotelTier ? lead.hotelTier.replace('_', ' ') : 'Luxury'}</div>
+                          {price !== null ? (
+                            <div className="font-mono font-semibold text-emerald-400 text-xs">
+                              ₹{price.toLocaleString('en-IN')}
+                            </div>
+                          ) : (
+                            <div className="text-zinc-500 text-xs italic">Awaiting Supplier Quote</div>
+                          )}
+                          <div className="text-[10px] text-zinc-500">
+                            {durationDays} Days • {lead.hotelTier ? lead.hotelTier.replace(/_/g, ' ') : 'Luxury'}
+                          </div>
                         </td>
                         <td className="py-3.5 px-4">
                           <div className="space-y-1 text-[11px]">

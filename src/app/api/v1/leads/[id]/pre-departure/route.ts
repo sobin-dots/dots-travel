@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
-import { sendWhatsAppMessage } from '@/lib/telephony/whatsapp/client';
+import { sendNotificationEmail } from '@/lib/email';
 
 export const runtime = 'nodejs';
 
@@ -32,25 +32,26 @@ export async function POST(
       return NextResponse.json({ api_id: 'not_found', error: 'Lead not found' }, { status: 404 });
     }
 
+    const recipientEmail = lead.customerEmail || lead.contact?.email || 'guest@voyages.test';
     const recipientPhone = lead.contact?.phone || '+14155550199';
     const guestName = lead.contact?.name || 'Valued Traveler';
     const bookingRef = lead.bookingReference || `BK-${lead.id.slice(0, 6).toUpperCase()}`;
 
     const briefingText = 
-      `🎒 *Exclusive Pre-Departure Briefing (${milestone} Days) for ${lead.destination}*\n\n` +
+      `Exclusive Pre-Departure Briefing (${milestone} Days) for ${lead.destination}\n\n` +
       `Dear ${guestName},\n` +
-      `Your journey to *${lead.destination}* is just around the corner!\n` +
-      `🔖 *Booking Reference:* ${bookingRef}\n\n` +
-      `☀️ *Destination Weather Forecast:* Warm & sunny, avg 28°C / 82°F.\n` +
-      `🧳 *Packing Checklist:* Smart casual resort wear, light evening jacket, SPF 50 sunblock, universal travel adapters (Type G/C).\n` +
-      `🛂 *Travel Documents:* Original passports (6+ months validity), confirmed flight PNRs, and booking vouchers.\n` +
-      `📞 *Dedicated Concierge Support:* Our on-ground representative will welcome you at arrivals. 24/7 Emergency Line: +1 (800) 555-PLIVO.\n\n` +
-      `Have a safe flight and an unforgettable journey! Reply here anytime for assistance.`;
+      `Your journey to ${lead.destination} is just around the corner!\n` +
+      `Booking Reference: ${bookingRef}\n\n` +
+      `Destination Weather Forecast: Warm & sunny, avg 28°C / 82°F.\n` +
+      `Packing Checklist: Smart casual resort wear, light evening jacket, SPF 50 sunblock, universal travel adapters (Type G/C).\n` +
+      `Travel Documents: Original passports (6+ months validity), confirmed flight PNRs, and booking vouchers.\n` +
+      `Dedicated Concierge Support: Our on-ground representative will welcome you at arrivals. 24/7 Emergency Line: +1 (800) 555-PLIVO.\n\n` +
+      `Have a safe flight and an unforgettable journey! Reply to this email anytime for assistance.`;
 
-    const waRes = await sendWhatsAppMessage({
-      to: recipientPhone,
+    const emailRes = await sendNotificationEmail({
+      to: recipientEmail,
+      subject: `Pre-Departure Briefing (${milestone}): ${lead.destination}`,
       text: briefingText,
-      organizationId: auth!.organizationId,
     });
 
     const log = await db.automationLog.create({
@@ -58,16 +59,16 @@ export async function POST(
         organizationId: auth!.organizationId,
         leadId,
         type: `predeparture_${milestone.toLowerCase().replace('-', '')}`,
-        channel: 'whatsapp',
+        channel: 'email',
         scheduledFor: new Date(),
         executedAt: new Date(),
         status: 'sent',
-        recipient: recipientPhone,
+        recipient: recipientEmail,
         payload: {
           milestone,
           bookingReference: bookingRef,
           destination: lead.destination || 'Curated Destination',
-          whatsappResult: waRes,
+          emailResult: emailRes,
         },
       },
     });

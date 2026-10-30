@@ -46,12 +46,28 @@ export async function POST(
     const chaseResults = [];
     for (const sup of suppliersToRemind) {
       const pdfBytes = await generateItineraryPDF({
-        title: `URGENT RFQ REMINDER: ${lead.title}`,
+        title: `RFQ Response Due: ${lead.title}`,
         recipientName: sup.name,
         recipientEmail: sup.email,
         recipientType: 'supplier',
         itineraryText: lead.itinerary,
         organizationName: lead.organization.name,
+        organizationAddress: lead.organization.address || undefined,
+        organizationPhone: lead.organization.phone || undefined,
+        organizationWebsite: lead.organization.website || undefined,
+        organizationLogo: lead.organization.logoUrl || undefined,
+        organizationLetterhead: lead.organization.letterheadUrl || undefined,
+        organizationLetterheadText: lead.organization.letterheadText || undefined,
+        brandColor: lead.organization.brandColor || undefined,
+        destination: lead.destination || undefined,
+        durationDays: lead.durationDays || undefined,
+        departureDate: lead.departureDate || undefined,
+        returnDate: lead.returnDate || undefined,
+        headcountAdults: lead.headcountAdults || undefined,
+        headcountChildren: lead.headcountChildren || undefined,
+        hotelTier: lead.hotelTier || undefined,
+        targetBudget: lead.targetBudget ? Number(lead.targetBudget) : undefined,
+        currency: (lead.metadata as any)?.currency || 'INR',
       });
 
       const res = await sendSupplierRfqEmail({
@@ -59,7 +75,7 @@ export async function POST(
         supplierName: sup.name,
         contactPerson: sup.contactPerson || undefined,
         customerName: 'Valued Client',
-        title: `[SLA WARNING] Rate Quotation Outstanding: ${lead.title}`,
+        title: `[RFQ Alert] Rate Quotation Outstanding: ${lead.title}`,
         destination: lead.destination || 'Curated Destination',
         pdfBuffer: pdfBytes,
       });

@@ -24,6 +24,7 @@ import {
 const plivoSdk: any = (plivoModule as any).default || plivoModule;
 
 export class PlivoProvider implements TelephonyProvider {
+  readonly name = 'plivo' as const;
   readonly mode = 'live' as const;
   private client: any;
 

@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const validProviders: IntegrationProvider[] = ['openai', 'deepseek', 'plivo', 'msg91', 'whatsapp'];
+    const validProviders: IntegrationProvider[] = ['openai', 'deepseek', 'plivo', 'msg91'];
     if (!validProviders.includes(provider as IntegrationProvider)) {
       return NextResponse.json(
         { api_id: 'bad_req', error: `Invalid provider. Must be one of: ${validProviders.join(', ')}` },

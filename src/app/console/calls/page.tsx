@@ -40,28 +40,7 @@ export default function CallsPage() {
         </div>
       </div>
 
-      {/* Inbound Call Monitoring Banner */}
-      <div className="p-3 sm:p-4 bg-emerald-950/20 border border-emerald-500/30 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-2.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
-          <div>
-            <span className="font-semibold text-emerald-300">Live Inbound Call Answering Active: </span>
-            <span className="text-zinc-300">Calls to </span>
-            <span className="font-mono text-emerald-400 font-semibold">+918065531234</span>
-            <span className="text-zinc-300"> ring this browser console directly with WebRTC audio & live transcription.</span>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0 flex-wrap">
-          <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono text-[10px] font-semibold">
-            ● {primaryCarrier} Active
-          </span>
-          <span className="px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 font-mono text-[10px] font-semibold flex items-center gap-1">
-            <Sparkles className="w-2.5 h-2.5 text-indigo-400" />
-            <span>Primary ASR: OpenAI ({configuredTranscriptionModel})</span>
-          </span>
-        </div>
-      </div>
-
+     
       {/* Calls List Table with horizontal scroll container */}
       <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
@@ -94,13 +73,12 @@ export default function CallsPage() {
                     </td>
                     <td className="py-3.5 px-4">
                       <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
-                          call.status === 'completed'
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${call.status === 'completed'
                             ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                             : call.status === 'in-progress'
-                            ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 animate-pulse'
-                            : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                        }`}
+                              ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 animate-pulse'
+                              : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                          }`}
                       >
                         {call.status}
                       </span>

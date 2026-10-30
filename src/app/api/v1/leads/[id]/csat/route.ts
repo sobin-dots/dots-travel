@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
-import { sendWhatsAppMessage } from '@/lib/telephony/whatsapp/client';
+import { sendNotificationEmail } from '@/lib/email';
 
 export const runtime = 'nodejs';
 
@@ -69,19 +69,20 @@ export async function POST(
       });
     }
 
-    // Otherwise, dispatch the automated CSAT survey invitation via WhatsApp (T+1 post-trip)
+    // Otherwise, dispatch the automated CSAT survey invitation via Email (T+1 post-trip)
+    const recipientEmail = lead.customerEmail || lead.contact?.email || 'guest@voyages.test';
     const surveyUrl = `https://concierge.voyages.test/feedback/${lead.bookingReference || lead.id}`;
     const surveyText = 
-      `✨ *Welcome Home, ${guestName}!*\n\n` +
-      `We hope your recent vacation to *${lead.destination}* was nothing short of magical.\n\n` +
+      `Welcome Home, ${guestName}!\n\n` +
+      `We hope your recent vacation to ${lead.destination} was nothing short of magical.\n\n` +
       `Could you take 60 seconds to share your experience with us? Your feedback helps us continuously elevate our private journeys.\n\n` +
-      `⭐ Rate your journey: ${surveyUrl}\n\n` +
-      `Or reply directly to this message with a number from 1 to 5 stars! Thank you for traveling with us.`;
+      `Rate your journey: ${surveyUrl}\n\n` +
+      `Thank you for traveling with us.`;
 
-    const waRes = await sendWhatsAppMessage({
-      to: recipientPhone,
+    const emailRes = await sendNotificationEmail({
+      to: recipientEmail,
+      subject: `How was your trip to ${lead.destination}?`,
       text: surveyText,
-      organizationId: auth!.organizationId,
     });
 
     const log = await db.automationLog.create({
@@ -89,15 +90,15 @@ export async function POST(
         organizationId: auth!.organizationId,
         leadId,
         type: 'csat_survey',
-        channel: 'whatsapp',
+        channel: 'email',
         scheduledFor: new Date(),
         executedAt: new Date(),
         status: 'sent',
-        recipient: recipientPhone,
+        recipient: recipientEmail,
         payload: {
           surveyUrl,
           destination: lead.destination,
-          whatsappResult: waRes,
+          emailResult: emailRes,
         },
       },
     });
@@ -108,12 +109,12 @@ export async function POST(
       action: 'csat.dispatch_survey',
       targetType: 'Lead',
       targetId: leadId,
-      metadata: { recipientPhone },
+      metadata: { recipientEmail },
     });
 
     return NextResponse.json({
       api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
-      message: 'Post-trip CSAT survey invitation dispatched via WhatsApp',
+      message: 'Post-trip CSAT survey invitation dispatched via Email',
       surveyLogId: log.id,
       surveyUrl,
     });

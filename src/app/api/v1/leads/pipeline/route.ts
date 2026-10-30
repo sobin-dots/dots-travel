@@ -20,6 +20,9 @@ export async function GET(req: NextRequest) {
           orderBy: { version: 'desc' },
           take: 1,
         },
+        supplierQuotations: {
+          orderBy: { createdAt: 'desc' },
+        },
         tripFlights: true,
       },
       orderBy: { updatedAt: 'desc' },
@@ -39,15 +42,28 @@ export async function GET(req: NextRequest) {
 
     for (const lead of leads) {
       const stage = columns[lead.stage] ? lead.stage : 'new_inquiry';
+      const hasSupplierQuote = lead.supplierQuotations && lead.supplierQuotations.length > 0;
       const latestQuote = lead.quotations[0];
-      const dealValue = latestQuote
-        ? Number(latestQuote.finalSellingPrice)
-        : lead.targetBudget
-        ? Number(lead.targetBudget)
+      const selectedSuppQuote =
+        lead.supplierQuotations.find((q) => q.status === 'selected') || lead.supplierQuotations[0];
+
+      // Only compute deal value after a quote from supplier is received
+      const dealValue = hasSupplierQuote
+        ? latestQuote
+          ? Number(latestQuote.finalSellingPrice)
+          : lead.targetBudget
+          ? Number(lead.targetBudget)
+          : selectedSuppQuote
+          ? Number(selectedSuppQuote.totalNetCost)
+          : 0
         : 0;
 
-      totalPipelineValue += dealValue;
-      if (stage === 'confirmed') wonValue += dealValue;
+      if (stage !== 'lost') {
+        totalPipelineValue += dealValue;
+      }
+      if (stage === 'confirmed' || lead.status === 'converted') {
+        wonValue += dealValue;
+      }
 
       const meta = (lead.metadata as any) || {};
 
@@ -55,12 +71,13 @@ export async function GET(req: NextRequest) {
         id: lead.id,
         title: lead.title,
         destination: lead.destination,
-        contactName: lead.contact?.name || 'Inquiry',
-        contactPhone: lead.contact?.phone,
+        contactName: lead.contact?.name || meta.customerName || 'Inquiry',
+        contactPhone: lead.contact?.phone || meta.customerPhone,
         contactEmail: lead.customerEmail || lead.contact?.email,
         stage: lead.stage,
-        dealValue,
-        targetBudget: lead.targetBudget ? Number(lead.targetBudget) : null,
+        dealValue: hasSupplierQuote ? dealValue : null,
+        hasSupplierQuote,
+        targetBudget: hasSupplierQuote && lead.targetBudget ? Number(lead.targetBudget) : null,
         durationDays: lead.durationDays || 5,
         partySize: (lead.headcountAdults || 2) + (lead.headcountChildren || 0),
         qualificationScore: meta.qualificationScore || 75,

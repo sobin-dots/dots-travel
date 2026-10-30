@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
-import { generateItineraryPDF } from '@/lib/pdf-generator';
+import { generateItineraryPDF, resolveCustomerNameForPdf } from '@/lib/pdf-generator';
 import { sendCustomerItineraryEmail, sendSupplierRfqEmail } from '@/lib/email';
 
 export const runtime = 'nodejs';
@@ -15,14 +15,20 @@ export async function POST(
   if (errorResponse) return errorResponse;
 
   const { id } = await params;
-  const lead = await db.lead.findFirst({
-    where: { id, organizationId: auth!.organizationId },
-    include: {
-      contact: true,
-      organization: true,
-      call: true,
-    },
-  });
+  const [lead, consultantUser] = await Promise.all([
+    db.lead.findFirst({
+      where: { id, organizationId: auth!.organizationId },
+      include: {
+        contact: true,
+        organization: true,
+        call: true,
+      },
+    }),
+    db.user.findUnique({
+      where: { id: auth!.userId },
+      select: { name: true, email: true },
+    }),
+  ]);
 
   if (!lead) {
     return NextResponse.json({ api_id: 'not_found', error: 'Lead not found' }, { status: 404 });
@@ -30,7 +36,10 @@ export async function POST(
 
   try {
     const body = await req.json();
-    const { customerEmail, supplierId } = body;
+    const { customerEmail, supplierId, target } = body;
+
+    const shouldSendCustomer = target === 'supplier' ? false : true;
+    const shouldSendSupplier = target === 'customer' ? false : Boolean(supplierId);
 
     let emailToSend = customerEmail || lead.customerEmail || lead.contact?.email;
 
@@ -54,9 +63,16 @@ export async function POST(
       }
     }
 
-    if (!emailToSend) {
+    if (shouldSendCustomer && !emailToSend) {
       return NextResponse.json(
         { api_id: 'missing_email', error: 'Please provide an email address for the customer before sending' },
+        { status: 400 }
+      );
+    }
+
+    if (shouldSendSupplier && !supplierId) {
+      return NextResponse.json(
+        { api_id: 'missing_supplier', error: 'Please select a partner supplier to send the itinerary for quotation' },
         { status: 400 }
       );
     }
@@ -69,35 +85,99 @@ export async function POST(
       }).catch(() => {});
     }
 
-    // 1. Generate Customer Itinerary PDF
-    const clientName = lead.contact?.name || 'Valued Client';
-    const customerPdfBytes = await generateItineraryPDF({
-      title: lead.title,
-      recipientName: clientName,
-      recipientEmail: emailToSend,
-      recipientType: 'customer',
-      itineraryText: lead.itinerary,
-      organizationName: lead.organization.name,
-    });
+    const leadMeta = (lead.metadata as Record<string, any>) || {};
+    const currency = leadMeta.currency || 'INR';
+    const targetBudget = lead.targetBudget ? Number(lead.targetBudget) : undefined;
 
-    // 2. Dispatch Customer Itinerary Email via Resend
-    const customerEmailResult = await sendCustomerItineraryEmail({
-      to: emailToSend,
-      customerName: clientName,
-      title: lead.title,
-      destination: lead.destination || 'Bespoke Travel',
-      pdfBuffer: customerPdfBytes,
-    });
+    let formattedTravelDates: string | undefined;
+    if (lead.departureDate) {
+      const dep = new Date(lead.departureDate);
+      const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+      if (lead.returnDate) {
+        const ret = new Date(lead.returnDate);
+        if (dep.getMonth() === ret.getMonth() && dep.getFullYear() === ret.getFullYear()) {
+          formattedTravelDates = `${dep.getDate()}–${ret.getDate()} ${months[dep.getMonth()]} ${dep.getFullYear()}`;
+        } else {
+          formattedTravelDates = `${dep.getDate()} ${months[dep.getMonth()].slice(0, 3)} – ${ret.getDate()} ${months[ret.getMonth()].slice(0, 3)} ${ret.getFullYear()}`;
+        }
+      } else {
+        formattedTravelDates = `${dep.getDate()} ${months[dep.getMonth()]} ${dep.getFullYear()}`;
+      }
+    }
+
+    const rawClientName = body.customerName || lead.contact?.name || leadMeta.customerName || 'Guest';
+    const clientName = resolveCustomerNameForPdf(
+      {
+        title: lead.title,
+        recipientName: rawClientName,
+        recipientEmail: emailToSend,
+        recipientType: 'customer',
+        itineraryText: lead.itinerary,
+      },
+      lead.itinerary
+    );
+    let customerPdfBytes: Uint8Array | null = null;
+    let customerEmailResult: any = null;
+
+    // 1. Generate & Dispatch Customer Itinerary PDF if requested
+    if (shouldSendCustomer && emailToSend) {
+      customerPdfBytes = await generateItineraryPDF({
+        title: lead.title,
+        recipientName: clientName,
+        recipientEmail: emailToSend,
+        recipientType: 'customer',
+        itineraryText: lead.itinerary,
+        organizationName: lead.organization.name,
+        organizationAddress: lead.organization.address || undefined,
+        organizationPhone: lead.organization.phone || undefined,
+        organizationWebsite: lead.organization.website || undefined,
+        organizationLogo: lead.organization.logoUrl || undefined,
+        organizationLetterhead: lead.organization.letterheadUrl || undefined,
+        organizationLetterheadText: lead.organization.letterheadText || undefined,
+        brandColor: lead.organization.brandColor || undefined,
+        destination: lead.destination || undefined,
+        durationDays: lead.durationDays || undefined,
+        travelDates: formattedTravelDates,
+        departureDate: lead.departureDate,
+        returnDate: lead.returnDate,
+        headcountAdults: lead.headcountAdults || 2,
+        headcountChildren: lead.headcountChildren || 0,
+        hotelTier: lead.hotelTier || undefined,
+        specialRequests: lead.specialRequests || undefined,
+        targetBudget,
+        currency,
+        consultantName: leadMeta.consultantName || consultantUser?.name || undefined,
+        consultantPhone: leadMeta.consultantPhone || lead.organization.phone || undefined,
+        consultantEmail: leadMeta.consultantEmail || consultantUser?.email || lead.organization.notificationEmail || undefined,
+        bookingReference: lead.bookingReference || `FIT/${new Date(lead.createdAt).getFullYear()}/${lead.id.slice(0, 4).toUpperCase()}`,
+        preparedDate: lead.updatedAt || lead.createdAt,
+      });
+
+      customerEmailResult = await sendCustomerItineraryEmail({
+        to: emailToSend,
+        customerName: clientName,
+        title: lead.title,
+        destination: lead.destination || 'Bespoke Travel',
+        pdfBuffer: customerPdfBytes,
+      });
+    }
 
     let supplier: any = null;
     let supplierPdfBytes: Uint8Array | null = null;
     let supplierEmailResult: any = null;
 
-    // 3. Generate & Dispatch Supplier RFQ PDF if supplier is selected
-    if (supplierId) {
+    // 2. Generate & Dispatch Supplier RFQ PDF if supplier is selected
+    if (shouldSendSupplier && supplierId) {
       supplier = await db.supplier.findFirst({
         where: { id: supplierId, organizationId: auth!.organizationId },
       });
+
+      if (!supplier && target === 'supplier') {
+        return NextResponse.json(
+          { api_id: 'supplier_not_found', error: 'Selected supplier not found' },
+          { status: 404 }
+        );
+      }
 
       if (supplier) {
         supplierPdfBytes = await generateItineraryPDF({
@@ -107,6 +187,29 @@ export async function POST(
           recipientType: 'supplier',
           itineraryText: lead.itinerary,
           organizationName: lead.organization.name,
+          organizationAddress: lead.organization.address || undefined,
+          organizationPhone: lead.organization.phone || undefined,
+          organizationWebsite: lead.organization.website || undefined,
+          organizationLogo: lead.organization.logoUrl || undefined,
+          organizationLetterhead: lead.organization.letterheadUrl || undefined,
+          organizationLetterheadText: lead.organization.letterheadText || undefined,
+          brandColor: lead.organization.brandColor || undefined,
+          destination: lead.destination || undefined,
+          durationDays: lead.durationDays || undefined,
+          travelDates: formattedTravelDates,
+          departureDate: lead.departureDate,
+          returnDate: lead.returnDate,
+          headcountAdults: lead.headcountAdults || 2,
+          headcountChildren: lead.headcountChildren || 0,
+          hotelTier: lead.hotelTier || undefined,
+          specialRequests: lead.specialRequests || undefined,
+          targetBudget,
+          currency,
+          consultantName: leadMeta.consultantName || consultantUser?.name || undefined,
+          consultantPhone: leadMeta.consultantPhone || lead.organization.phone || undefined,
+          consultantEmail: leadMeta.consultantEmail || consultantUser?.email || lead.organization.notificationEmail || undefined,
+          bookingReference: lead.bookingReference || `FIT/${new Date(lead.createdAt).getFullYear()}/${lead.id.slice(0, 4).toUpperCase()}`,
+          preparedDate: lead.updatedAt || lead.createdAt,
         });
 
         supplierEmailResult = await sendSupplierRfqEmail({
@@ -123,15 +226,15 @@ export async function POST(
 
     const now = new Date();
 
-    // 4. Update Lead status and metadata
+    // 3. Update Lead status and metadata
     const updated = await db.lead.update({
       where: { id: lead.id },
       data: {
         status: supplier ? 'sent_to_supplier' : 'sent_to_customer',
-        customerEmail: emailToSend,
-        customerSentAt: now,
-        supplierSentAt: supplier ? now : undefined,
-        selectedSupplierId: supplier?.id || lead.selectedSupplierId,
+        ...(supplier && lead.stage === 'new_inquiry' ? { stage: 'quote_prep' } : {}),
+        ...(emailToSend ? { customerEmail: emailToSend } : {}),
+        ...(shouldSendCustomer ? { customerSentAt: now } : {}),
+        ...(supplier ? { supplierSentAt: now, selectedSupplierId: supplier.id } : {}),
       },
       include: {
         contact: true,
@@ -154,28 +257,37 @@ export async function POST(
       targetType: 'Lead',
       targetId: lead.id,
       metadata: {
-        customerEmail: emailToSend,
+        target: target || 'both',
+        customerEmail: shouldSendCustomer ? emailToSend : undefined,
         supplierId: supplier?.id,
         supplierEmail: supplier?.email,
-        customerPdfSize: customerPdfBytes.length,
+        customerPdfSize: customerPdfBytes?.length,
         supplierPdfSize: supplierPdfBytes?.length,
-        customerEmailId: customerEmailResult.id,
+        customerEmailId: customerEmailResult?.id,
         supplierEmailId: supplierEmailResult?.id,
       },
     });
+
+    let responseMessage = '';
+    if (shouldSendCustomer && supplier) {
+      responseMessage = `Itinerary PDF dispatched via email to customer (${emailToSend}) and Quotation Request PDF sent to supplier (${supplier.email})`;
+    } else if (supplier) {
+      responseMessage = `Itinerary PDF attached and sent via email to supplier ${supplier.name} (${supplier.email}) to request quote`;
+    } else {
+      responseMessage = `Revised/new Itinerary PDF attached and sent via email to customer (${emailToSend})`;
+    }
 
     return NextResponse.json({
       api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
       lead: updated,
       customerEmail: emailToSend,
-      customerSent: customerEmailResult.success,
-      customerEmailId: customerEmailResult.id,
-      supplierSent: supplier ? supplierEmailResult?.success : false,
+      customerSent: Boolean(customerEmailResult?.success),
+      customerEmailId: customerEmailResult?.id,
+      supplierSent: supplier ? Boolean(supplierEmailResult?.success) : false,
       supplierEmailId: supplierEmailResult?.id,
       supplierName: supplier?.name,
-      message: supplier
-        ? `Itinerary PDF dispatched via Resend to customer (${emailToSend}) and Quotation Request PDF sent to supplier (${supplier.email})`
-        : `Itinerary PDF dispatched via Resend to customer (${emailToSend}) successfully`,
+      supplierEmail: supplier?.email,
+      message: responseMessage,
     });
   } catch (err: any) {
     console.error('Error sending itinerary:', err);

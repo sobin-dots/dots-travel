@@ -2,13 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
-import { sendWhatsAppMessage } from '@/lib/telephony/whatsapp/client';
 import { sendCustomerItineraryEmail } from '@/lib/email';
 import { generateCustomerQuotationPDF } from '@/lib/pdf-generator';
 
 export const runtime = 'nodejs';
 
-// P2-12 & P2-13: Multichannel Dispatch (Send Quotation via WhatsApp & Email + Trigger Follow-ups)
+// P2-12 & P2-13: Email Quotation Dispatch & Automated Follow-ups
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -22,9 +21,7 @@ export async function POST(
     const body = await req.json();
     const {
       quotationId,
-      sendWhatsApp = true,
       sendEmail = true,
-      customMessage,
       scheduleAutomatedFollowUps = true,
     } = body;
 
@@ -57,37 +54,17 @@ export async function POST(
       });
     }
 
-    const recipientPhone = lead.contact?.phone || lead.call?.from || lead.call?.to || '+14155550199';
     const recipientEmail = lead.customerEmail || lead.contact?.email || 'customer@voyages.test';
     const recipientName = lead.contact?.name || 'Valued Client';
     const version = quote?.version || 1;
-    const finalPrice = quote ? Number(quote.finalSellingPrice) : Number(lead.targetBudget || 5000);
+    const finalPrice = quote ? Number(quote.finalSellingPrice) : Number(lead.targetBudget || 0);
 
     const results: Record<string, any> = {
-      whatsapp: null,
       email: null,
       automatedFollowUpsScheduled: 0,
     };
 
-    // 1. WhatsApp Dispatch (P2-10, P2-12)
-    if (sendWhatsApp) {
-      const waText = customMessage || 
-        `🌟 Hello ${recipientName}! Your customized travel quotation (v${version}) for ${lead.destination} is ready.\n\n` +
-        `✈️ *Trip:* ${lead.title}\n` +
-        `💰 *All-Inclusive Package:* $${finalPrice.toLocaleString()} USD\n` +
-        `📅 *Duration:* ${lead.durationDays || 5} Days\n\n` +
-        `Tap below to review your interactive proposal and flight schedules. Reply to this chat to confirm or request any adjustments!`;
-
-      const waRes = await sendWhatsAppMessage({
-        to: recipientPhone,
-        text: waText,
-        organizationId: auth!.organizationId,
-      });
-
-      results.whatsapp = waRes;
-    }
-
-    // 2. Email Dispatch with PDF Proposal (P2-11, P2-12)
+    // 1. Email Dispatch with PDF Proposal (P2-11, P2-12)
     if (sendEmail) {
       const pdfBytes = await generateCustomerQuotationPDF({
         title: lead.title,
@@ -96,7 +73,7 @@ export async function POST(
         destination: lead.destination || 'Curated Destination',
         version,
         finalSellingPrice: finalPrice,
-        currency: quote?.currency || 'USD',
+        currency: quote?.currency || (lead.metadata as any)?.currency || 'INR',
         taxAmount: quote ? Number(quote.taxAmount) : 0,
         marginAmount: quote ? Number(quote.marginAmount) : 0,
         itineraryText: lead.itinerary,
@@ -112,6 +89,13 @@ export async function POST(
           pnr: f.pnr || undefined,
         })),
         organizationName: lead.organization.name,
+        organizationAddress: lead.organization.address || undefined,
+        organizationPhone: lead.organization.phone || undefined,
+        organizationWebsite: lead.organization.website || undefined,
+        organizationLogo: lead.organization.logoUrl || undefined,
+        organizationLetterhead: lead.organization.letterheadUrl || undefined,
+        organizationLetterheadText: lead.organization.letterheadText || undefined,
+        brandColor: lead.organization.brandColor || undefined,
         validUntil: quote?.validUntil || undefined,
       });
 
@@ -132,7 +116,6 @@ export async function POST(
         where: { id: quote.id },
         data: {
           status: 'sent',
-          sentViaWhatsApp: Boolean(sendWhatsApp),
           sentViaEmail: Boolean(sendEmail),
           sentAt: new Date(),
         },
@@ -148,27 +131,29 @@ export async function POST(
       },
     });
 
-    // 3. P2-13, P2-14, P2-15: Trigger Timed Follow-Up Sequences
+    // 2. P2-13, P2-14, P2-15: Trigger Timed Follow-Up Sequences via Email
     if (scheduleAutomatedFollowUps) {
       const now = Date.now();
       const followUps = [
         {
           type: 'customer_drip_day1',
-          channel: 'whatsapp',
+          channel: 'email',
           scheduledFor: new Date(now + 24 * 3600 * 1000), // Day 1 (+24h)
-          recipient: recipientPhone,
+          recipient: recipientEmail,
           payload: {
             step: 1,
+            subject: `Checking In: Your Quotation for ${lead.destination}`,
             message: `Hi ${recipientName}, just checking in to see if you had a chance to review the quotation for ${lead.destination}? Our concierge is available if you have questions!`,
           },
         },
         {
           type: 'customer_drip_day3',
-          channel: 'whatsapp',
+          channel: 'email',
           scheduledFor: new Date(now + 3 * 24 * 3600 * 1000), // Day 3 (+72h)
-          recipient: recipientPhone,
+          recipient: recipientEmail,
           payload: {
             step: 2,
+            subject: `Availability Update: ${lead.title}`,
             message: `Hi ${recipientName}! Flights and preferred resort availability for ${lead.destination} are filling up quickly. Would you like us to hold the current rate for 48 hours?`,
           },
         },
@@ -205,14 +190,12 @@ export async function POST(
     await logAuditEvent({
       organizationId: auth!.organizationId,
       actorUserId: auth!.userId,
-      action: 'quotation.dispatch_multichannel',
+      action: 'quotation.dispatch_email',
       targetType: 'CustomerQuotation',
       targetId: quote?.id || leadId,
       metadata: {
         leadId,
-        sendWhatsApp,
         sendEmail,
-        recipientPhone,
         recipientEmail,
         automatedFollowUpsCount: results.automatedFollowUpsScheduled,
       },
@@ -220,7 +203,7 @@ export async function POST(
 
     return NextResponse.json({
       api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
-      message: 'Quotation successfully dispatched via configured channels with automated follow-ups scheduled',
+      message: 'Quotation successfully dispatched via Email with automated follow-ups scheduled',
       results,
     });
   } catch (err: any) {

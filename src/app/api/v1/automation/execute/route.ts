@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
-import { sendWhatsAppMessage } from '@/lib/telephony/whatsapp/client';
+import { sendNotificationEmail } from '@/lib/email';
 
 export const runtime = 'nodejs';
 
@@ -30,34 +30,22 @@ export async function POST(req: NextRequest) {
       try {
         const payload = (job.payload as any) || {};
 
-        if (job.channel === 'whatsapp') {
-          const res = await sendWhatsAppMessage({
-            to: job.recipient,
-            text: payload.message || 'Friendly travel check-in from your concierge.',
-            organizationId: auth!.organizationId,
-          });
+        const res = await sendNotificationEmail({
+          to: job.recipient,
+          subject: payload.subject || 'Follow-Up from Travel Concierge',
+          text: payload.message || 'Friendly travel check-in from your concierge.',
+        });
 
-          await db.automationLog.update({
-            where: { id: job.id },
-            data: {
-              status: res.success ? 'sent' : 'failed',
-              executedAt: new Date(),
-              error: res.error || null,
-            },
-          });
+        await db.automationLog.update({
+          where: { id: job.id },
+          data: {
+            status: res.success ? 'sent' : 'failed',
+            executedAt: new Date(),
+            error: res.error || null,
+          },
+        });
 
-          executionResults.push({ id: job.id, type: job.type, success: res.success });
-        } else {
-          // Email dispatch simulation / log update
-          await db.automationLog.update({
-            where: { id: job.id },
-            data: {
-              status: 'sent',
-              executedAt: new Date(),
-            },
-          });
-          executionResults.push({ id: job.id, type: job.type, success: true });
-        }
+        executionResults.push({ id: job.id, type: job.type, success: res.success });
       } catch (jobErr: any) {
         await db.automationLog.update({
           where: { id: job.id },

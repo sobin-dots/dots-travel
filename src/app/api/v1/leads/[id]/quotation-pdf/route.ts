@@ -51,6 +51,9 @@ export async function GET(
     const finalPrice = quote ? Number(quote.finalSellingPrice) : (lead.targetBudget ? Number(lead.targetBudget) : 5000);
     const version = quote?.version || 1;
 
+    const leadMeta = (lead.metadata as Record<string, any>) || {};
+    const currency = quote?.currency || leadMeta.currency || 'INR';
+
     const pdfBytes = await generateCustomerQuotationPDF({
       title: lead.title,
       recipientName,
@@ -58,7 +61,7 @@ export async function GET(
       destination: lead.destination || 'Curated Destination',
       version,
       finalSellingPrice: finalPrice,
-      currency: quote?.currency || 'USD',
+      currency,
       taxAmount: quote ? Number(quote.taxAmount) : 0,
       marginAmount: quote ? Number(quote.marginAmount) : 0,
       itineraryText: lead.itinerary,
@@ -74,6 +77,13 @@ export async function GET(
         pnr: f.pnr || undefined,
       })),
       organizationName: lead.organization.name,
+      organizationAddress: lead.organization.address || undefined,
+      organizationPhone: lead.organization.phone || undefined,
+      organizationWebsite: lead.organization.website || undefined,
+      organizationLogo: lead.organization.logoUrl || undefined,
+      organizationLetterhead: lead.organization.letterheadUrl || undefined,
+      organizationLetterheadText: lead.organization.letterheadText || undefined,
+      brandColor: lead.organization.brandColor || undefined,
       validUntil: quote?.validUntil || undefined,
     });
 

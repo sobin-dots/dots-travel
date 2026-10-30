@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
-import { sendWhatsAppMessage } from '@/lib/telephony/whatsapp/client';
+import { sendNotificationEmail } from '@/lib/email';
 
 export const runtime = 'nodejs';
 
@@ -34,23 +34,24 @@ export async function POST(
       return NextResponse.json({ api_id: 'not_found', error: 'Payment milestone not found' }, { status: 404 });
     }
 
+    const recipientEmail = lead.customerEmail || lead.contact?.email || 'guest@voyages.test';
     const recipientPhone = lead.contact?.phone || '+14155550199';
-    const amountStr = `$${Number(milestone.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
+    const amountStr = `₹${Number(milestone.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
     const dueDateStr = new Date(milestone.dueDate).toLocaleDateString();
 
-    const waText = 
-      `💳 *Payment Reminder for your Upcoming Trip to ${lead.destination}*\n\n` +
+    const emailText = 
+      `Payment Reminder for your Upcoming Trip to ${lead.destination}\n\n` +
       `Hello ${lead.contact?.name || 'Valued Guest'},\n` +
-      `This is a friendly reminder regarding your milestone payment for *${milestone.title}*.\n\n` +
-      `💵 *Amount Due:* ${amountStr} USD\n` +
-      `📅 *Due Date:* ${dueDateStr}\n` +
-      `🔗 *Secure Payment Link:* ${milestone.paymentLink}\n\n` +
+      `This is a friendly reminder regarding your milestone payment for ${milestone.title}.\n\n` +
+      `Amount Due: ${amountStr} INR\n` +
+      `Due Date: ${dueDateStr}\n` +
+      `Secure Payment Link: ${milestone.paymentLink}\n\n` +
       `Click the secure link above to complete payment. If you have already processed this, please reply to let your travel concierge know!`;
 
-    const waRes = await sendWhatsAppMessage({
-      to: recipientPhone,
-      text: waText,
-      organizationId: auth!.organizationId,
+    const emailRes = await sendNotificationEmail({
+      to: recipientEmail,
+      subject: `Payment Reminder: ${milestone.title} (${lead.destination})`,
+      text: emailText,
     });
 
     // Update reminder counters
@@ -67,16 +68,16 @@ export async function POST(
         organizationId: auth!.organizationId,
         leadId,
         type: 'payment_reminder',
-        channel: 'whatsapp',
+        channel: 'email',
         scheduledFor: new Date(),
         executedAt: new Date(),
         status: 'sent',
-        recipient: recipientPhone,
+        recipient: recipientEmail,
         payload: {
           milestoneId: paymentId,
           title: milestone.title,
           amount: Number(milestone.amount),
-          whatsappResult: waRes,
+          emailResult: emailRes,
         },
       },
     });

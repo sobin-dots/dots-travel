@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import * as plivo from 'plivo';
+import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
 import { getTenantIntegration } from '@/lib/integrations/credentials-manager';
 
@@ -11,7 +12,7 @@ export async function GET(req: NextRequest) {
 
   let authId = process.env.PLIVO_AUTH_ID;
   let authToken = process.env.PLIVO_AUTH_TOKEN;
-  let callerId = process.env.PLIVO_CALLER_ID || '+918065531234';
+  let callerId = process.env.PLIVO_CALLER_ID;
 
   if (auth?.organizationId) {
     const plivoInteg = await getTenantIntegration(auth.organizationId, 'plivo');
@@ -22,6 +23,20 @@ export async function GET(req: NextRequest) {
         callerId = plivoInteg.credentials.callerId;
       }
     }
+
+    if (!callerId) {
+      const activeNumber = await db.phoneNumber.findFirst({
+        where: { organizationId: auth.organizationId, status: 'active' },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (activeNumber) {
+        callerId = activeNumber.e164;
+      }
+    }
+  }
+
+  if (!callerId) {
+    callerId = process.env.PLIVO_CALLER_ID || '+918065531234';
   }
 
   if (!authId || !authToken) {
@@ -32,15 +47,27 @@ export async function GET(req: NextRequest) {
 
   try {
     const client = new (plivo as any).Client(authId, authToken);
-    const endpoints = await client.endpoints.list();
-    const endpoint = endpoints[0];
-    // Plivo's REST API returns an MD5 hash in endpoint.password, NOT the plaintext password.
-    // The browser Web Phone SIP stack requires the plaintext password to pass SIP 401/407 digest challenges.
     const password = process.env.PLIVO_ENDPOINT_PASSWORD || 'PilvoAgent2026!Secure';
+    let endpoints = await client.endpoints.list();
+    let endpoint = endpoints[0];
+
+    // Auto-provision endpoint on Plivo for this tenant if not yet created
+    if (!endpoint) {
+      try {
+        const apps = await client.applications.list();
+        const app = apps.find((a: any) => a.defaultEndpointApp) || apps[0];
+        const cleanAuthId = String(authId).replace(/[^a-zA-Z0-9]/g, '').slice(-4).toLowerCase() || 'agent';
+        const cleanOrg = auth?.organizationId ? auth.organizationId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase() : 'line';
+        const username = `agent${cleanOrg}${cleanAuthId}`;
+        endpoint = await client.endpoints.create(username, password, `Agent-${cleanOrg}`, app?.appId);
+      } catch (createErr: any) {
+        console.warn('Auto-create Plivo endpoint warning:', createErr?.message || createErr);
+      }
+    }
 
     if (!endpoint) {
       return NextResponse.json({
-        error: 'No Plivo SIP endpoint found. Run setup-web-phone tool first.',
+        error: 'No Plivo SIP endpoint found. Please check Plivo credentials.',
       }, { status: 500 });
     }
 

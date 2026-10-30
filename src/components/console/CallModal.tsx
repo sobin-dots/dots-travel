@@ -280,7 +280,7 @@ export function CallModal() {
                   <span>Direct In-Browser Voice Calling (WebRTC)</span>
                 </div>
                 <p className="text-[11px] text-zinc-300 leading-relaxed">
-                  You will speak and listen directly through your computer headset or microphone. Plivo dials the customer's phone from <span className="font-mono text-emerald-400 font-semibold">+918065531234</span> and connects them live to your browser.
+                  You will speak and listen directly through your computer headset or microphone. Plivo dials the customer's phone from <span className="font-mono text-emerald-400 font-semibold">{numbers.find((n) => n.id === callFromNumber)?.e164 || numbers[0]?.e164 || 'your active line'}</span> and connects them live to your browser.
                 </p>
                 <div className="flex items-center gap-2 pt-1 text-[11px] text-emerald-400">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />

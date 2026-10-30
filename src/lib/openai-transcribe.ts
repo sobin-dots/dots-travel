@@ -183,22 +183,30 @@ export async function transcribeRecording(
     headers: fetchHeaders,
   });
 
-  // If carrier bucket requires Basic Auth, retry with Plivo credentials
-  if (
-    !response.ok &&
-    (response.status === 401 || response.status === 403) &&
-    process.env.PLIVO_AUTH_ID &&
-    process.env.PLIVO_AUTH_TOKEN
-  ) {
-    const basicAuth = Buffer.from(
-      `${process.env.PLIVO_AUTH_ID}:${process.env.PLIVO_AUTH_TOKEN}`
-    ).toString('base64');
-    response = await fetch(url, {
-      cache: 'no-store',
-      redirect: 'error',
-      signal: AbortSignal.timeout(60_000),
-      headers: { ...fetchHeaders, Authorization: `Basic ${basicAuth}` },
-    });
+  // If carrier bucket requires Basic Auth, retry with tenant or env Plivo credentials
+  if (!response.ok && (response.status === 401 || response.status === 403)) {
+    let plivoAuthId = process.env.PLIVO_AUTH_ID;
+    let plivoAuthToken = process.env.PLIVO_AUTH_TOKEN;
+
+    if (options.organizationId) {
+      try {
+        const plivoInteg = await getTenantIntegration(options.organizationId, 'plivo');
+        if (plivoInteg?.credentials?.authId && plivoInteg?.credentials?.authToken) {
+          plivoAuthId = plivoInteg.credentials.authId;
+          plivoAuthToken = plivoInteg.credentials.authToken;
+        }
+      } catch {}
+    }
+
+    if (plivoAuthId && plivoAuthToken) {
+      const basicAuth = Buffer.from(`${plivoAuthId}:${plivoAuthToken}`).toString('base64');
+      response = await fetch(url, {
+        cache: 'no-store',
+        redirect: 'error',
+        signal: AbortSignal.timeout(60_000),
+        headers: { ...fetchHeaders, Authorization: `Basic ${basicAuth}` },
+      });
+    }
   }
 
   if (!response.ok) {

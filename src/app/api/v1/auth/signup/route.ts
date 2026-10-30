@@ -115,25 +115,27 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Provision starter phone line: live Plivo carrier line
-      const activeLine = process.env.PLIVO_CALLER_ID || '+918065531234';
-      await tx.phoneNumber.create({
-        data: {
-          organizationId: org.id,
-          plivoAccountId: plivoAccount.id,
-          applicationId: app.id,
-          e164: activeLine,
-          countryIso: 'IN',
-          numberType: 'local',
-          status: 'active',
-          friendlyName: `Plivo Carrier Line (${activeLine})`,
-          recordCalls: true,
-          transcribeEnabled: true,
-          monthlyRental: '2.5000',
-          smsRate: '0.0000',
-          voiceRate: '0.0078',
-        },
-      });
+      // Provision starter phone line only in simulator mode or if an explicit caller ID is configured
+      if (process.env.TELEPHONY_MODE !== 'live' || process.env.PLIVO_CALLER_ID) {
+        const activeLine = process.env.PLIVO_CALLER_ID || '+14155550100';
+        await tx.phoneNumber.create({
+          data: {
+            organizationId: org.id,
+            plivoAccountId: plivoAccount.id,
+            applicationId: app.id,
+            e164: activeLine,
+            countryIso: activeLine.startsWith('+91') ? 'IN' : 'US',
+            numberType: 'local',
+            status: 'active',
+            friendlyName: `Starter Line (${activeLine})`,
+            recordCalls: true,
+            transcribeEnabled: true,
+            monthlyRental: '2.5000',
+            smsRate: '0.0000',
+            voiceRate: '0.0078',
+          },
+        });
+      }
 
       return { org, user, membership };
     });

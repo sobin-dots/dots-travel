@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
-import { sendWhatsAppMessage } from '@/lib/telephony/whatsapp/client';
+import { sendNotificationEmail } from '@/lib/email';
 
 export const runtime = 'nodejs';
 
@@ -29,6 +29,7 @@ export async function POST(
       return NextResponse.json({ api_id: 'not_found', error: 'Lead not found' }, { status: 404 });
     }
 
+    const recipientEmail = lead.customerEmail || lead.contact?.email || 'guest@voyages.test';
     const recipientPhone = lead.contact?.phone || '+14155550199';
     const guestName = lead.contact?.name || 'Valued Member';
     const nextDestination = suggestedDestination || 'the Amalfi Coast & Capri';
@@ -36,22 +37,22 @@ export async function POST(
     let marketingText = '';
     if (campaignType === 'anniversary') {
       marketingText = 
-        `🥂 *Happy Travel Anniversary, ${guestName}!*\n\n` +
-        `It has been almost a year since your bespoke journey to *${lead.destination}*.\n\n` +
-        `As an esteemed VIP member, we have unlocked an exclusive *$${promotionalDiscount} Concierge Credit* toward your next private getaway.\n\n` +
-        `🌟 Recommended next escape: *${nextDestination}*\n\n` +
-        `Reply to this chat to explore curated dates, private villas, and personalized flight schedules!`;
+        `Happy Travel Anniversary, ${guestName}!\n\n` +
+        `It has been almost a year since your bespoke journey to ${lead.destination}.\n\n` +
+        `As an esteemed VIP member, we have unlocked an exclusive $${promotionalDiscount} Concierge Credit toward your next private getaway.\n\n` +
+        `Recommended next escape: ${nextDestination}\n\n` +
+        `Reply to this email to explore curated dates, private villas, and personalized flight schedules!`;
     } else {
       marketingText = 
-        `🌴 *Exclusive Holiday Season Preview for ${guestName}*\n\n` +
-        `Planning your upcoming holiday retreat? We have secured private allocations in *${nextDestination}* with complimentary suite upgrades.\n\n` +
-        `Enjoy an exclusive member credit of *$${promotionalDiscount}* on bookings made this month. Reply to connect with your private travel designer.`;
+        `Exclusive Holiday Season Preview for ${guestName}\n\n` +
+        `Planning your upcoming holiday retreat? We have secured private allocations in ${nextDestination} with complimentary suite upgrades.\n\n` +
+        `Enjoy an exclusive member credit of $${promotionalDiscount} on bookings made this month. Reply to connect with your private travel designer.`;
     }
 
-    const waRes = await sendWhatsAppMessage({
-      to: recipientPhone,
+    const emailRes = await sendNotificationEmail({
+      to: recipientEmail,
+      subject: `VIP Loyalty Reward: ${campaignType === 'anniversary' ? 'Happy Travel Anniversary' : 'Holiday Season Preview'}`,
       text: marketingText,
-      organizationId: auth!.organizationId,
     });
 
     const log = await db.automationLog.create({
@@ -59,16 +60,16 @@ export async function POST(
         organizationId: auth!.organizationId,
         leadId,
         type: `loyalty_${campaignType}`,
-        channel: 'whatsapp',
+        channel: 'email',
         scheduledFor: new Date(),
         executedAt: new Date(),
         status: 'sent',
-        recipient: recipientPhone,
+        recipient: recipientEmail,
         payload: {
           campaignType,
           promotionalDiscount,
           suggestedDestination: nextDestination,
-          whatsappResult: waRes,
+          emailResult: emailRes,
         },
       },
     });

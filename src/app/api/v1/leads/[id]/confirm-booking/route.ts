@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
-import { sendWhatsAppMessage } from '@/lib/telephony/whatsapp/client';
+import { sendNotificationEmail } from '@/lib/email';
 
 export const runtime = 'nodejs';
 
@@ -105,16 +105,17 @@ export async function POST(
       });
     }
 
-    // Notify Customer via WhatsApp of Confirmed Booking
-    const recipientPhone = lead.contact?.phone || '+14155550199';
-    await sendWhatsAppMessage({
-      to: recipientPhone,
-      text: `🎉 *Congratulations ${lead.contact?.name || 'Valued Guest'}!*\n\n` +
-        `Your trip to *${lead.destination}* is officially CONFIRMED!\n` +
-        `🔖 *Booking Reference:* ${bookingRef}\n` +
-        `✈️ *Trip:* ${lead.title}\n\n` +
-        `Your official Booking Voucher PDF and concierge briefing have been issued. Our operations fulfillment team is now securing all accommodations and ground transfers.`,
-      organizationId: auth!.organizationId,
+    // Notify Customer via Email of Confirmed Booking
+    const recipientEmail = lead.customerEmail || lead.contact?.email || 'guest@voyages.test';
+    await sendNotificationEmail({
+      to: recipientEmail,
+      subject: `Booking Confirmed (${bookingRef}): ${lead.title}`,
+      text:
+        `Congratulations ${lead.contact?.name || 'Valued Guest'}!\n\n` +
+        `Your trip to ${lead.destination} is officially CONFIRMED!\n` +
+        `Booking Reference: ${bookingRef}\n` +
+        `Trip: ${lead.title}\n\n` +
+        `Your official Booking Voucher and concierge briefing have been issued. Our operations fulfillment team is now securing all accommodations and ground transfers.`,
     });
 
     // Operational Handover Log

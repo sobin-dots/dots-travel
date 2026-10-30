@@ -21,7 +21,6 @@ export function CallDetailDrawer() {
     handleTriggerCallTranscription,
     transcribingRecId,
     transcribingProvider,
-    handleRefetchPlivoTranscriptionForCall,
     handleGenerateItinerary,
     generatingItineraryCallId,
     openItineraryIntakeModal,
@@ -30,6 +29,31 @@ export function CallDetailDrawer() {
 
   const openaiInteg = integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai');
   const configuredTranscriptionModel = openaiInteg?.metadata?.model || 'gpt-4o-transcribe';
+  const autoTriggeredCallRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    if (!selectedCallDetail?.id) return;
+    const hasRecording = (selectedCallDetail.recordings?.length || 0) > 0;
+    const hasOpenAiTranscript = selectedCallDetail.transcriptions?.some(
+      (t: any) => t.source === 'openai_whisper' && t.text && t.text.trim().length > 0
+    );
+    if (
+      hasRecording &&
+      !hasOpenAiTranscript &&
+      transcribingProvider !== 'openai' &&
+      autoTriggeredCallRef.current !== selectedCallDetail.id
+    ) {
+      autoTriggeredCallRef.current = selectedCallDetail.id;
+      handleTriggerCallTranscription(selectedCallDetail.id, 'openai', configuredTranscriptionModel, true);
+    }
+  }, [
+    selectedCallDetail?.id,
+    selectedCallDetail?.recordings?.length,
+    selectedCallDetail?.transcriptions?.length,
+    transcribingProvider,
+    configuredTranscriptionModel,
+    handleTriggerCallTranscription,
+  ]);
 
   if (!selectedCallDetail) return null;
 
@@ -228,7 +252,7 @@ export function CallDetailDrawer() {
             </div>
 
             <div className="flex items-center gap-1.5 flex-wrap">
-              {/* Option to Transcribe with Primary OpenAI Model */}
+              {/* Transcribe directly with Primary OpenAI Model */}
               <button
                 type="button"
                 onClick={() => {
@@ -243,7 +267,7 @@ export function CallDetailDrawer() {
                   (transcribingProvider === 'openai')
                 }
                 className="text-[10px] bg-gradient-to-r from-emerald-600/20 to-teal-600/20 hover:from-emerald-600/30 hover:to-teal-600/30 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 flex items-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
-                title={`Transcribe call recording with tenant-configured primary model (${configuredTranscriptionModel})`}
+                title={`Transcribe call recording directly with OpenAI (${configuredTranscriptionModel})`}
               >
                 <Sparkles className="w-3 h-3 text-emerald-400" />
                 <span>
@@ -252,51 +276,18 @@ export function CallDetailDrawer() {
                     : `OpenAI (${configuredTranscriptionModel})`}
                 </span>
               </button>
-
-              {/* Option to Refetch from Plivo Carrier */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (selectedCallDetail.recordings?.length > 0) {
-                    handleTriggerTranscription(selectedCallDetail.recordings[0].id, 'plivo');
-                  } else {
-                    handleRefetchPlivoTranscriptionForCall(selectedCallDetail.id);
-                  }
-                }}
-                disabled={
-                  (transcribingRecId && selectedCallDetail.recordings?.[0]?.id === transcribingRecId) ||
-                  (transcribingProvider === 'plivo')
-                }
-                className="text-[10px] bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 px-2.5 py-1 rounded border border-blue-500/30 flex items-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
-                title="Refetch transcription directly from Plivo carrier REST API"
-              >
-                <RefreshCw className={`w-3 h-3 text-blue-400 ${transcribingProvider === 'plivo' ? 'animate-spin' : ''}`} />
-                <span>
-                  {transcribingProvider === 'plivo' ? 'Fetching Plivo...' : 'Plivo ASR'}
-                </span>
-              </button>
             </div>
           </div>
 
           {selectedCallDetail.transcriptions?.length > 0 ? (
             selectedCallDetail.transcriptions.map((tr: any) => {
-              const isWhisper = tr.source === 'openai_whisper';
-              const isPlivo = tr.source === 'plivo' || tr.source === 'callback' || tr.source === 'on_demand';
-              const modelLabel = isWhisper
-                ? (tr.rawPayload?.model || configuredTranscriptionModel)
-                : 'Carrier ASR';
+              const modelLabel = tr.rawPayload?.model || configuredTranscriptionModel;
               return (
                 <div key={tr.id} className="pt-2 space-y-1.5">
                   <div className="flex items-center justify-between text-[10px]">
-                    <span className={`px-2 py-0.5 rounded font-mono font-medium border flex items-center gap-1 ${
-                      isWhisper
-                        ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/60'
-                        : isPlivo
-                        ? 'bg-blue-950/80 text-blue-400 border-blue-800/60'
-                        : 'bg-zinc-800 text-zinc-300 border-zinc-700'
-                    }`}>
-                      {isWhisper && <Sparkles className="w-2.5 h-2.5 text-emerald-400" />}
-                      <span>{isWhisper ? `OpenAI (${modelLabel})` : 'Plivo Carrier ASR'}</span>
+                    <span className="px-2 py-0.5 rounded font-mono font-medium border flex items-center gap-1 bg-emerald-950/80 text-emerald-400 border-emerald-800/60">
+                      <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
+                      <span>{`OpenAI (${modelLabel})`}</span>
                     </span>
                     <span className="text-zinc-500 font-mono">
                       {tr.wordCount || 0} words • {tr.status}
@@ -313,7 +304,7 @@ export function CallDetailDrawer() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-indigo-400 font-semibold text-xs">
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Ready for Transcription</span>
+                  <span>{transcribingProvider === 'openai' ? 'Transcribing with OpenAI...' : 'Ready for OpenAI Transcription'}</span>
                 </div>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800/50 flex items-center gap-1.5">
                   <Sparkles className="w-3 h-3 text-emerald-400" />
@@ -322,8 +313,8 @@ export function CallDetailDrawer() {
               </div>
 
               <p className="text-[11px] text-zinc-400 leading-relaxed text-center">
-                Generate high-accuracy transcription using your primary OpenAI model{' '}
-                <span className="text-emerald-400 font-mono font-semibold">({configuredTranscriptionModel})</span> configured in Settings, or fetch carrier ASR.
+                Generate high-accuracy transcription directly using your primary OpenAI model{' '}
+                <span className="text-emerald-400 font-mono font-semibold">({configuredTranscriptionModel})</span> configured in Settings.
               </p>
               <div className="pt-1 flex justify-center gap-2 flex-wrap">
                 <button
@@ -345,25 +336,9 @@ export function CallDetailDrawer() {
                       : `Transcribe with OpenAI (${configuredTranscriptionModel})`}
                   </span>
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (selectedCallDetail.recordings?.length > 0) {
-                      handleTriggerTranscription(selectedCallDetail.recordings[0].id, 'plivo');
-                    } else {
-                      handleRefetchPlivoTranscriptionForCall(selectedCallDetail.id);
-                    }
-                  }}
-                  disabled={transcribingProvider === 'plivo'}
-                  className="px-3.5 py-2 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 font-semibold text-xs flex items-center gap-2 transition disabled:opacity-50 cursor-pointer"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${transcribingProvider === 'plivo' ? 'animate-spin' : ''}`} />
-                  <span>{transcribingProvider === 'plivo' ? 'Fetching Plivo...' : 'Fetch Plivo ASR'}</span>
-                </button>
               </div>
               <div className="pt-1 flex items-center justify-between border-t border-zinc-800/60 text-[10px] text-zinc-500">
-                <span>Auto-checking transcription webhook</span>
+                <span>Direct OpenAI Speech-to-Text</span>
                 <button
                   type="button"
                   onClick={() => refreshCallDetail(selectedCallDetail.id)}

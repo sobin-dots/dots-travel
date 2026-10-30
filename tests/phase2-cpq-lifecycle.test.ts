@@ -2,8 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '../src/lib/db';
 import { extractTripParametersFromTranscript, generateItineraryFromTranscript } from '../src/lib/deepseek';
 import { generateCustomerQuotationPDF, generateBookingVoucherPDF } from '../src/lib/pdf-generator';
-import { sendWhatsAppMessage } from '../src/lib/telephony/whatsapp/client';
-import { saveTenantIntegration, getTenantIntegration } from '../src/lib/integrations/credentials-manager';
+import { sendNotificationEmail } from '../src/lib/email';
 
 describe('Phase 2 CPQ, Omnichannel & Lifecycle Engine (P2-01 - P2-23)', () => {
   let org: any;
@@ -378,40 +377,20 @@ describe('Phase 2 CPQ, Omnichannel & Lifecycle Engine (P2-01 - P2-23)', () => {
     expect(priceDiff).not.toBe(0);
   });
 
-  // ─── P2-10: WhatsApp Business Platform Integration ──────────────────────────
-  it('P2-10: saves encrypted Meta WhatsApp Cloud API credentials and sends simulated message', async () => {
-    const saveRes = await saveTenantIntegration(org.id, {
-      provider: 'whatsapp',
-      credentials: {
-        phoneNumberId: '109283746192834',
-        wabaId: 'waba_991823712',
-        accessToken: 'test_meta_permanent_token_xyz',
-      },
-      metadata: {
-        displayName: 'Voyages Luxury Concierge',
-      },
-    });
-
-    expect(saveRes.verification.valid).toBe(true);
-
-    const integ = await getTenantIntegration(org.id, 'whatsapp');
-    expect(integ).toBeDefined();
-    expect(integ?.credentials.phoneNumberId).toBe('109283746192834');
-
-    // Test WhatsApp dispatch client
-    const sendResult = await sendWhatsAppMessage({
-      to: '+14155550199',
-      text: 'Hello from Plivo Travel Platform WhatsApp Cloud API!',
-      organizationId: org.id,
+  // ─── P2-11: Email Notification Dispatch ────────────────────────────────────
+  it('P2-11: dispatches transactional notification email via sendNotificationEmail', async () => {
+    const sendResult = await sendNotificationEmail({
+      to: contact.email,
+      subject: 'Your Travel Quotation is Ready',
+      text: 'Hello from Plivo Travel Platform Email Concierge!',
     });
 
     expect(sendResult.success).toBe(true);
-    expect(sendResult.simulated).toBe(true);
-    expect(sendResult.messageId).toContain('wamid');
+    expect(sendResult.id).toBeDefined();
   });
 
-  // ─── P2-12, P2-13, P2-14, P2-15: Multichannel Dispatch & Follow-Up Drips ─────
-  it('P2-12 & P2-13: schedules automated follow-up sequences across WhatsApp and Email', async () => {
+  // ─── P2-12, P2-13, P2-14, P2-15: Email Dispatch & Follow-Up Drips ───────────
+  it('P2-12 & P2-13: schedules automated follow-up sequences across Email', async () => {
     const now = Date.now();
     const scheduledLogs = await db.automationLog.createMany({
       data: [
@@ -419,20 +398,20 @@ describe('Phase 2 CPQ, Omnichannel & Lifecycle Engine (P2-01 - P2-23)', () => {
           organizationId: org.id,
           leadId: lead.id,
           type: 'customer_drip_day1',
-          channel: 'whatsapp',
+          channel: 'email',
           scheduledFor: new Date(now + 24 * 3600 * 1000),
           status: 'scheduled',
-          recipient: contact.phone,
+          recipient: contact.email,
           payload: { message: 'Day 1 Check-in' },
         },
         {
           organizationId: org.id,
           leadId: lead.id,
           type: 'customer_drip_day3',
-          channel: 'whatsapp',
+          channel: 'email',
           scheduledFor: new Date(now + 3 * 24 * 3600 * 1000),
           status: 'scheduled',
-          recipient: contact.phone,
+          recipient: contact.email,
           payload: { message: 'Day 3 Availability Reminder' },
         },
         {
@@ -599,11 +578,11 @@ describe('Phase 2 CPQ, Omnichannel & Lifecycle Engine (P2-01 - P2-23)', () => {
         organizationId: org.id,
         leadId: lead.id,
         type: 'predeparture_t7',
-        channel: 'whatsapp',
+        channel: 'email',
         scheduledFor: new Date(),
         executedAt: new Date(),
         status: 'sent',
-        recipient: contact.phone,
+        recipient: contact.email,
         payload: {
           milestone: 'T-7',
           weather: '28°C Sunny',
@@ -648,11 +627,11 @@ describe('Phase 2 CPQ, Omnichannel & Lifecycle Engine (P2-01 - P2-23)', () => {
         organizationId: org.id,
         leadId: lead.id,
         type: 'loyalty_anniversary',
-        channel: 'whatsapp',
+        channel: 'email',
         scheduledFor: new Date(),
         executedAt: new Date(),
         status: 'sent',
-        recipient: contact.phone,
+        recipient: contact.email,
         payload: {
           campaignType: 'anniversary',
           promotionalDiscount: 500,

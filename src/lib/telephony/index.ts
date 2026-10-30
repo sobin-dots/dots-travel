@@ -71,7 +71,7 @@ export async function getTenantTelephonyProvider(
   }
 
   // Fallback to server env only if TELEPHONY_MODE is simulator or development fallback
-  if (process.env.PLIVO_AUTH_ID && process.env.PLIVO_AUTH_TOKEN) {
+  if (process.env.TELEPHONY_MODE !== 'live' && process.env.PLIVO_AUTH_ID && process.env.PLIVO_AUTH_TOKEN) {
     return new PlivoProvider(process.env.PLIVO_AUTH_ID, process.env.PLIVO_AUTH_TOKEN);
   }
 

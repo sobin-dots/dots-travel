@@ -158,7 +158,7 @@ export async function POST(
         leadId,
         version: nextVersion,
         status: 'draft',
-        currency: 'USD',
+        currency: body.currency || 'INR',
         supplierNetTotal: netCost,
         marginType: mType,
         marginValue: mVal,
@@ -173,6 +173,15 @@ export async function POST(
           : approvalNote || `Margin (${effectiveMarginPct.toFixed(1)}%) below required floor guardrail (${floorMin}%). Requires managerial override.`,
         snapshotJson: snapshotJson || null,
         validUntil: validUntil ? new Date(validUntil) : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    // Synchronize Lead targetBudget with the generated customer quotation finalSellingPrice
+    await db.lead.update({
+      where: { id: leadId },
+      data: {
+        targetBudget: Number(finalSellingPrice.toFixed(2)),
+        ...(lead.stage === 'new_inquiry' ? { stage: 'quote_prep' } : {}),
       },
     });
 

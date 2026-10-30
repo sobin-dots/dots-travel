@@ -97,11 +97,10 @@ interface ConsoleContextType {
   refreshCallDetail: (callId: string) => Promise<void>;
   transcribingRecId: string | null;
   setTranscribingRecId: (id: string | null) => void;
-  transcribingProvider: 'openai' | 'plivo' | null;
-  setTranscribingProvider: (provider: 'openai' | 'plivo' | null) => void;
-  handleTriggerTranscription: (recordingId: string, provider?: 'openai' | 'plivo', model?: string) => Promise<void>;
-  handleTriggerCallTranscription: (callId: string, provider?: 'openai' | 'plivo', model?: string) => Promise<void>;
-  handleRefetchPlivoTranscriptionForCall: (callId: string) => Promise<void>;
+  transcribingProvider: 'openai' | null;
+  setTranscribingProvider: (provider: 'openai' | null) => void;
+  handleTriggerTranscription: (recordingId: string, provider?: 'openai', model?: string, silent?: boolean) => Promise<void>;
+  handleTriggerCallTranscription: (callId: string, provider?: 'openai', model?: string, silent?: boolean) => Promise<void>;
   handleGenerateItinerary: (callId: string) => Promise<void>;
   generatingItineraryCallId: string | null;
   handleHangupLiveCall: (callId: string) => Promise<void>;
@@ -285,7 +284,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [selectedCallDetail, setSelectedCallDetail] = useState<any | null>(null);
   const [callDetailSyncing, setCallDetailSyncing] = useState<boolean>(false);
   const [transcribingRecId, setTranscribingRecId] = useState<string | null>(null);
-  const [transcribingProvider, setTranscribingProvider] = useState<'openai' | 'plivo' | null>(null);
+  const [transcribingProvider, setTranscribingProvider] = useState<'openai' | null>(null);
 
   // In-Browser Web Phone (WebRTC) state
   const [webPhoneStatus, setWebPhoneStatus] = useState<'idle' | 'logging_in' | 'ready' | 'calling' | 'ringing' | 'connected' | 'ended' | 'error'>('idle');
@@ -387,36 +386,102 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Helper to apply console state results uniformly and purge any undefined/empty lists
+  const applyFetchResults = (results: any[]) => {
+    const [numRes, callRes, threadRes, recRes, transRes, setRes, auditRes, staffRes, contactRes, leadRes, suppRes, orgsRes, integRes] = results;
+
+    if (numRes?.objects) {
+      setNumbers(numRes.objects);
+      setCallFromNumber(numRes.objects[0]?.id || '');
+    } else {
+      setNumbers([]);
+      setCallFromNumber('');
+    }
+
+    setCalls(callRes?.objects || []);
+
+    if (threadRes?.objects) {
+      setThreads(threadRes.objects);
+      setActiveThreadId(threadRes.objects[0]?.id || null);
+    } else {
+      setThreads([]);
+      setActiveThreadId(null);
+    }
+
+    setRecordings(recRes?.objects || []);
+    setTranscripts(transRes?.objects || []);
+
+    if (setRes?.organization) {
+      setSettings(setRes);
+      setCurrentOrg(setRes.organization);
+    } else {
+      setSettings(null);
+    }
+
+    setAuditLogs(auditRes?.objects || []);
+    setStaffList(staffRes?.objects || []);
+
+    if (contactRes?.objects) {
+      setContactsList(contactRes.objects);
+      setCallDestination(contactRes.objects[0]?.phone || '');
+    } else {
+      setContactsList([]);
+      setCallDestination('');
+    }
+
+    setLeadsList(leadRes?.objects || []);
+
+    if (suppRes?.objects) {
+      setSuppliersList(suppRes.objects);
+      setLeadSelectedSupplierId(suppRes.objects[0]?.id || '');
+    } else {
+      setSuppliersList([]);
+      setLeadSelectedSupplierId('');
+    }
+
+    if (orgsRes?.organizations) {
+      setOrganizationsList(orgsRes.organizations);
+    }
+
+    if (integRes && integRes.api_id !== 'auth_err' && integRes.api_id !== 'server_err') {
+      setIntegrationsSummary(integRes);
+    } else {
+      setIntegrationsSummary(null);
+    }
+  };
+
+  const executeFetchWithToken = async (authToken: string) => {
+    const headers = {
+      Authorization: `Bearer ${authToken}`,
+      'ngrok-skip-browser-warning': 'true',
+    };
+    const results = await Promise.all([
+      fetch('/api/v1/numbers', { headers }).then((r) => r.json()),
+      fetch('/api/v1/calls', { headers }).then((r) => r.json()),
+      fetch('/api/v1/messages/threads', { headers }).then((r) => r.json()),
+      fetch('/api/v1/recordings', { headers }).then((r) => r.json()),
+      fetch('/api/v1/transcriptions', { headers }).then((r) => r.json()),
+      fetch('/api/v1/settings', { headers }).then((r) => r.json()),
+      fetch('/api/v1/audit', { headers }).then((r) => r.json()),
+      fetch('/api/v1/users', { headers }).then((r) => r.json()),
+      fetch('/api/v1/contacts', { headers }).then((r) => r.json()),
+      fetch('/api/v1/leads', { headers }).then((r) => r.json()),
+      fetch('/api/v1/suppliers', { headers }).then((r) => r.json()),
+      fetch('/api/v1/organizations', { headers }).then((r) => r.json()),
+      fetch('/api/v1/settings/integrations', { headers }).then((r) => r.json()),
+    ]);
+    applyFetchResults(results);
+    return results;
+  };
+
   // Fetch Console Data when Bearer Token is ready (with auto-refresh on 401)
   const fetchData = async () => {
     let token: string = bearerToken || (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') || '' : '');
     if (!token) return;
     setLoading(true);
 
-    const executeFetch = async (authToken: string) => {
-      const headers = {
-        Authorization: `Bearer ${authToken}`,
-        'ngrok-skip-browser-warning': 'true',
-      };
-      return Promise.all([
-        fetch('/api/v1/numbers', { headers }).then((r) => r.json()),
-        fetch('/api/v1/calls', { headers }).then((r) => r.json()),
-        fetch('/api/v1/messages/threads', { headers }).then((r) => r.json()),
-        fetch('/api/v1/recordings', { headers }).then((r) => r.json()),
-        fetch('/api/v1/transcriptions', { headers }).then((r) => r.json()),
-        fetch('/api/v1/settings', { headers }).then((r) => r.json()),
-        fetch('/api/v1/audit', { headers }).then((r) => r.json()),
-        fetch('/api/v1/users', { headers }).then((r) => r.json()),
-        fetch('/api/v1/contacts', { headers }).then((r) => r.json()),
-        fetch('/api/v1/leads', { headers }).then((r) => r.json()),
-        fetch('/api/v1/suppliers', { headers }).then((r) => r.json()),
-        fetch('/api/v1/organizations', { headers }).then((r) => r.json()),
-        fetch('/api/v1/settings/integrations', { headers }).then((r) => r.json()),
-      ]);
-    };
-
     try {
-      let results = await executeFetch(token);
+      let results = await executeFetchWithToken(token);
 
       // If token expired (401 auth_err), attempt seamless token refresh
       if (results[0]?.api_id === 'auth_err' || results[5]?.api_id === 'auth_err') {
@@ -439,7 +504,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
                 localStorage.setItem('plivo_refresh_token', refreshData.refreshToken);
               }
               setBearerToken(token);
-              results = await executeFetch(token);
+              await executeFetchWithToken(token);
             } else {
               handleSignOut();
               return;
@@ -452,49 +517,6 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           handleSignOut();
           return;
         }
-      }
-
-      const [numRes, callRes, threadRes, recRes, transRes, setRes, auditRes, staffRes, contactRes, leadRes, suppRes, orgsRes, integRes] = results;
-
-      if (numRes.objects) {
-        setNumbers(numRes.objects);
-        if (numRes.objects[0] && !callFromNumber) {
-          setCallFromNumber(numRes.objects[0].id);
-        }
-      }
-      if (callRes.objects) setCalls(callRes.objects);
-      if (threadRes.objects) {
-        setThreads(threadRes.objects);
-        if (threadRes.objects[0] && !activeThreadId) {
-          setActiveThreadId(threadRes.objects[0].id);
-        }
-      }
-      if (recRes.objects) setRecordings(recRes.objects);
-      if (transRes.objects) setTranscripts(transRes.objects);
-      if (setRes.organization) {
-        setSettings(setRes);
-        setCurrentOrg(setRes.organization);
-      }
-      if (auditRes.objects) setAuditLogs(auditRes.objects);
-      if (staffRes.objects) setStaffList(staffRes.objects);
-      if (contactRes.objects) {
-        setContactsList(contactRes.objects);
-        if (contactRes.objects.length > 0 && !callDestination) {
-          setCallDestination(contactRes.objects[0].phone);
-        }
-      }
-      if (leadRes.objects) setLeadsList(leadRes.objects);
-      if (suppRes.objects) {
-        setSuppliersList(suppRes.objects);
-        if (suppRes.objects.length > 0 && !leadSelectedSupplierId) {
-          setLeadSelectedSupplierId(suppRes.objects[0].id);
-        }
-      }
-      if (orgsRes?.organizations) {
-        setOrganizationsList(orgsRes.organizations);
-      }
-      if (integRes?.integrations) {
-        setIntegrationsSummary(integRes);
       }
     } catch (err) {
       console.error('Data fetch error:', err);
@@ -528,6 +550,23 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
     try {
       setLoading(true);
+
+      // Instantly clear out old tenant state to guarantee complete isolation during switch
+      setNumbers([]);
+      setCalls([]);
+      setThreads([]);
+      setActiveThreadId(null);
+      setActiveThreadMessages([]);
+      setRecordings([]);
+      setTranscripts([]);
+      setAuditLogs([]);
+      setStaffList([]);
+      setContactsList([]);
+      setLeadsList([]);
+      setSuppliersList([]);
+      setSettings(null);
+      setIntegrationsSummary(null);
+
       const res = await fetch('/api/v1/organizations/switch', {
         method: 'POST',
         headers: {
@@ -553,6 +592,9 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           setCurrentUser(data.user);
         }
         setBearerToken(data.accessToken);
+
+        // Immediately load new organization's data with the new access token
+        await executeFetchWithToken(data.accessToken);
       } else {
         alert(data.error || 'Failed to switch organization');
       }
@@ -1187,17 +1229,16 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   const handleTriggerTranscription = async (
     recordingId: string,
-    provider: 'openai' | 'plivo' = 'openai',
-    model?: string
+    _provider: 'openai' = 'openai',
+    model?: string,
+    silent = false
   ) => {
     setTranscribingRecId(recordingId);
-    setTranscribingProvider(provider);
+    setTranscribingProvider('openai');
     try {
       const targetModel =
         model ||
-        (provider === 'openai'
-          ? integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai')?.metadata?.model
-          : undefined);
+        integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai')?.metadata?.model;
 
       const res = await fetch(`/api/v1/recordings/${recordingId}/transcribe`, {
         method: 'POST',
@@ -1206,27 +1247,29 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           Authorization: `Bearer ${bearerToken}`,
         },
         body: JSON.stringify({
-          provider,
+          provider: 'openai',
           ...(targetModel ? { model: targetModel } : {}),
         }),
       });
       const data = await res.json();
       if (res.ok) {
-        alert(
-          data.message ||
-            (provider === 'plivo'
-              ? 'Transcription refetched from Plivo successfully!'
-              : `Transcription generated successfully with OpenAI (${data.model || targetModel || 'primary model'})!`)
-        );
+        if (!silent) {
+          alert(
+            data.message ||
+              `Transcription generated successfully with OpenAI (${data.model || targetModel || 'primary model'})!`
+          );
+        }
         await fetchData();
         if (selectedCallDetail) {
           await refreshCallDetail(selectedCallDetail.id);
         }
-      } else {
+      } else if (!silent) {
         alert(data.error || 'Failed to transcribe recording');
       }
     } catch (err: any) {
-      alert(err.message || 'Transcription request failed');
+      if (!silent) {
+        alert(err.message || 'Transcription request failed');
+      }
     } finally {
       setTranscribingRecId(null);
       setTranscribingProvider(null);
@@ -1235,16 +1278,15 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   const handleTriggerCallTranscription = async (
     callId: string,
-    provider: 'openai' | 'plivo' = 'openai',
-    model?: string
+    _provider: 'openai' = 'openai',
+    model?: string,
+    silent = false
   ) => {
-    setTranscribingProvider(provider);
+    setTranscribingProvider('openai');
     try {
       const targetModel =
         model ||
-        (provider === 'openai'
-          ? integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai')?.metadata?.model
-          : undefined);
+        integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai')?.metadata?.model;
 
       const res = await fetch(`/api/v1/calls/${callId}/transcribe`, {
         method: 'POST',
@@ -1253,51 +1295,27 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           Authorization: `Bearer ${bearerToken}`,
         },
         body: JSON.stringify({
-          provider,
+          provider: 'openai',
           ...(targetModel ? { model: targetModel } : {}),
         }),
       });
       const data = await res.json();
       if (res.ok) {
-        alert(
-          data.message ||
-            (provider === 'plivo'
-              ? 'Transcription refetched from Plivo successfully!'
-              : `Transcription generated successfully with OpenAI (${data.model || targetModel || 'primary model'})!`)
-        );
+        if (!silent) {
+          alert(
+            data.message ||
+              `Transcription generated successfully with OpenAI (${data.model || targetModel || 'primary model'})!`
+          );
+        }
         await fetchData();
         await refreshCallDetail(callId);
-      } else {
+      } else if (!silent) {
         alert(data.error || 'Failed to trigger call transcription');
       }
     } catch (err: any) {
-      alert(err.message || 'Call transcription request failed');
-    } finally {
-      setTranscribingProvider(null);
-    }
-  };
-
-  const handleRefetchPlivoTranscriptionForCall = async (callId: string) => {
-    setTranscribingProvider('plivo');
-    try {
-      const res = await fetch(`/api/v1/calls/${callId}/transcribe`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({ provider: 'plivo' }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(data.message || 'Transcription refetched from Plivo successfully!');
-        await fetchData();
-        await refreshCallDetail(callId);
-      } else {
-        alert(data.error || 'Failed to refetch Plivo transcription');
+      if (!silent) {
+        alert(err.message || 'Call transcription request failed');
       }
-    } catch (err: any) {
-      alert(err.message || 'Plivo transcription request failed');
     } finally {
       setTranscribingProvider(null);
     }
@@ -1481,13 +1499,19 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       });
       const data = await res.json();
       if (res.ok) {
+        const revisedLead = data.lead;
+        const newItinerary = revisedLead?.itinerary || data.itinerary || selectedLead.itinerary || '';
+        const newRevisionNotes = revisedLead?.revisionNotes || data.revisionNotes || selectedLead.revisionNotes || '';
+
         setSelectedLead((prev: any) => ({
-          ...prev,
-          itinerary: data.itinerary,
-          revisionNotes: data.revisionNotes,
-          status: 'revision_requested',
+          ...(prev || {}),
+          ...(revisedLead || {}),
+          itinerary: newItinerary,
+          revisionNotes: newRevisionNotes,
+          status: revisedLead?.status || 'revision_requested',
         }));
-        fetchData();
+        setLeadRevisionNotes('');
+        await fetchData();
         alert('Itinerary revised successfully!');
       } else {
         alert(data.error || 'Failed to revise itinerary');
@@ -1669,7 +1693,6 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         setTranscribingProvider,
         handleTriggerTranscription,
         handleTriggerCallTranscription,
-        handleRefetchPlivoTranscriptionForCall,
         handleGenerateItinerary,
         generatingItineraryCallId,
         showItineraryIntakeModal,

@@ -56,7 +56,14 @@ export function LeadDetailDrawer() {
   } = useConsole();
 
   // Active Drawer Tab
-  const [activeTab, setActiveTab] = useState<'itinerary' | 'procurement' | 'pricing' | 'flights' | 'dispatch' | 'lifecycle'>('itinerary');
+  const [activeTab, setActiveTab] = useState<'itinerary' | 'send_itinerary' | 'procurement' | 'pricing' | 'flights' | 'dispatch' | 'lifecycle'>('itinerary');
+
+  // Send Itinerary (Customer & Supplier) tab state
+  const [sendingToCustomer, setSendingToCustomer] = useState(false);
+  const [sendingToSupplier, setSendingToSupplier] = useState(false);
+  const [sendingToBoth, setSendingToBoth] = useState(false);
+  const [sendItineraryMsg, setSendItineraryMsg] = useState('');
+  const [sendItineraryError, setSendItineraryError] = useState('');
 
   // Procurement / Supplier Quotes state (P2-01, P2-02)
   const [supplierQuotes, setSupplierQuotes] = useState<any[]>([]);
@@ -64,7 +71,7 @@ export function LeadDetailDrawer() {
   const [loadingQuotes, setLoadingQuotes] = useState(false);
   const [showAddQuoteForm, setShowAddQuoteForm] = useState(false);
   const [newQuoteSupplierId, setNewQuoteSupplierId] = useState('');
-  const [newQuoteCost, setNewQuoteCost] = useState(5500);
+  const [newQuoteCost, setNewQuoteCost] = useState<string>('');
   const [newQuoteHotelTier, setNewQuoteHotelTier] = useState('luxury_5star');
   const [newQuoteInclusions, setNewQuoteInclusions] = useState('Luxury Suite, VIP airport transfers, gourmet breakfast');
   const [newQuoteCancellation, setNewQuoteCancellation] = useState('Full refund up to 14 days before arrival');
@@ -75,7 +82,7 @@ export function LeadDetailDrawer() {
   const [marginValue, setMarginValue] = useState<number>(18.0);
   const [taxPercentage, setTaxPercentage] = useState<number>(5.0);
   const [floorGuardrailMin, setFloorGuardrailMin] = useState<number>(10.0);
-  const [pricingNetCost, setPricingNetCost] = useState<number>(5500);
+  const [pricingNetCost, setPricingNetCost] = useState<number>(0);
   const [savingQuote, setSavingQuote] = useState(false);
 
   // Flights state (P2-05)
@@ -98,9 +105,8 @@ export function LeadDetailDrawer() {
   const [savingManualFlight, setSavingManualFlight] = useState(false);
   const [flightActionMsg, setFlightActionMsg] = useState('');
 
-  // Dispatch & Omnichannel state (P2-10, P2-11, P2-12, P2-13, P2-14, P2-15, P2-16)
+  // Dispatch & Email Automation state (P2-11, P2-12, P2-13, P2-14, P2-15, P2-16)
   const [dispatching, setDispatching] = useState(false);
-  const [sendWhatsApp, setSendWhatsApp] = useState(true);
   const [sendEmail, setSendEmail] = useState(true);
   const [scheduleFollowUps, setScheduleFollowUps] = useState(true);
   const [dispatchSuccessMsg, setDispatchSuccessMsg] = useState('');
@@ -111,6 +117,106 @@ export function LeadDetailDrawer() {
   const [paymentMilestones, setPaymentMilestones] = useState<any[]>([]);
   const [visaChecklist, setVisaChecklist] = useState<any[]>([]);
   const [lifecycleSuccessMsg, setLifecycleSuccessMsg] = useState('');
+
+  const computeReturnDateFromDep = (depStr: string, days: number): string => {
+    if (!depStr) return '';
+    const d = new Date(depStr);
+    if (isNaN(d.getTime())) return '';
+    d.setUTCDate(d.getUTCDate() + Math.max(0, Number(days || 1) - 1));
+    return d.toISOString().split('T')[0];
+  };
+
+  // Trip Parameters editing state
+  const [editBudget, setEditBudget] = useState<string>('');
+  const [editDepartureDate, setEditDepartureDate] = useState<string>(
+    selectedLead?.departureDate ? new Date(selectedLead.departureDate).toISOString().split('T')[0] : ''
+  );
+  const [editReturnDate, setEditReturnDate] = useState<string>(
+    selectedLead?.returnDate ? new Date(selectedLead.returnDate).toISOString().split('T')[0] : ''
+  );
+  const [editDurationDays, setEditDurationDays] = useState<number>(selectedLead?.durationDays || 5);
+  const [editDestination, setEditDestination] = useState<string>(selectedLead?.destination || '');
+  const [editAdults, setEditAdults] = useState<number>(selectedLead?.headcountAdults || 2);
+  const [editChildren, setEditChildren] = useState<number>(selectedLead?.headcountChildren || 0);
+  const [editHotelTier, setEditHotelTier] = useState<string>(selectedLead?.hotelTier || 'luxury_5star');
+  const [savingParams, setSavingParams] = useState(false);
+  const [paramsSuccessMsg, setParamsSuccessMsg] = useState('');
+
+  // Synchronize state when selectedLead changes
+  useEffect(() => {
+    if (!selectedLead) return;
+    const depStr = selectedLead.departureDate
+      ? new Date(selectedLead.departureDate).toISOString().split('T')[0]
+      : '';
+    const dur = selectedLead.durationDays || 5;
+    const retStr = selectedLead.returnDate
+      ? new Date(selectedLead.returnDate).toISOString().split('T')[0]
+      : computeReturnDateFromDep(depStr, dur);
+
+    setEditBudget(selectedLead.targetBudget ? String(Number(selectedLead.targetBudget)) : '');
+    setEditDepartureDate(depStr);
+    setEditReturnDate(retStr);
+    setEditDurationDays(dur);
+    setEditDestination(selectedLead.destination || '');
+    setEditAdults(selectedLead.headcountAdults || 2);
+    setEditChildren(selectedLead.headcountChildren || 0);
+    setEditHotelTier(selectedLead.hotelTier || 'luxury_5star');
+    setParamsSuccessMsg('');
+    setSendItineraryMsg('');
+    setSendItineraryError('');
+  }, [selectedLead?.id, selectedLead?.updatedAt]);
+
+  // Reset tab and quote states when switching to a different lead
+  useEffect(() => {
+    setActiveTab('itinerary');
+    setSupplierQuotes(Array.isArray(selectedLead?.supplierQuotations) ? selectedLead.supplierQuotations : []);
+    setCustomerQuotes(Array.isArray(selectedLead?.quotations) ? selectedLead.quotations : []);
+    setComparisonMatrix(null);
+    setPricingNetCost(0);
+  }, [selectedLead?.id]);
+
+  const handleSaveTripParams = async () => {
+    if (!selectedLead || !bearerToken) return;
+    setSavingParams(true);
+    setParamsSuccessMsg('');
+    try {
+      const payload: Record<string, any> = {
+        departureDate: editDepartureDate || null,
+        returnDate: editReturnDate || computeReturnDateFromDep(editDepartureDate, editDurationDays) || null,
+        durationDays: editDurationDays,
+        destination: editDestination,
+        headcountAdults: editAdults,
+        headcountChildren: editChildren,
+        hotelTier: editHotelTier,
+        currency: 'INR',
+      };
+      if (supplierQuotes.length > 0 && editBudget !== '') {
+        payload.targetBudget = Number(editBudget);
+      }
+
+      const res = await fetch(`/api/v1/leads/${selectedLead.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok && data.lead) {
+        setSelectedLead(data.lead);
+        setParamsSuccessMsg('✓ Trip parameters updated! Proposal PDF synchronized.');
+        if (fetchData) fetchData();
+        setTimeout(() => setParamsSuccessMsg(''), 4000);
+      } else {
+        alert(data.error || 'Failed to update parameters');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error updating parameters');
+    } finally {
+      setSavingParams(false);
+    }
+  };
 
   // Fetch contextual lead data on drawer open or tab switch
   useEffect(() => {
@@ -133,8 +239,11 @@ export function LeadDetailDrawer() {
         if (isMounted) {
           if (qRes.ok) {
             const data = await qRes.json();
-            setSupplierQuotes(data.quotes || []);
-            if (data.quotes?.[0]?.totalNetCost) setPricingNetCost(Number(data.quotes[0].totalNetCost));
+            const fetchedQuotes = data.quotes || [];
+            setSupplierQuotes(fetchedQuotes);
+            const selectedOrLatest =
+              fetchedQuotes.find((q: any) => q.status === 'selected') || fetchedQuotes[0];
+            setPricingNetCost(selectedOrLatest?.totalNetCost ? Number(selectedOrLatest.totalNetCost) : 0);
           }
           if (matrixRes.ok) {
             const data = await matrixRes.json();
@@ -142,7 +251,11 @@ export function LeadDetailDrawer() {
           }
           if (custQRes.ok) {
             const data = await custQRes.json();
-            setCustomerQuotes(data.quotations || []);
+            const fetchedCustQuotes = data.quotations || [];
+            setCustomerQuotes(fetchedCustQuotes);
+            if (fetchedCustQuotes[0]?.finalSellingPrice != null) {
+              setEditBudget(String(Number(fetchedCustQuotes[0].finalSellingPrice)));
+            }
           }
           if (flightsRes.ok) {
             const data = await flightsRes.json();
@@ -192,6 +305,11 @@ export function LeadDetailDrawer() {
       alert('Please select a supplier');
       return;
     }
+    const parsedNetCost = Number(newQuoteCost);
+    if (!parsedNetCost || parsedNetCost <= 0) {
+      alert('Please enter a valid Total Net Cost from the supplier');
+      return;
+    }
 
     try {
       const res = await fetch(`/api/v1/leads/${selectedLead.id}/supplier-quotes`, {
@@ -202,27 +320,161 @@ export function LeadDetailDrawer() {
         },
         body: JSON.stringify({
           supplierId: newQuoteSupplierId,
-          totalNetCost: Number(newQuoteCost),
+          totalNetCost: parsedNetCost,
           hotelTier: newQuoteHotelTier,
           cancellationPolicy: newQuoteCancellation,
           inclusions: newQuoteInclusions.split(',').map((s) => s.trim()),
           lineItems: [
-            { category: 'accommodation', description: 'Curated Hotel Accommodations', unitCost: newQuoteCost * 0.7, totalCost: newQuoteCost * 0.7 },
-            { category: 'transfer', description: 'Executive Ground Transfers', unitCost: newQuoteCost * 0.15, totalCost: newQuoteCost * 0.15 },
-            { category: 'activity', description: 'Curated VIP Excursions & Guides', unitCost: newQuoteCost * 0.15, totalCost: newQuoteCost * 0.15 },
+            { category: 'accommodation', description: 'Curated Hotel Accommodations', unitCost: parsedNetCost * 0.7, totalCost: parsedNetCost * 0.7 },
+            { category: 'transfer', description: 'Executive Ground Transfers', unitCost: parsedNetCost * 0.15, totalCost: parsedNetCost * 0.15 },
+            { category: 'activity', description: 'Curated VIP Excursions & Guides', unitCost: parsedNetCost * 0.15, totalCost: parsedNetCost * 0.15 },
           ],
         }),
       });
 
       if (res.ok) {
         setShowAddQuoteForm(false);
+        setNewQuoteCost('');
         const data = await res.json();
-        setSupplierQuotes([data.quote, ...supplierQuotes]);
-        setPricingNetCost(Number(newQuoteCost));
-        alert('Supplier quotation recorded successfully!');
+        const updatedSupplierQuotes = [data.quote, ...supplierQuotes];
+        setSupplierQuotes(updatedSupplierQuotes);
+        setPricingNetCost(parsedNetCost);
+        setSelectedLead((prev: any) => (prev ? { ...prev, supplierQuotations: updatedSupplierQuotes } : prev));
+        // Refresh comparison matrix and global leads list immediately
+        const matrixRes = await fetch(`/api/v1/leads/${selectedLead.id}/supplier-quotes/compare`, {
+          headers: { Authorization: `Bearer ${bearerToken}` },
+        });
+        if (matrixRes.ok) {
+          const mData = await matrixRes.json();
+          setComparisonMatrix(mData.matrix || null);
+        }
+        if (fetchData) await fetchData();
+        alert('Supplier quotation recorded! You can now click "Generate Quote" in the Pricing & Margins tab.');
       }
     } catch (err: any) {
       alert(err.message || 'Error recording quotation');
+    }
+  };
+
+  // Handler: Send Revised / New Itinerary PDF to Customer via Email
+  const handleSendItineraryToCustomer = async () => {
+    if (!selectedLead || !bearerToken) return;
+    if (!leadCustomerEmail || !leadCustomerEmail.includes('@')) {
+      setSendItineraryError('Please enter a valid customer email address.');
+      return;
+    }
+    setSendingToCustomer(true);
+    setSendItineraryMsg('');
+    setSendItineraryError('');
+    try {
+      const res = await fetch(`/api/v1/leads/${selectedLead.id}/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`,
+        },
+        body: JSON.stringify({
+          target: 'customer',
+          customerEmail: leadCustomerEmail,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        if (data.lead) {
+          setSelectedLead((prev: any) => ({ ...prev, ...data.lead }));
+        }
+        setSendItineraryMsg(data.message || `Revised/new Itinerary PDF attached and sent to customer (${leadCustomerEmail}) via email.`);
+        if (fetchData) fetchData();
+      } else {
+        setSendItineraryError(data.error || 'Failed to send itinerary email to customer.');
+      }
+    } catch (err: any) {
+      setSendItineraryError(err.message || 'Error sending itinerary email to customer.');
+    } finally {
+      setSendingToCustomer(false);
+    }
+  };
+
+  // Handler: Send Itinerary PDF to Supplier via Email to Request Quote
+  const handleSendItineraryToSupplier = async () => {
+    if (!selectedLead || !bearerToken) return;
+    if (!leadSelectedSupplierId) {
+      setSendItineraryError('Please select a partner supplier first.');
+      return;
+    }
+    setSendingToSupplier(true);
+    setSendItineraryMsg('');
+    setSendItineraryError('');
+    try {
+      const res = await fetch(`/api/v1/leads/${selectedLead.id}/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`,
+        },
+        body: JSON.stringify({
+          target: 'supplier',
+          supplierId: leadSelectedSupplierId,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        if (data.lead) {
+          setSelectedLead((prev: any) => ({ ...prev, ...data.lead }));
+        }
+        setSendItineraryMsg(data.message || `Itinerary PDF attached and sent via email to supplier to get quote.`);
+        if (fetchData) fetchData();
+      } else {
+        setSendItineraryError(data.error || 'Failed to send itinerary email to supplier.');
+      }
+    } catch (err: any) {
+      setSendItineraryError(err.message || 'Error sending itinerary email to supplier.');
+    } finally {
+      setSendingToSupplier(false);
+    }
+  };
+
+  // Handler: Send Itinerary PDF to Both Customer & Supplier via Email
+  const handleSendItineraryToBoth = async () => {
+    if (!selectedLead || !bearerToken) return;
+    if (!leadCustomerEmail || !leadCustomerEmail.includes('@')) {
+      setSendItineraryError('Please enter a valid customer email address.');
+      return;
+    }
+    if (!leadSelectedSupplierId) {
+      setSendItineraryError('Please select a partner supplier to request a quote.');
+      return;
+    }
+    setSendingToBoth(true);
+    setSendItineraryMsg('');
+    setSendItineraryError('');
+    try {
+      const res = await fetch(`/api/v1/leads/${selectedLead.id}/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`,
+        },
+        body: JSON.stringify({
+          target: 'both',
+          customerEmail: leadCustomerEmail,
+          supplierId: leadSelectedSupplierId,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        if (data.lead) {
+          setSelectedLead((prev: any) => ({ ...prev, ...data.lead }));
+        }
+        setSendItineraryMsg(data.message || `Itinerary PDF dispatched to both customer (${leadCustomerEmail}) and supplier via email.`);
+        if (fetchData) fetchData();
+      } else {
+        setSendItineraryError(data.error || 'Failed to dispatch itinerary emails.');
+      }
+    } catch (err: any) {
+      setSendItineraryError(err.message || 'Error dispatching itinerary emails.');
+    } finally {
+      setSendingToBoth(false);
     }
   };
 
@@ -236,7 +488,12 @@ export function LeadDetailDrawer() {
       if (res.ok) {
         const data = await res.json();
         setPricingNetCost(Number(data.quote.totalNetCost));
-        setSupplierQuotes(supplierQuotes.map((q) => q.id === quoteId ? { ...q, status: 'selected' } : { ...q, status: 'rejected' }));
+        const updatedSupplierQuotes = supplierQuotes.map((q) =>
+          q.id === quoteId ? { ...q, status: 'selected' } : { ...q, status: 'rejected' }
+        );
+        setSupplierQuotes(updatedSupplierQuotes);
+        setSelectedLead((prev: any) => (prev ? { ...prev, supplierQuotations: updatedSupplierQuotes } : prev));
+        if (fetchData) await fetchData();
         alert(`Supplier quotation selected as winning quote!`);
       }
     } catch (err: any) {
@@ -265,7 +522,21 @@ export function LeadDetailDrawer() {
 
       if (res.ok) {
         const data = await res.json();
-        setCustomerQuotes([data.quotation, ...customerQuotes]);
+        const updatedCustQuotes = [data.quotation, ...customerQuotes];
+        setCustomerQuotes(updatedCustQuotes);
+        if (data.quotation?.finalSellingPrice != null) {
+          setEditBudget(String(Number(data.quotation.finalSellingPrice)));
+        }
+        setSelectedLead((prev: any) =>
+          prev
+            ? {
+                ...prev,
+                quotations: updatedCustQuotes,
+                targetBudget: data.quotation?.finalSellingPrice ?? prev.targetBudget,
+              }
+            : prev
+        );
+        if (fetchData) await fetchData();
         alert(`Customer quotation v${data.quotation.version} calculated and saved!`);
       } else {
         const err = await res.json();
@@ -436,7 +707,7 @@ export function LeadDetailDrawer() {
     }
   };
 
-  // Handler: Multichannel Quotation Dispatch (P2-12, P2-13, P2-14, P2-15)
+  // Handler: Email Quotation Dispatch (P2-12, P2-13, P2-14, P2-15)
   const handleDispatchQuotation = async () => {
     setDispatching(true);
     setDispatchSuccessMsg('');
@@ -448,7 +719,6 @@ export function LeadDetailDrawer() {
           Authorization: `Bearer ${bearerToken}`,
         },
         body: JSON.stringify({
-          sendWhatsApp,
           sendEmail,
           scheduleAutomatedFollowUps: scheduleFollowUps,
         }),
@@ -456,7 +726,7 @@ export function LeadDetailDrawer() {
 
       if (res.ok) {
         const data = await res.json();
-        setDispatchSuccessMsg(`Quotation dispatched successfully via ${sendWhatsApp ? 'WhatsApp ' : ''}${sendEmail ? '& Email ' : ''}with ${data.results?.automatedFollowUpsScheduled || 3} automated follow-ups scheduled!`);
+        setDispatchSuccessMsg(`Quotation dispatched successfully via Email with ${data.results?.automatedFollowUpsScheduled || 3} automated follow-ups scheduled!`);
         await fetchData();
       } else {
         const err = await res.json();
@@ -520,7 +790,7 @@ export function LeadDetailDrawer() {
         headers: { Authorization: `Bearer ${bearerToken}` },
       });
       if (res.ok) {
-        alert('Automated WhatsApp payment reminder dispatched with secure checkout link!');
+        alert('Automated Email payment reminder dispatched with secure checkout link!');
       }
     } catch (err: any) {
       alert(err.message || 'Error sending payment reminder');
@@ -559,7 +829,7 @@ export function LeadDetailDrawer() {
         body: JSON.stringify({ milestone }),
       });
       if (res.ok) {
-        alert(`Pre-departure ${milestone} briefing package dispatched to customer via WhatsApp!`);
+        alert(`Pre-departure ${milestone} briefing package dispatched to customer via Email!`);
       }
     } catch (err: any) {
       alert(err.message || 'Error dispatching briefing');
@@ -574,7 +844,7 @@ export function LeadDetailDrawer() {
         headers: { Authorization: `Bearer ${bearerToken}` },
       });
       if (res.ok) {
-        alert('Post-trip CSAT & NPS survey invitation dispatched via WhatsApp!');
+        alert('Post-trip CSAT & NPS survey invitation dispatched via Email!');
       }
     } catch (err: any) {
       alert(err.message || 'Error dispatching survey');
@@ -593,7 +863,7 @@ export function LeadDetailDrawer() {
         body: JSON.stringify({ campaignType: 'anniversary', promotionalDiscount: 500 }),
       });
       if (res.ok) {
-        alert('$500 VIP Member Anniversary reward dispatched to customer via WhatsApp!');
+        alert('$500 VIP Member Anniversary reward dispatched to customer via Email!');
       }
     } catch (err: any) {
       alert(err.message || 'Error dispatching loyalty reward');
@@ -616,14 +886,27 @@ export function LeadDetailDrawer() {
                   {selectedLead.stage || 'new_inquiry'}
                 </span>
               </div>
-              <div className="text-xs text-indigo-400 flex items-center gap-2 mt-0.5">
+              <div className="text-xs text-indigo-400 flex items-center gap-2 mt-0.5 flex-wrap">
                 <span>{selectedLead.destination || 'Unspecified'}</span>
                 <span className="text-zinc-600">•</span>
                 <span className="text-zinc-400 font-mono text-[11px]">#{selectedLead.id.slice(0, 8)}</span>
                 <span className="text-zinc-600">•</span>
-                <span className="text-emerald-400 font-mono font-semibold">
-                  Budget: ${selectedLead.targetBudget ? Number(selectedLead.targetBudget).toLocaleString() : '5,000'}
+                <span className="text-zinc-300 font-mono text-[11px]">
+                  {selectedLead.durationDays || 5} Days • {selectedLead.headcountAdults || 2} Adults
+                  {selectedLead.headcountChildren > 0 ? `, ${selectedLead.headcountChildren} Children` : ''}
                 </span>
+                {supplierQuotes.length > 0 && (
+                  <>
+                    <span className="text-zinc-600">•</span>
+                    <span className="text-emerald-400 font-mono font-semibold">
+                      {customerQuotes.length > 0 && customerQuotes[0]?.finalSellingPrice != null
+                        ? `Quote: ₹${Number(customerQuotes[0].finalSellingPrice).toLocaleString('en-IN')}`
+                        : `Supplier Net: ₹${Number(
+                            (supplierQuotes.find((q: any) => q.status === 'selected') || supplierQuotes[0])?.totalNetCost || 0
+                          ).toLocaleString('en-IN')}`}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -631,25 +914,27 @@ export function LeadDetailDrawer() {
           {/* Quick PDF Downloads & Close */}
           <div className="flex items-center gap-2 flex-wrap self-end md:self-auto">
             <a
-              href={`/api/v1/leads/${selectedLead.id}/quotation-pdf?token=${bearerToken}`}
+              href={`/api/v1/leads/${selectedLead.id}/pdf?token=${bearerToken}`}
               target="_blank"
               rel="noreferrer"
-              className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700 flex items-center gap-1.5 transition"
-              title="Download Branded Customer Quotation Proposal PDF"
+              className="text-xs bg-red-950/60 hover:bg-red-900/80 text-red-200 px-3 py-1.5 rounded-lg border border-red-700/60 flex items-center gap-1.5 transition font-semibold shadow-sm shadow-red-900/20"
+              title="Download Executive Itinerary Proposal PDF (without Sample Quotation)"
             >
-              <Download className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Proposal PDF (P2-06)</span>
+              <Download className="w-3.5 h-3.5 text-red-400" />
+              <span>Itinerary Proposal PDF</span>
             </a>
-            <a
-              href={`/api/v1/leads/${selectedLead.id}/voucher?token=${bearerToken}`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700 flex items-center gap-1.5 transition"
-              title="Download Official Booking Confirmation Voucher PDF"
-            >
-              <Download className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Voucher PDF (P2-18)</span>
-            </a>
+            {supplierQuotes.length > 0 && customerQuotes.length > 0 && (
+              <a
+                href={`/api/v1/leads/${selectedLead.id}/quotation-pdf?token=${bearerToken}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs bg-indigo-950/70 hover:bg-indigo-900/90 text-indigo-200 px-3 py-1.5 rounded-lg border border-indigo-600/60 flex items-center gap-1.5 transition font-semibold shadow-sm shadow-indigo-900/20"
+                title="Download Branded Customer Quotation Document"
+              >
+                <Download className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Quote PDF</span>
+              </a>
+            )}
             <button
               type="button"
               onClick={() => setSelectedLead(null)}
@@ -673,6 +958,18 @@ export function LeadDetailDrawer() {
           >
             <Compass className="w-3.5 h-3.5" />
             <span>Itinerary & Revisions (P2-08)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('send_itinerary')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition whitespace-nowrap ${
+              activeTab === 'send_itinerary'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
+            }`}
+          >
+            <Mail className="w-3.5 h-3.5" />
+            <span>Send Itinerary & Request Quote</span>
           </button>
           <button
             type="button"
@@ -749,12 +1046,217 @@ export function LeadDetailDrawer() {
                       <BookUser className="w-3.5 h-3.5 text-emerald-400" />
                       Client Details
                     </span>
-                    <span className="text-[10px] font-mono text-zinc-500">Party: {selectedLead.headcountAdults || 2} Adults</span>
+                    <span className="text-[10px] font-mono text-zinc-500">
+                      Party: {selectedLead.headcountAdults || 2} Adults
+                      {selectedLead.headcountChildren > 0 ? `, ${selectedLead.headcountChildren} Children` : ''}
+                      {selectedLead.headcountInfants > 0 ? `, ${selectedLead.headcountInfants} Infants` : ''}
+                    </span>
                   </div>
                   <div className="text-xs space-y-1">
-                    <div className="font-semibold text-zinc-200">{selectedLead.contact?.name || 'Customer'}</div>
-                    <div className="text-zinc-400 font-mono text-[11px]">{selectedLead.contact?.phone || 'N/A'}</div>
-                    <div className="text-zinc-400 text-[11px]">{selectedLead.customerEmail || selectedLead.contact?.email || 'N/A'}</div>
+                    <div className="font-semibold text-zinc-200">
+                      {(selectedLead.contact?.name && selectedLead.contact.name !== 'Valued Client'
+                        ? selectedLead.contact.name
+                        : selectedLead.metadata?.customerName && selectedLead.metadata.customerName !== 'Valued Client'
+                        ? selectedLead.metadata.customerName
+                        : (selectedLead.customerEmail || selectedLead.contact?.email)
+                        ? String(selectedLead.customerEmail || selectedLead.contact?.email)
+                            .split('@')[0]
+                            .replace(/[._-]+/g, ' ')
+                            .replace(/\b\w/g, (c) => c.toUpperCase())
+                        : 'Customer')}
+                    </div>
+                    <div className="text-zinc-400 font-mono text-[11px]">
+                      {selectedLead.contact?.phone ||
+                        selectedLead.metadata?.customerPhone ||
+                        (selectedLead.call
+                          ? selectedLead.call.direction === 'outbound'
+                            ? selectedLead.call.to
+                            : selectedLead.call.from
+                          : '—')}
+                    </div>
+                    <div className="text-zinc-400 text-[11px]">
+                      {selectedLead.customerEmail || selectedLead.contact?.email || '—'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Trip Parameters Editor */}
+                <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800 space-y-3">
+                  <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                      {supplierQuotes.length > 0 ? 'Trip & Quotation Parameters' : 'Trip Parameters'}
+                    </span>
+                    <span className="text-[10px] font-mono text-zinc-400 bg-zinc-800/80 px-2 py-0.5 rounded">
+                      Syncs with Proposal PDF
+                    </span>
+                  </div>
+
+                  {paramsSuccessMsg && (
+                    <div className="p-2 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs flex items-center gap-1.5">
+                      <Check className="w-3.5 h-3.5 shrink-0" />
+                      <span>{paramsSuccessMsg}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-2.5">
+                    {/* Quotation Amount — only displayed after supplier quote is received */}
+                    {supplierQuotes.length > 0 && (
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1 font-medium">
+                          Quotation Amount (₹ INR)
+                        </label>
+                        <div className="relative">
+                          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 font-bold text-xs">
+                            ₹
+                          </span>
+                          <input
+                            type="number"
+                            value={editBudget}
+                            onChange={(e) => setEditBudget(e.target.value)}
+                            placeholder="Enter quoted amount"
+                            className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-7 pr-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Stay Dates */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1 font-medium">
+                          Stay Departure
+                        </label>
+                        <input
+                          type="date"
+                          value={editDepartureDate}
+                          onChange={(e) => {
+                            const nextDep = e.target.value;
+                            setEditDepartureDate(nextDep);
+                            if (nextDep) {
+                              setEditReturnDate(computeReturnDateFromDep(nextDep, editDurationDays));
+                            }
+                          }}
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1 font-medium">
+                          Stay Return
+                        </label>
+                        <input
+                          type="date"
+                          value={editReturnDate}
+                          onChange={(e) => {
+                            const nextRet = e.target.value;
+                            setEditReturnDate(nextRet);
+                            if (editDepartureDate && nextRet) {
+                              const diffDays =
+                                Math.round(
+                                  (new Date(nextRet).getTime() - new Date(editDepartureDate).getTime()) / 86400000
+                                ) + 1;
+                              if (diffDays >= 1 && diffDays <= 60) {
+                                setEditDurationDays(diffDays);
+                              }
+                            }
+                          }}
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Duration & Destination */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1 font-medium">
+                          Duration (Days)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={60}
+                          value={editDurationDays}
+                          onChange={(e) => {
+                            const nextDur = Math.max(1, parseInt(e.target.value || '1', 10));
+                            setEditDurationDays(nextDur);
+                            if (editDepartureDate) {
+                              setEditReturnDate(computeReturnDateFromDep(editDepartureDate, nextDur));
+                            }
+                          }}
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1 font-medium">
+                          Destination
+                        </label>
+                        <input
+                          type="text"
+                          value={editDestination}
+                          onChange={(e) => setEditDestination(e.target.value)}
+                          placeholder="Destination"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Travellers (Adults & Children) */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1 font-medium">
+                          Adults
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={editAdults}
+                          onChange={(e) => setEditAdults(parseInt(e.target.value || '1', 10))}
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1 font-medium">
+                          Children
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={20}
+                          value={editChildren}
+                          onChange={(e) => setEditChildren(parseInt(e.target.value || '0', 10))}
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Hotel Tier */}
+                    <div>
+                      <label className="block text-[11px] text-zinc-400 mb-1 font-medium">
+                        Hotel Category / Tier
+                      </label>
+                      <select
+                        value={editHotelTier}
+                        onChange={(e) => setEditHotelTier(e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="standard_3star">4-star hotel in a central location</option>
+                        <option value="luxury_5star">5-star Luxury Hotel</option>
+                        <option value="boutique_4star">4-star Boutique Hotel</option>
+                        <option value="chalet_villa">Private Villa & Chalet</option>
+                      </select>
+                    </div>
+
+                    {/* Save Button */}
+                    <button
+                      type="button"
+                      onClick={handleSaveTripParams}
+                      disabled={savingParams}
+                      className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 px-3 rounded-lg text-xs flex items-center justify-center gap-2 transition disabled:opacity-50 cursor-pointer shadow-md shadow-emerald-600/20"
+                    >
+                      {savingParams ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                      <span>{savingParams ? 'Saving Parameters...' : 'Save Parameters & Update Proposal'}</span>
+                    </button>
                   </div>
                 </div>
 
@@ -792,6 +1294,7 @@ export function LeadDetailDrawer() {
                     itineraryText={selectedLead.itinerary}
                     destination={selectedLead.destination}
                     leadTitle={selectedLead.title}
+                    durationDays={selectedLead.durationDays}
                   />
                 </div>
 
@@ -823,6 +1326,223 @@ export function LeadDetailDrawer() {
                     </button>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2 (NEXT TO ITINERARY & REVISIONS): SEND REVISED/NEW ITINERARY TO CUSTOMER & SEND TO SUPPLIER TO GET QUOTE */}
+          {activeTab === 'send_itinerary' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Mail className="w-4 h-4 text-indigo-400" />
+                    Send Revised / New Itinerary to Customer & Supplier (Email with PDF Attachment)
+                  </h4>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Step 1: Email the revised or newly generated Itinerary PDF to the customer for review. Step 2: Email the Itinerary PDF to a partner supplier to request their net quote.
+                  </p>
+                </div>
+                <a
+                  href={`/api/v1/leads/${selectedLead.id}/pdf?type=customer&token=${bearerToken}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700 flex items-center gap-1.5 transition shrink-0"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Preview Attached Itinerary PDF</span>
+                </a>
+              </div>
+
+              {sendItineraryMsg && (
+                <div className="p-3 bg-emerald-950/80 border border-emerald-500/40 rounded-xl text-xs text-emerald-300 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>{sendItineraryMsg}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('procurement')}
+                    className="text-[11px] bg-emerald-600/30 hover:bg-emerald-600 text-emerald-200 hover:text-white px-2.5 py-1 rounded font-semibold transition shrink-0"
+                  >
+                    Go to Supplier Quotes &rarr;
+                  </button>
+                </div>
+              )}
+
+              {sendItineraryError && (
+                <div className="p-3 bg-rose-950/80 border border-rose-500/40 rounded-xl text-xs text-rose-300 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>{sendItineraryError}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* STEP 1: SEND REVISED / NEW ITINERARY TO CUSTOMER */}
+                <div className="bg-zinc-950 p-5 rounded-xl border border-zinc-800 flex flex-col justify-between space-y-4">
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 flex items-center justify-center font-mono text-xs font-bold">
+                          01
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-white">Send Revised / New Itinerary to Customer</div>
+                          <div className="text-[11px] text-zinc-400">Dispatches email with the Itinerary PDF attached</div>
+                        </div>
+                      </div>
+                      {selectedLead.customerSentAt && (
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/50">
+                          Sent {new Date(selectedLead.customerSentAt).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="space-y-3 text-xs">
+                      <div>
+                        <label className="block text-[11px] text-zinc-400 mb-1 font-medium">
+                          Customer Recipient Email *
+                        </label>
+                        <input
+                          type="email"
+                          value={leadCustomerEmail}
+                          onChange={(e) => setLeadCustomerEmail(e.target.value)}
+                          placeholder="customer@example.com"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+
+                      <div className="p-3 bg-zinc-900/70 rounded-lg border border-zinc-800/80 space-y-1 text-[11px] text-zinc-400">
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-zinc-300">Attachment:</span>
+                          <span className="font-mono text-indigo-300">
+                            {(selectedLead.destination || 'Destination').replace(/[^a-zA-Z0-9]/g, '_')}_Itinerary.pdf
+                          </span>
+                        </div>
+                        <div>
+                          Includes Cover, Trip Overview, Guest Preferences, Day-by-Day Itinerary, Accommodation, Inclusions, Exclusions, and Company Details (without Sample Quotation sheet).
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSendItineraryToCustomer}
+                    disabled={sendingToCustomer || !leadCustomerEmail.trim()}
+                    className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition shadow-md shadow-indigo-600/20 disabled:opacity-50 cursor-pointer"
+                  >
+                    {sendingToCustomer ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Sending Itinerary PDF to Customer...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Mail className="w-3.5 h-3.5" />
+                        <span>Send Revised / New Itinerary to Customer (Email PDF)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* STEP 2: SEND ITINERARY TO SUPPLIER TO GET QUOTE */}
+                <div className="bg-zinc-950 p-5 rounded-xl border border-zinc-800 flex flex-col justify-between space-y-4">
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-400 flex items-center justify-center font-mono text-xs font-bold">
+                          02
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-white">Send Itinerary to Supplier to Get Quote</div>
+                          <div className="text-[11px] text-zinc-400">Dispatches RFQ email with the Itinerary PDF attached</div>
+                        </div>
+                      </div>
+                      {selectedLead.supplierSentAt && (
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/50">
+                          RFQ Sent {new Date(selectedLead.supplierSentAt).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="space-y-3 text-xs">
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[11px] text-zinc-400 font-medium">
+                            Select Partner Supplier (DMC / Hotel / Operator) *
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setShowSupplierModal(true)}
+                            className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1"
+                          >
+                            <Plus className="w-3 h-3" /> Add Supplier
+                          </button>
+                        </div>
+                        <select
+                          value={leadSelectedSupplierId}
+                          onChange={(e) => setLeadSelectedSupplierId(e.target.value)}
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value="">-- Select Partner Supplier --</option>
+                          {suppliersList.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name} ({s.category}) — {s.email}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="p-3 bg-zinc-900/70 rounded-lg border border-zinc-800/80 space-y-1 text-[11px] text-zinc-400">
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-zinc-300">Attachment:</span>
+                          <span className="font-mono text-amber-300">
+                            RFQ_{(selectedLead.destination || 'Destination').replace(/[^a-zA-Z0-9]/g, '_')}_Quotation.pdf
+                          </span>
+                        </div>
+                        <div>
+                          Sends the full itinerary specification PDF to the supplier requesting net contracted rates, room availability, and booking terms.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSendItineraryToSupplier}
+                    disabled={sendingToSupplier || !leadSelectedSupplierId}
+                    className="w-full py-2.5 px-4 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition shadow-md shadow-amber-600/20 disabled:opacity-50 cursor-pointer"
+                  >
+                    {sendingToSupplier ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Sending Itinerary PDF to Supplier...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Building2 className="w-3.5 h-3.5" />
+                        <span>Send Itinerary to Supplier to Get Quote (Email PDF)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Combined One-Click Send to Both */}
+              <div className="bg-zinc-950/90 p-4 rounded-xl border border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="text-xs text-zinc-400">
+                  Want to dispatch both emails simultaneously? Click to email the revised Itinerary PDF to the customer and the RFQ Itinerary PDF to the selected supplier at once.
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSendItineraryToBoth}
+                  disabled={sendingToBoth || !leadCustomerEmail.trim() || !leadSelectedSupplierId}
+                  className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-lg text-xs font-semibold flex items-center gap-2 transition shrink-0 disabled:opacity-50 cursor-pointer"
+                >
+                  {sendingToBoth ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                  <span>{sendingToBoth ? 'Sending Both...' : 'Send to Both Customer & Supplier'}</span>
+                </button>
               </div>
             </div>
           )}
@@ -881,12 +1601,14 @@ export function LeadDetailDrawer() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[11px] text-zinc-400 mb-1">Total Net Cost ($ USD) *</label>
+                      <label className="block text-[11px] text-zinc-400 mb-1">Total Net Cost (₹ INR) *</label>
                       <input
                         type="number"
                         required
+                        min="1"
                         value={newQuoteCost}
-                        onChange={(e) => setNewQuoteCost(Number(e.target.value))}
+                        onChange={(e) => setNewQuoteCost(e.target.value)}
+                        placeholder="e.g. 145000"
                         className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-white font-mono"
                       />
                     </div>
@@ -939,7 +1661,7 @@ export function LeadDetailDrawer() {
                       Side-by-Side Quotation Comparison Matrix
                     </span>
                     <span className="text-[10px] text-zinc-400 font-mono">
-                      Lowest Net: ${comparisonMatrix.lowestCost?.toLocaleString()} USD
+                      Lowest Net: ₹{comparisonMatrix.lowestCost?.toLocaleString('en-IN')} INR
                     </span>
                   </div>
                   <div className="overflow-x-auto">
@@ -969,13 +1691,13 @@ export function LeadDetailDrawer() {
                               <span className="text-[10px] text-zinc-500 font-mono">{q.quoteReference}</span>
                             </td>
                             <td className="py-3 px-3 font-mono font-bold text-emerald-400">
-                              ${q.totalNetCost.toLocaleString()}
+                              ₹{q.totalNetCost.toLocaleString('en-IN')}
                             </td>
                             <td className="py-3 px-3 font-mono text-[11px]">
                               {q.isLowestCost ? (
                                 <span className="text-zinc-500">Baseline</span>
                               ) : (
-                                <span className="text-amber-400">+${q.deltaFromLowest.toLocaleString()} (+{q.deltaPercentage}%)</span>
+                                <span className="text-amber-400">+₹{q.deltaFromLowest.toLocaleString('en-IN')} (+{q.deltaPercentage}%)</span>
                               )}
                             </td>
                             <td className="py-3 px-3 text-[11px] capitalize">
@@ -1016,15 +1738,47 @@ export function LeadDetailDrawer() {
           {/* TAB 3: PRICING & MARGIN ENGINE (P2-03, P2-04, P2-07, P2-09) */}
           {activeTab === 'pricing' && (
             <div className="space-y-6">
-              <div>
-                <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                  <DollarSign className="w-4 h-4 text-emerald-400" />
-                  Staff Manual Margin Entry & Real-Time Selling Price Engine (P2-03, P2-04)
-                </h4>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  Dynamic calculation combining supplier net cost, manual margins, tax rates, and floor guardrail thresholds.
-                </p>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                    <DollarSign className="w-4 h-4 text-emerald-400" />
+                    Staff Manual Margin Entry & Real-Time Selling Price Engine (P2-03, P2-04)
+                  </h4>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Dynamic calculation combining supplier net cost, manual margins, tax rates, and floor guardrail thresholds.
+                  </p>
+                </div>
+
+                {supplierQuotes.length > 0 && customerQuotes.length > 0 && (
+                  <a
+                    href={`/api/v1/leads/${selectedLead.id}/quotation-pdf?token=${bearerToken}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-lg font-semibold flex items-center gap-1.5 transition shadow-md shadow-indigo-600/20 shrink-0"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download Quote PDF (v{customerQuotes[0]?.version || 1})</span>
+                  </a>
+                )}
               </div>
+
+              {supplierQuotes.length === 0 && (
+                <div className="p-3.5 bg-amber-950/60 border border-amber-500/40 rounded-xl text-xs text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>
+                      Please feed a quote from a supplier in <strong>Supplier Quotes &amp; Matrix</strong> first, then click <strong>Generate Quote</strong> below to unlock the <strong>Quote PDF</strong> button.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('procurement')}
+                    className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-lg font-semibold transition shrink-0 cursor-pointer"
+                  >
+                    Feed Supplier Quote &rarr;
+                  </button>
+                </div>
+              )}
 
               {/* Pricing Formula Card & Calculator */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
@@ -1035,7 +1789,7 @@ export function LeadDetailDrawer() {
                   </div>
 
                   <div>
-                    <label className="block text-[11px] text-zinc-400 mb-1">Supplier Procurement Net Cost ($ USD)</label>
+                    <label className="block text-[11px] text-zinc-400 mb-1">Supplier Procurement Net Cost (₹ INR)</label>
                     <input
                       type="number"
                       value={pricingNetCost}
@@ -1054,12 +1808,12 @@ export function LeadDetailDrawer() {
                         className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-white"
                       >
                         <option value="percentage">% Percentage</option>
-                        <option value="fixed_dollar">$ Fixed Dollar</option>
+                        <option value="fixed_dollar">₹ Fixed Amount</option>
                       </select>
                     </div>
                     <div>
                       <label className="block text-[11px] text-zinc-400 mb-1">
-                        {marginType === 'percentage' ? 'Margin Value (%)' : 'Margin Amount ($)'}
+                        {marginType === 'percentage' ? 'Margin Value (%)' : 'Margin Amount (₹)'}
                       </label>
                       <input
                         type="number"
@@ -1098,10 +1852,14 @@ export function LeadDetailDrawer() {
                   <button
                     type="button"
                     onClick={handleSaveCustomerQuote}
-                    disabled={savingQuote}
-                    className="w-full py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-xs font-semibold shadow-md transition disabled:opacity-50"
+                    disabled={savingQuote || supplierQuotes.length === 0}
+                    className="w-full py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-xs font-semibold shadow-md transition disabled:opacity-50 cursor-pointer"
                   >
-                    {savingQuote ? 'Saving Version...' : 'Save As New Quotation Version (v' + ((customerQuotes[0]?.version || 0) + 1) + ')'}
+                    {savingQuote
+                      ? 'Generating Quote...'
+                      : supplierQuotes.length === 0
+                      ? 'Feed Supplier Quote First to Generate Quote'
+                      : 'Generate Quote (v' + ((customerQuotes[0]?.version || 0) + 1) + ')'}
                   </button>
                 </div>
 
@@ -1124,19 +1882,19 @@ export function LeadDetailDrawer() {
                     <div className="space-y-2 text-xs font-mono">
                       <div className="flex items-center justify-between py-1 text-zinc-400">
                         <span>Supplier Net Cost:</span>
-                        <span>${pricingNetCost.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span>₹{pricingNetCost.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                       <div className="flex items-center justify-between py-1 text-indigo-300">
                         <span>Staff Margin ({effectiveMarginPercent.toFixed(1)}%):</span>
-                        <span>+${calcMarginAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span>+₹{calcMarginAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                       <div className="flex items-center justify-between py-1 text-zinc-400 border-t border-zinc-800/80 pt-1">
                         <span>Subtotal before Tax:</span>
-                        <span>${calcSubtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span>₹{calcSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                       <div className="flex items-center justify-between py-1 text-zinc-400">
                         <span>Taxes & Compliance ({taxPercentage}%):</span>
-                        <span>+${calcTaxAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span>+₹{calcTaxAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                     </div>
                   </div>
@@ -1145,7 +1903,7 @@ export function LeadDetailDrawer() {
                     <div>
                       <div className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">Final Customer Selling Price</div>
                       <div className="text-xl font-bold font-mono text-emerald-400">
-                        ${calcFinalPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })} USD
+                        ₹{calcFinalPrice.toLocaleString('en-IN', { minimumFractionDigits: 2 })} INR
                       </div>
                     </div>
                     <span className="text-[10px] font-mono text-zinc-500">Real-time CPQ</span>
@@ -1173,16 +1931,16 @@ export function LeadDetailDrawer() {
                             </span>
                           </div>
                           <div className="text-[11px] text-zinc-400 font-mono mt-0.5">
-                            Net: ${Number(q.supplierNetTotal).toLocaleString()} • Margin: ${Number(q.marginAmount).toLocaleString()} • Tax: ${Number(q.taxAmount).toLocaleString()}
+                            Net: ₹{Number(q.supplierNetTotal).toLocaleString('en-IN')} • Margin: ₹{Number(q.marginAmount).toLocaleString('en-IN')} • Tax: ₹{Number(q.taxAmount).toLocaleString('en-IN')}
                           </div>
                         </div>
                         <div className="text-right font-mono">
                           <div className="text-sm font-bold text-emerald-400">
-                            ${Number(q.finalSellingPrice).toLocaleString()} USD
+                            ₹{Number(q.finalSellingPrice).toLocaleString('en-IN')} INR
                           </div>
                           {q.diff?.hasChanged && (
                             <div className="text-[10px] text-indigo-400">
-                              Diff: {q.diff.priceDelta > 0 ? `+` : ''}${q.diff.priceDelta.toLocaleString()}
+                              Diff: {q.diff.priceDelta > 0 ? `+` : ''}₹{q.diff.priceDelta.toLocaleString('en-IN')}
                             </div>
                           )}
                         </div>
@@ -1403,13 +2161,13 @@ export function LeadDetailDrawer() {
                         </select>
                       </div>
                       <div>
-                        <label className="block text-zinc-400 text-[10px] uppercase font-bold mb-1">Ticket Cost ($ USD)</label>
+                        <label className="block text-zinc-400 text-[10px] uppercase font-bold mb-1">Ticket Cost (₹ INR)</label>
                         <input
                           type="number"
-                          step="0.01"
+                          step="1"
                           value={manualTicketCost}
                           onChange={(e) => setManualTicketCost(e.target.value)}
-                          placeholder="e.g. 3850"
+                          placeholder="e.g. 38500"
                           className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-emerald-400 font-mono font-bold focus:outline-none focus:border-indigo-500"
                         />
                       </div>
@@ -1530,7 +2288,7 @@ export function LeadDetailDrawer() {
                         <div className="flex items-center gap-3">
                           {f.ticketCost && (
                             <div className="font-mono font-bold text-emerald-400">
-                              ${Number(f.ticketCost).toLocaleString()} USD
+                              ₹{Number(f.ticketCost).toLocaleString('en-IN')} INR
                             </div>
                           )}
                           <button
@@ -1566,7 +2324,7 @@ export function LeadDetailDrawer() {
                         </div>
                         <div className="flex items-center gap-3">
                           <span className="font-mono font-bold text-emerald-400 text-sm">
-                            ${gds.ticketCost.toLocaleString()}
+                            ₹{gds.ticketCost.toLocaleString('en-IN')}
                           </span>
                           <button
                             type="button"
@@ -1584,16 +2342,16 @@ export function LeadDetailDrawer() {
             </div>
           )}
 
-          {/* TAB 5: DISPATCH & OMNICHANNEL (P2-10 - P2-15) */}
+          {/* TAB 5: DISPATCH & EMAIL DRIPS (P2-11 - P2-15) */}
           {activeTab === 'dispatch' && (
             <div className="space-y-6">
               <div>
                 <h4 className="text-sm font-bold text-white flex items-center gap-2">
                   <Send className="w-4 h-4 text-violet-400" />
-                  Multichannel Dispatch & Automated Drip Cadences (P2-10 - P2-15)
+                  Email Quotation Dispatch & Automated Drip Cadences (P2-11 - P2-15)
                 </h4>
                 <p className="text-xs text-zinc-400 mt-0.5">
-                  Simultaneous 1-click delivery via Meta WhatsApp Cloud API & Email + automated follow-up drips (Day 1, 3, 5).
+                  1-click delivery via Email with PDF attachment + automated follow-up drips (Day 1, 3, 5).
                 </p>
               </div>
 
@@ -1607,23 +2365,10 @@ export function LeadDetailDrawer() {
               {/* Dispatch Controls */}
               <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800 space-y-4">
                 <div className="text-xs font-bold text-white border-b border-zinc-800/80 pb-2">
-                  One-Click Multichannel Quotation Delivery
+                  One-Click Email Quotation Delivery
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <label className="p-3 rounded-lg border border-zinc-800 bg-zinc-900 flex items-center gap-2 cursor-pointer hover:border-zinc-700">
-                    <input
-                      type="checkbox"
-                      checked={sendWhatsApp}
-                      onChange={(e) => setSendWhatsApp(e.target.checked)}
-                      className="rounded text-indigo-600"
-                    />
-                    <div>
-                      <div className="text-xs font-semibold text-white">WhatsApp Cloud API (P2-10)</div>
-                      <div className="text-[10px] text-zinc-400">Interactive link & mobile proposal</div>
-                    </div>
-                  </label>
-
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <label className="p-3 rounded-lg border border-zinc-800 bg-zinc-900 flex items-center gap-2 cursor-pointer hover:border-zinc-700">
                     <input
                       type="checkbox"
@@ -1654,18 +2399,18 @@ export function LeadDetailDrawer() {
                 <button
                   type="button"
                   onClick={handleDispatchQuotation}
-                  disabled={dispatching || (!sendWhatsApp && !sendEmail)}
+                  disabled={dispatching || !sendEmail}
                   className="w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold shadow-lg shadow-indigo-600/20 transition flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   {dispatching ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Dispatching via Channels...</span>
+                      <span>Dispatching via Email...</span>
                     </>
                   ) : (
                     <>
                       <Send className="w-3.5 h-3.5" />
-                      <span>Send Quotation via Configured Channels</span>
+                      <span>Send Quotation via Email</span>
                     </>
                   )}
                 </button>
@@ -1747,15 +2492,10 @@ export function LeadDetailDrawer() {
                     {confirmingBooking ? 'Confirming...' : 'Confirm Booking & Handover'}
                   </button>
                 ) : (
-                  <a
-                    href={`/api/v1/leads/${selectedLead.id}/voucher?token=${bearerToken}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="bg-zinc-800 hover:bg-zinc-700 text-emerald-400 px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Download Voucher</span>
-                  </a>
+                  <span className="bg-emerald-950 text-emerald-400 border border-emerald-800/60 px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Booking Confirmed ({selectedLead.bookingReference})</span>
+                  </span>
                 )}
               </div>
 
@@ -1781,7 +2521,7 @@ export function LeadDetailDrawer() {
                         </div>
                         <div className="flex items-center gap-3">
                           <span className="font-mono font-bold text-emerald-400">
-                            ${Number(m.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            ₹{Number(m.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                           </span>
                           <span className={`text-[10px] px-2 py-0.5 rounded font-mono uppercase ${
                             m.status === 'paid' ? 'bg-emerald-950 text-emerald-400' : 'bg-amber-950 text-amber-400'

@@ -15,6 +15,7 @@ export interface DialElement {
   number: string;
   callerId?: string;
   timeLimit?: number;
+  timeout?: number;
   action?: string;
   method?: 'GET' | 'POST';
   record?: boolean | string;
@@ -97,6 +98,7 @@ export class PlivoXmlBuilder {
     options?: {
       callerId?: string;
       timeLimit?: number;
+      timeout?: number;
       action?: string;
       method?: 'GET' | 'POST';
       record?: boolean | string;
@@ -109,6 +111,7 @@ export class PlivoXmlBuilder {
       number,
       callerId: options?.callerId,
       timeLimit: options?.timeLimit,
+      timeout: options?.timeout,
       action: options?.action,
       method: options?.method,
       record: options?.record,
@@ -174,6 +177,7 @@ export class PlivoXmlBuilder {
           let attrs = '';
           if (el.callerId) attrs += ` callerId="${escapeXml(el.callerId)}"`;
           if (el.timeLimit) attrs += ` timeLimit="${el.timeLimit}"`;
+          if (el.timeout) attrs += ` timeout="${el.timeout}"`;
           if (el.action) attrs += ` action="${escapeXml(el.action)}"`;
           if (el.method) attrs += ` method="${el.method}"`;
           if (el.record !== undefined) attrs += ` record="${escapeXml(String(el.record))}"`;

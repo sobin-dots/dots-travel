@@ -60,8 +60,15 @@ export async function GET(
         pnr: f.pnr || undefined,
       })),
       totalSellingPrice,
-      currency: latestQuote?.currency || 'USD',
+      currency: latestQuote?.currency || (lead.metadata as any)?.currency || 'INR',
       organizationName: lead.organization.name,
+      organizationAddress: lead.organization.address || undefined,
+      organizationPhone: lead.organization.phone || undefined,
+      organizationWebsite: lead.organization.website || undefined,
+      organizationLogo: lead.organization.logoUrl || undefined,
+      organizationLetterhead: lead.organization.letterheadUrl || undefined,
+      organizationLetterheadText: lead.organization.letterheadText || undefined,
+      brandColor: lead.organization.brandColor || undefined,
     });
 
     const safeRef = bookingReference.replace(/[^a-zA-Z0-9_-]/g, '_');

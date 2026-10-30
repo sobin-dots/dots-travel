@@ -15,6 +15,13 @@ export async function GET(req: NextRequest) {
     include: {
       contact: true,
       supplier: true,
+      quotations: {
+        orderBy: { version: 'desc' },
+      },
+      supplierQuotations: {
+        include: { supplier: true },
+        orderBy: { createdAt: 'desc' },
+      },
       call: {
         include: {
           recordings: true,
