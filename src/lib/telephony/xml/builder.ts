@@ -18,6 +18,7 @@ export interface DialElement {
   timeout?: number;
   action?: string;
   method?: 'GET' | 'POST';
+  redirect?: boolean;
   record?: boolean | string;
   callbackUrl?: string;
   callbackMethod?: 'GET' | 'POST';
@@ -101,6 +102,7 @@ export class PlivoXmlBuilder {
       timeout?: number;
       action?: string;
       method?: 'GET' | 'POST';
+      redirect?: boolean;
       record?: boolean | string;
       callbackUrl?: string;
       callbackMethod?: 'GET' | 'POST';
@@ -114,6 +116,7 @@ export class PlivoXmlBuilder {
       timeout: options?.timeout,
       action: options?.action,
       method: options?.method,
+      redirect: options?.redirect,
       record: options?.record,
       callbackUrl: options?.callbackUrl,
       callbackMethod: options?.callbackMethod,
@@ -180,6 +183,7 @@ export class PlivoXmlBuilder {
           if (el.timeout) attrs += ` timeout="${el.timeout}"`;
           if (el.action) attrs += ` action="${escapeXml(el.action)}"`;
           if (el.method) attrs += ` method="${el.method}"`;
+          if (el.redirect !== undefined) attrs += ` redirect="${el.redirect}"`;
           if (el.record !== undefined) attrs += ` record="${escapeXml(String(el.record))}"`;
           if (el.callbackUrl) attrs += ` callbackUrl="${escapeXml(el.callbackUrl)}"`;
           if (el.callbackMethod) attrs += ` callbackMethod="${el.callbackMethod}"`;

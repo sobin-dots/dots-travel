@@ -9,12 +9,23 @@ import {
 
 export const runtime = 'nodejs';
 
+function extractRequestBaseUrl(req: NextRequest): string {
+  const proto = req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http');
+  const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
+  if (host) {
+    return `${proto}://${host}`.replace(/\/+$/, '');
+  }
+  const urlObj = new URL(req.url);
+  return `${urlObj.protocol}//${urlObj.host}`;
+}
+
 export async function GET(req: NextRequest) {
   const { auth, errorResponse } = await authenticateRequest(req, 'admin');
   if (errorResponse) return errorResponse;
 
   try {
-    const summary = await getTenantIntegrationsSummary(auth!.organizationId);
+    const requestBaseUrl = extractRequestBaseUrl(req);
+    const summary = await getTenantIntegrationsSummary(auth!.organizationId, requestBaseUrl);
 
     return NextResponse.json({
       api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
@@ -34,7 +45,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { provider, credentials, metadata, label } = body;
+    const { provider, credentials, metadata, label, webhookBaseUrl } = body;
 
     if (!provider || !credentials) {
       return NextResponse.json(
@@ -51,11 +62,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const resolvedBaseUrl = webhookBaseUrl || extractRequestBaseUrl(req);
+
     const result = await saveTenantIntegration(auth!.organizationId, {
       provider,
       credentials,
       metadata,
       label,
+      webhookBaseUrl: resolvedBaseUrl,
     });
 
     await logAuditEvent({

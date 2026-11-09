@@ -88,61 +88,6 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Provision Plivo Account (Live carrier credentials)
-      const rawAuthId = process.env.PLIVO_AUTH_ID || 'MAMDRKYZNKYTATZWQYMC';
-      const rawAuthToken = process.env.PLIVO_AUTH_TOKEN || '';
-      const { encryptData } = await import('@/lib/crypto');
-      const encAuthId = encryptData(rawAuthId);
-      const encAuthToken = encryptData(rawAuthToken);
-
-      const plivoAccount = await tx.plivoAccount.create({
-        data: {
-          organizationId: org.id,
-          label: 'Live Carrier Account (Plivo)',
-          authIdEncrypted: encAuthId.ciphertext,
-          authIdLast4: rawAuthId.slice(-4),
-          authTokenEncrypted: encAuthToken.ciphertext,
-          encIv: encAuthId.iv,
-          encAuthTag: encAuthId.authTag,
-          encKeyVersion: encAuthId.keyVersion,
-          status: 'verified',
-          lastVerifiedAt: new Date(),
-        },
-      });
-
-      const app = await tx.application.create({
-        data: {
-          organizationId: org.id,
-          plivoAccountId: plivoAccount.id,
-          plivoAppId: '29798030248980726',
-          name: `${organizationName} Web Phone App`,
-          answerUrl: `${process.env.PUBLIC_BASE_URL || 'http://localhost:3000'}/api/v1/webhooks/voice/answer`,
-          defaultNumberApp: true,
-        },
-      });
-
-      // Provision starter phone line only in simulator mode or if an explicit caller ID is configured
-      if (process.env.TELEPHONY_MODE !== 'live' || process.env.PLIVO_CALLER_ID) {
-        const activeLine = process.env.PLIVO_CALLER_ID || '+14155550100';
-        await tx.phoneNumber.create({
-          data: {
-            organizationId: org.id,
-            plivoAccountId: plivoAccount.id,
-            applicationId: app.id,
-            e164: activeLine,
-            countryIso: activeLine.startsWith('+91') ? 'IN' : 'US',
-            numberType: 'local',
-            status: 'active',
-            friendlyName: `Starter Line (${activeLine})`,
-            recordCalls: true,
-            transcribeEnabled: true,
-            monthlyRental: '2.5000',
-            smsRate: '0.0000',
-            voiceRate: '0.0078',
-          },
-        });
-      }
-
       return { org, user, membership };
     });
 

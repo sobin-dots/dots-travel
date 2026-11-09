@@ -397,6 +397,7 @@ Fallback Answer URL (POST): ${plivoFallbackAnswerUrl}`;
             authToken: plivoAuthToken,
             callerId: plivoCallerId,
           },
+          webhookBaseUrl: origin || (typeof window !== 'undefined' ? window.location.origin : undefined),
           label: 'Plivo Carrier Line',
         }),
       });
