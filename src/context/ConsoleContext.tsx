@@ -15,12 +15,14 @@ interface ConsoleContextType {
   loading: boolean;
   fetchData: () => Promise<void>;
   handleSignOut: () => void;
+  authFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
   // Organizations & Multi-tenancy
   organizationsList: any[];
   setOrganizationsList: React.Dispatch<React.SetStateAction<any[]>>;
   showOrgModal: boolean;
   setShowOrgModal: (show: boolean) => void;
+  creatingOrg: boolean;
   handleSwitchOrganization: (orgId: string) => Promise<void>;
   handleCreateOrganization: (name: string) => Promise<void>;
   integrationsSummary: any;
@@ -103,6 +105,8 @@ interface ConsoleContextType {
   handleTriggerCallTranscription: (callId: string, provider?: 'openai', model?: string, silent?: boolean) => Promise<void>;
   handleGenerateItinerary: (callId: string) => Promise<void>;
   generatingItineraryCallId: string | null;
+  hangingUpCallId: string | null;
+  sendingDtmfDigits: string | null;
   handleHangupLiveCall: (callId: string) => Promise<void>;
   handleSendDtmf: (callId: string, digits: string) => Promise<void>;
 
@@ -117,6 +121,7 @@ interface ConsoleContextType {
   // Leads & AI Itinerary review drawer
   selectedLead: any | null;
   setSelectedLead: (lead: any | null) => void;
+  selectingLeadId: string | null;
   leadRevisionNotes: string;
   setLeadRevisionNotes: (notes: string) => void;
   leadCustomerEmail: string;
@@ -149,6 +154,7 @@ interface ConsoleContextType {
   supplierNotes: string;
   setSupplierNotes: (notes: string) => void;
   supplierLoading: boolean;
+  deletingSupplierId: string | null;
   handleCreateSupplier: (e: React.FormEvent) => Promise<void>;
   handleDeleteSupplier: (supplierId: string) => Promise<void>;
 
@@ -180,6 +186,7 @@ interface ConsoleContextType {
   contactNotes: string;
   setContactNotes: (notes: string) => void;
   contactLoading: boolean;
+  deletingContactId: string | null;
   handleCreateContact: (e: React.FormEvent) => Promise<void>;
   handleDeleteContact: (contactId: string) => Promise<void>;
 
@@ -190,6 +197,7 @@ interface ConsoleContextType {
   setSearchIso: (iso: string) => void;
   availableNumbers: any[];
   searchingNumbers: boolean;
+  buyingNumberE164: string | null;
   handleSearchNumbers: () => Promise<void>;
   handleBuyNumber: (number: string) => Promise<void>;
 
@@ -218,10 +226,26 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [currentOrg, setCurrentOrg] = useState<any>(null);
   const [organizationsList, setOrganizationsList] = useState<any[]>([]);
   const [showOrgModal, setShowOrgModal] = useState<boolean>(false);
+  const [creatingOrg, setCreatingOrg] = useState<boolean>(false);
   const [integrationsSummary, setIntegrationsSummary] = useState<any>(null);
   const [settings, setSettings] = useState<any>(null);
   const [systemMode] = useState<'live'>('live');
   const [loading, setLoading] = useState<boolean>(true);
+
+  const tokenRef = useRef<string>('');
+  const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
+  const inFlightActionsRef = useRef<Set<string>>(new Set());
+  const hasBootstrappedDataRef = useRef<boolean>(false);
+
+  const runExclusive = async (key: string, fn: () => Promise<void>) => {
+    if (inFlightActionsRef.current.has(key)) return;
+    inFlightActionsRef.current.add(key);
+    try {
+      await fn();
+    } finally {
+      inFlightActionsRef.current.delete(key);
+    }
+  };
 
   // Data states
   const [numbers, setNumbers] = useState<any[]>([]);
@@ -239,7 +263,10 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   // Leads & AI Itinerary state
   const [selectedLead, setSelectedLead] = useState<any | null>(null);
+  const [selectingLeadId, setSelectingLeadId] = useState<string | null>(null);
   const [generatingItineraryCallId, setGeneratingItineraryCallId] = useState<string | null>(null);
+  const [hangingUpCallId, setHangingUpCallId] = useState<string | null>(null);
+  const [sendingDtmfDigits, setSendingDtmfDigits] = useState<string | null>(null);
   const [leadRevisionNotes, setLeadRevisionNotes] = useState<string>('');
   const [leadCustomerEmail, setLeadCustomerEmail] = useState<string>('');
   const [leadSelectedSupplierId, setLeadSelectedSupplierId] = useState<string>('');
@@ -265,6 +292,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [supplierContactPerson, setSupplierContactPerson] = useState<string>('');
   const [supplierNotes, setSupplierNotes] = useState<string>('');
   const [supplierLoading, setSupplierLoading] = useState<boolean>(false);
+  const [deletingSupplierId, setDeletingSupplierId] = useState<string | null>(null);
 
   // Audio player state
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
@@ -314,6 +342,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [contactCompany, setContactCompany] = useState('');
   const [contactNotes, setContactNotes] = useState('');
   const [contactLoading, setContactLoading] = useState(false);
+  const [deletingContactId, setDeletingContactId] = useState<string | null>(null);
 
   // SMS composer state
   const [smsDestination, setSmsDestination] = useState('+14155550199');
@@ -325,6 +354,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [searchIso, setSearchIso] = useState('US');
   const [availableNumbers, setAvailableNumbers] = useState<any[]>([]);
   const [searchingNumbers, setSearchingNumbers] = useState(false);
+  const [buyingNumberE164, setBuyingNumberE164] = useState<string | null>(null);
 
   // Search transcript query
   const [transcriptSearch, setTranscriptSearch] = useState('');
@@ -356,6 +386,13 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
 
 
+  // Keep tokenRef synchronized with bearerToken
+  useEffect(() => {
+    if (bearerToken) {
+      tokenRef.current = bearerToken;
+    }
+  }, [bearerToken]);
+
   // Strict Auth Gate: MUST be accessed ONLY by login
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -363,6 +400,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       const localUser = localStorage.getItem('plivo_user');
       const localOrg = localStorage.getItem('plivo_org');
       if (localToken) {
+        tokenRef.current = localToken;
         setBearerToken(localToken);
         if (localUser) {
           try { setCurrentUser(JSON.parse(localUser)); } catch {}
@@ -386,55 +424,161 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // Helper to apply console state results uniformly and purge any undefined/empty lists
+  // Singleton token refresh mutex so concurrent 401s share a single /api/v1/auth/refresh request
+  const refreshAccessToken = async (): Promise<string | null> => {
+    if (typeof window === 'undefined') return null;
+    if (refreshPromiseRef.current) {
+      return refreshPromiseRef.current;
+    }
+
+    const doRefresh = async (): Promise<string | null> => {
+      const refreshToken = localStorage.getItem('plivo_refresh_token');
+      if (!refreshToken) {
+        handleSignOut();
+        return null;
+      }
+
+      try {
+        const refreshRes = await fetch('/api/v1/auth/refresh', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': 'true',
+          },
+          body: JSON.stringify({ refreshToken }),
+        });
+
+        if (refreshRes.ok) {
+          const refreshData = await refreshRes.json();
+          if (refreshData.accessToken) {
+            const newToken = refreshData.accessToken;
+            tokenRef.current = newToken;
+            localStorage.setItem('plivo_access_token', newToken);
+            if (refreshData.refreshToken) {
+              localStorage.setItem('plivo_refresh_token', refreshData.refreshToken);
+            }
+            setBearerToken(newToken);
+            return newToken;
+          }
+        }
+
+        // Only sign out if server explicitly rejected the refresh token (401/403)
+        if (refreshRes.status === 401 || refreshRes.status === 403) {
+          handleSignOut();
+        }
+        return null;
+      } catch (err) {
+        // Transient network hiccup — do NOT sign out the user!
+        console.warn('Transient token refresh network warning:', err);
+        return null;
+      } finally {
+        refreshPromiseRef.current = null;
+      }
+    };
+
+    refreshPromiseRef.current = doRefresh();
+    return refreshPromiseRef.current;
+  };
+
+  // Universal authenticated fetch wrapper with automatic 401 token refresh retry
+  const authFetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+    const activeToken =
+      tokenRef.current ||
+      bearerToken ||
+      (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') || '' : '');
+
+    const buildHeaders = (tkn: string) => {
+      const h = new Headers(init.headers || {});
+      if (tkn) h.set('Authorization', `Bearer ${tkn}`);
+      h.set('ngrok-skip-browser-warning', 'true');
+      return h;
+    };
+
+    let res = await fetch(input, {
+      ...init,
+      headers: buildHeaders(activeToken),
+    });
+
+    if (res.status === 401) {
+      const refreshedToken = await refreshAccessToken();
+      if (refreshedToken) {
+        res = await fetch(input, {
+          ...init,
+          headers: buildHeaders(refreshedToken),
+        });
+      }
+    }
+
+    return res;
+  };
+
+  // Proactive background silent token refresh every 10 minutes while console is open
+  useEffect(() => {
+    if (!bearerToken) return;
+    const interval = setInterval(() => {
+      refreshAccessToken().catch(() => {});
+    }, 10 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [Boolean(bearerToken)]);
+
+  // Helper to apply console state results uniformly while preserving active user form selections
   const applyFetchResults = (results: any[]) => {
     const [numRes, callRes, threadRes, recRes, transRes, setRes, auditRes, staffRes, contactRes, leadRes, suppRes, orgsRes, integRes] = results;
 
     if (numRes?.objects) {
       setNumbers(numRes.objects);
-      setCallFromNumber(numRes.objects[0]?.id || '');
-    } else {
+      setCallFromNumber((prev) =>
+        prev && numRes.objects.some((n: any) => n.id === prev)
+          ? prev
+          : numRes.objects[0]?.id || ''
+      );
+    } else if (numRes && numRes.api_id !== 'auth_err') {
       setNumbers([]);
       setCallFromNumber('');
     }
 
-    setCalls(callRes?.objects || []);
+    if (callRes?.objects) setCalls(callRes.objects);
 
     if (threadRes?.objects) {
       setThreads(threadRes.objects);
-      setActiveThreadId(threadRes.objects[0]?.id || null);
-    } else {
+      setActiveThreadId((prev) =>
+        prev && threadRes.objects.some((t: any) => t.id === prev)
+          ? prev
+          : threadRes.objects[0]?.id || null
+      );
+    } else if (threadRes && threadRes.api_id !== 'auth_err') {
       setThreads([]);
       setActiveThreadId(null);
     }
 
-    setRecordings(recRes?.objects || []);
-    setTranscripts(transRes?.objects || []);
+    if (recRes?.objects) setRecordings(recRes.objects);
+    if (transRes?.objects) setTranscripts(transRes.objects);
 
     if (setRes?.organization) {
       setSettings(setRes);
       setCurrentOrg(setRes.organization);
-    } else {
-      setSettings(null);
     }
 
-    setAuditLogs(auditRes?.objects || []);
-    setStaffList(staffRes?.objects || []);
+    if (auditRes?.objects) setAuditLogs(auditRes.objects);
+    if (staffRes?.objects) setStaffList(staffRes.objects);
 
     if (contactRes?.objects) {
       setContactsList(contactRes.objects);
-      setCallDestination(contactRes.objects[0]?.phone || '');
-    } else {
+      setCallDestination((prev) => prev || contactRes.objects[0]?.phone || '');
+    } else if (contactRes && contactRes.api_id !== 'auth_err') {
       setContactsList([]);
-      setCallDestination('');
     }
 
-    setLeadsList(leadRes?.objects || []);
+    if (leadRes?.objects) setLeadsList(leadRes.objects);
 
     if (suppRes?.objects) {
       setSuppliersList(suppRes.objects);
-      setLeadSelectedSupplierId(suppRes.objects[0]?.id || '');
-    } else {
+      setLeadSelectedSupplierId((prev) =>
+        prev && suppRes.objects.some((s: any) => s.id === prev)
+          ? prev
+          : suppRes.objects[0]?.id || ''
+      );
+    } else if (suppRes && suppRes.api_id !== 'auth_err') {
       setSuppliersList([]);
       setLeadSelectedSupplierId('');
     }
@@ -445,8 +589,6 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
     if (integRes && integRes.api_id !== 'auth_err' && integRes.api_id !== 'server_err') {
       setIntegrationsSummary(integRes);
-    } else {
-      setIntegrationsSummary(null);
     }
   };
 
@@ -455,67 +597,47 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       Authorization: `Bearer ${authToken}`,
       'ngrok-skip-browser-warning': 'true',
     };
+    const safeJson = (url: string) =>
+      fetch(url, { headers })
+        .then((r) => r.json())
+        .catch(() => ({}));
+
     const results = await Promise.all([
-      fetch('/api/v1/numbers', { headers }).then((r) => r.json()),
-      fetch('/api/v1/calls', { headers }).then((r) => r.json()),
-      fetch('/api/v1/messages/threads', { headers }).then((r) => r.json()),
-      fetch('/api/v1/recordings', { headers }).then((r) => r.json()),
-      fetch('/api/v1/transcriptions', { headers }).then((r) => r.json()),
-      fetch('/api/v1/settings', { headers }).then((r) => r.json()),
-      fetch('/api/v1/audit', { headers }).then((r) => r.json()),
-      fetch('/api/v1/users', { headers }).then((r) => r.json()),
-      fetch('/api/v1/contacts', { headers }).then((r) => r.json()),
-      fetch('/api/v1/leads', { headers }).then((r) => r.json()),
-      fetch('/api/v1/suppliers', { headers }).then((r) => r.json()),
-      fetch('/api/v1/organizations', { headers }).then((r) => r.json()),
-      fetch('/api/v1/settings/integrations', { headers }).then((r) => r.json()),
+      safeJson('/api/v1/numbers'),
+      safeJson('/api/v1/calls'),
+      safeJson('/api/v1/messages/threads'),
+      safeJson('/api/v1/recordings'),
+      safeJson('/api/v1/transcriptions'),
+      safeJson('/api/v1/settings'),
+      safeJson('/api/v1/audit'),
+      safeJson('/api/v1/users'),
+      safeJson('/api/v1/contacts'),
+      safeJson('/api/v1/leads'),
+      safeJson('/api/v1/suppliers'),
+      safeJson('/api/v1/organizations'),
+      safeJson('/api/v1/settings/integrations'),
     ]);
     applyFetchResults(results);
     return results;
   };
 
-  // Fetch Console Data when Bearer Token is ready (with auto-refresh on 401)
+  // Fetch Console Data when Bearer Token is ready (with singleton auto-refresh on 401)
   const fetchData = async () => {
-    let token: string = bearerToken || (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') || '' : '');
+    let token: string =
+      tokenRef.current ||
+      bearerToken ||
+      (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') || '' : '');
     if (!token) return;
     setLoading(true);
 
     try {
-      let results = await executeFetchWithToken(token);
+      const results = await executeFetchWithToken(token);
 
-      // If token expired (401 auth_err), attempt seamless token refresh
-      if (results[0]?.api_id === 'auth_err' || results[5]?.api_id === 'auth_err') {
-        const refreshToken = localStorage.getItem('plivo_refresh_token');
-        if (refreshToken) {
-          try {
-            const refreshRes = await fetch('/api/v1/auth/refresh', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'ngrok-skip-browser-warning': 'true',
-              },
-              body: JSON.stringify({ refreshToken }),
-            });
-            const refreshData = await refreshRes.json();
-            if (refreshRes.ok && refreshData.accessToken) {
-              token = refreshData.accessToken;
-              localStorage.setItem('plivo_access_token', token);
-              if (refreshData.refreshToken) {
-                localStorage.setItem('plivo_refresh_token', refreshData.refreshToken);
-              }
-              setBearerToken(token);
-              await executeFetchWithToken(token);
-            } else {
-              handleSignOut();
-              return;
-            }
-          } catch {
-            handleSignOut();
-            return;
-          }
-        } else {
-          handleSignOut();
-          return;
+      // If token expired (401 auth_err), use singleton refresh mutex
+      if (results.some((r: any) => r?.api_id === 'auth_err')) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          await executeFetchWithToken(refreshed);
         }
       }
     } catch (err) {
@@ -526,15 +648,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   };
 
   const fetchIntegrations = async () => {
-    let token: string = bearerToken || (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') || '' : '');
-    if (!token) return;
     try {
-      const res = await fetch('/api/v1/settings/integrations', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'ngrok-skip-browser-warning': 'true',
-        },
-      });
+      const res = await authFetch('/api/v1/settings/integrations');
       if (res.ok) {
         const data = await res.json();
         setIntegrationsSummary(data);
@@ -545,124 +660,120 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   };
 
   const handleSwitchOrganization = async (orgId: string) => {
-    let token: string = bearerToken || (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') || '' : '');
-    if (!token) return;
+    await runExclusive(`switch-org:${orgId}`, async () => {
+      try {
+        setLoading(true);
 
-    try {
-      setLoading(true);
+        // Instantly clear out old tenant state to guarantee complete isolation during switch
+        setNumbers([]);
+        setCalls([]);
+        setThreads([]);
+        setActiveThreadId(null);
+        setActiveThreadMessages([]);
+        setRecordings([]);
+        setTranscripts([]);
+        setAuditLogs([]);
+        setStaffList([]);
+        setContactsList([]);
+        setLeadsList([]);
+        setSuppliersList([]);
+        setSettings(null);
+        setIntegrationsSummary(null);
 
-      // Instantly clear out old tenant state to guarantee complete isolation during switch
-      setNumbers([]);
-      setCalls([]);
-      setThreads([]);
-      setActiveThreadId(null);
-      setActiveThreadMessages([]);
-      setRecordings([]);
-      setTranscripts([]);
-      setAuditLogs([]);
-      setStaffList([]);
-      setContactsList([]);
-      setLeadsList([]);
-      setSuppliersList([]);
-      setSettings(null);
-      setIntegrationsSummary(null);
+        const res = await authFetch('/api/v1/organizations/switch', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ organizationId: orgId }),
+        });
 
-      const res = await fetch('/api/v1/organizations/switch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          'ngrok-skip-browser-warning': 'true',
-        },
-        body: JSON.stringify({ organizationId: orgId }),
-      });
+        const data = await res.json();
+        if (res.ok && data.accessToken) {
+          tokenRef.current = data.accessToken;
+          localStorage.setItem('plivo_access_token', data.accessToken);
+          if (data.refreshToken) {
+            localStorage.setItem('plivo_refresh_token', data.refreshToken);
+          }
+          if (data.organization) {
+            localStorage.setItem('plivo_org', JSON.stringify(data.organization));
+            setCurrentOrg(data.organization);
+          }
+          if (data.user) {
+            localStorage.setItem('plivo_user', JSON.stringify(data.user));
+            setCurrentUser(data.user);
+          }
+          setBearerToken(data.accessToken);
 
-      const data = await res.json();
-      if (res.ok && data.accessToken) {
-        localStorage.setItem('plivo_access_token', data.accessToken);
-        if (data.refreshToken) {
-          localStorage.setItem('plivo_refresh_token', data.refreshToken);
+          // Immediately load new organization's data with the new access token
+          await executeFetchWithToken(data.accessToken);
+        } else {
+          alert(data.error || 'Failed to switch organization');
         }
-        if (data.organization) {
-          localStorage.setItem('plivo_org', JSON.stringify(data.organization));
-          setCurrentOrg(data.organization);
-        }
-        if (data.user) {
-          localStorage.setItem('plivo_user', JSON.stringify(data.user));
-          setCurrentUser(data.user);
-        }
-        setBearerToken(data.accessToken);
-
-        // Immediately load new organization's data with the new access token
-        await executeFetchWithToken(data.accessToken);
-      } else {
-        alert(data.error || 'Failed to switch organization');
+      } catch (err: any) {
+        alert(err.message || 'Error switching organization');
+      } finally {
+        setLoading(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error switching organization');
-    } finally {
-      setLoading(false);
-    }
+    });
   };
 
   const handleCreateOrganization = async (name: string) => {
-    let token: string = bearerToken || (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') || '' : '');
-    if (!token) return;
+    await runExclusive('create-org', async () => {
+      try {
+        setCreatingOrg(true);
+        setLoading(true);
+        const res = await authFetch('/api/v1/organizations', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ name }),
+        });
 
-    try {
-      setLoading(true);
-      const res = await fetch('/api/v1/organizations', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          'ngrok-skip-browser-warning': 'true',
-        },
-        body: JSON.stringify({ name }),
-      });
-
-      const data = await res.json();
-      if (res.ok && data.organization) {
-        setShowOrgModal(false);
-        await handleSwitchOrganization(data.organization.id);
-      } else {
-        alert(data.error || 'Failed to create organization');
+        const data = await res.json();
+        if (res.ok && data.organization) {
+          setShowOrgModal(false);
+          await handleSwitchOrganization(data.organization.id);
+        } else {
+          alert(data.error || 'Failed to create organization');
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error creating organization');
+      } finally {
+        setCreatingOrg(false);
+        setLoading(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error creating organization');
-    } finally {
-      setLoading(false);
-    }
+    });
   };
 
   useEffect(() => {
-    if (bearerToken) fetchData();
+    if (bearerToken && !hasBootstrappedDataRef.current) {
+      hasBootstrappedDataRef.current = true;
+      fetchData();
+      initWebPhone();
+    }
   }, [bearerToken]);
 
   // Fetch active thread messages
   useEffect(() => {
     if (!bearerToken || !activeThreadId) return;
-    fetch(`/api/v1/messages/threads/${activeThreadId}`, {
-      headers: { Authorization: `Bearer ${bearerToken}` },
-    })
+    authFetch(`/api/v1/messages/threads/${activeThreadId}`)
       .then((r) => r.json())
       .then((data) => {
         if (data.thread?.messages) {
           setActiveThreadMessages(data.thread.messages);
         }
-      });
+      })
+      .catch(() => {});
   }, [bearerToken, activeThreadId]);
 
   // Refresh single call details
   const refreshCallDetail = async (callId: string) => {
     if (!callId) return;
-    const token = bearerToken || (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') : null);
-    if (!token) return;
     setCallDetailSyncing(true);
     try {
-      const res = await fetch(`/api/v1/calls/${callId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await authFetch(`/api/v1/calls/${callId}`);
       if (res.ok) {
         const data = await res.json();
         setSelectedCallDetail(data.call);
@@ -676,8 +787,6 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   // Auto-polling for Call Details drawer when recording or transcription is processing
   useEffect(() => {
     if (!selectedCallDetail) return;
-    const token = bearerToken || (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') : null);
-    if (!token) return;
 
     const hasRecordings = Boolean(selectedCallDetail.recordings && selectedCallDetail.recordings.length > 0);
     const hasTranscriptions = Boolean(selectedCallDetail.transcriptions && selectedCallDetail.transcriptions.length > 0);
@@ -685,9 +794,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     if (!hasRecordings || !hasTranscriptions || selectedCallDetail.status === 'in-progress' || selectedCallDetail.isRecordingProcessing || selectedCallDetail.isTranscriptionProcessing) {
       const interval = setInterval(async () => {
         try {
-          const res = await fetch(`/api/v1/calls/${selectedCallDetail.id}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
+          const res = await authFetch(`/api/v1/calls/${selectedCallDetail.id}`);
           if (res.ok) {
             const data = await res.json();
             setSelectedCallDetail(data.call);
@@ -697,16 +804,12 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
       return () => clearInterval(interval);
     }
-  }, [selectedCallDetail?.id, selectedCallDetail?.recordings?.length, selectedCallDetail?.transcriptions?.length, selectedCallDetail?.status, bearerToken]);
+  }, [selectedCallDetail?.id, selectedCallDetail?.recordings?.length, selectedCallDetail?.transcriptions?.length, selectedCallDetail?.status]);
 
   // Initialize In-Browser Web Phone
   const initWebPhone = async () => {
-    const token = bearerToken || (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') : null);
-    if (!token) return;
     try {
-      const res = await fetch('/api/v1/telephony/endpoint', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await authFetch('/api/v1/telephony/endpoint');
       const data = await res.json();
       if (res.ok && data.username) {
         setEndpointConfig(data);
@@ -807,12 +910,6 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       console.warn('Web phone init notice:', e.message);
     }
   };
-
-  useEffect(() => {
-    if (bearerToken) {
-      initWebPhone();
-    }
-  }, [bearerToken]);
 
   // Call duration counter
   useEffect(() => {
@@ -977,254 +1074,270 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   // Place Call Handler
   const handlePlaceCall = async () => {
-    if (!callDestination) {
-      alert('You must select or add a verified contact before placing a call.');
-      return;
-    }
-    if (!callFromNumber) {
-      alert('Please select an active line to call from.');
-      return;
-    }
-    if ((callMode === 'bridge' || callMode === 'forward') && !callForwardTo) {
-      alert('Please enter your Staff / Agent phone number to bridge into the conversation.');
-      return;
-    }
-    setCallLoading(true);
-    try {
-      const res = await fetch('/api/v1/calls', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          phoneNumberId: callFromNumber,
-          to: callDestination,
-          mode: callMode,
-          forwardTo: (callMode === 'bridge' || callMode === 'forward') ? callForwardTo : undefined,
-          record: callRecord,
-          transcribe: callTranscribe,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setShowCallModal(false);
-        fetchData();
-        if (data.call?.id) {
-          const detailRes = await fetch(`/api/v1/calls/${data.call.id}`, {
-            headers: { Authorization: `Bearer ${bearerToken}` },
-          });
-          if (detailRes.ok) {
-            const detailData = await detailRes.json();
-            setSelectedCallDetail(detailData.call);
-          }
-        }
-      } else {
-        alert(data.error || 'Failed to place call');
+    await runExclusive('place-call', async () => {
+      if (!callDestination) {
+        alert('You must select or add a verified contact before placing a call.');
+        return;
       }
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setCallLoading(false);
-    }
+      if (!callFromNumber) {
+        alert('Please select an active line to call from.');
+        return;
+      }
+      if ((callMode === 'bridge' || callMode === 'forward') && !callForwardTo) {
+        alert('Please enter your Staff / Agent phone number to bridge into the conversation.');
+        return;
+      }
+      setCallLoading(true);
+      try {
+        const res = await authFetch('/api/v1/calls', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            phoneNumberId: callFromNumber,
+            to: callDestination,
+            mode: callMode,
+            forwardTo: (callMode === 'bridge' || callMode === 'forward') ? callForwardTo : undefined,
+            record: callRecord,
+            transcribe: callTranscribe,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setShowCallModal(false);
+          fetchData();
+          if (data.call?.id) {
+            setSelectedCallDetail(data.call);
+            refreshCallDetail(data.call.id);
+          }
+        } else {
+          alert(data.error || 'Failed to place call');
+        }
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setCallLoading(false);
+      }
+    });
   };
 
   // Send SMS Handler
   const handleSendSms = async () => {
-    if (!smsText || !smsDestination || numbers.length === 0) return;
-    setSmsSending(true);
-    try {
-      const fromNumberId = numbers[0].id;
-      const res = await fetch('/api/v1/messages/send', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          phoneNumberId: fromNumberId,
-          to: [smsDestination],
-          text: smsText,
-        }),
-      });
-      if (res.ok) {
-        setSmsText('');
-        fetchData();
+    await runExclusive('send-sms', async () => {
+      if (!smsText || !smsDestination || numbers.length === 0) return;
+      setSmsSending(true);
+      try {
+        const fromNumberId = numbers[0].id;
+        const res = await authFetch('/api/v1/messages/send', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            phoneNumberId: fromNumberId,
+            to: [smsDestination],
+            text: smsText,
+          }),
+        });
+        if (res.ok) {
+          setSmsText('');
+          fetchData();
+        }
+      } catch (err) {
+        console.error('Send SMS error:', err);
+      } finally {
+        setSmsSending(false);
       }
-    } catch (err) {
-      console.error('Send SMS error:', err);
-    } finally {
-      setSmsSending(false);
-    }
+    });
   };
 
   // Search Available Numbers
   const handleSearchNumbers = async () => {
-    setSearchingNumbers(true);
-    try {
-      const res = await fetch(`/api/v1/numbers/search?country_iso=${searchIso}`, {
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      const data = await res.json();
-      if (data.objects) {
-        setAvailableNumbers(data.objects);
+    await runExclusive('search-numbers', async () => {
+      setSearchingNumbers(true);
+      try {
+        const res = await authFetch(`/api/v1/numbers/search?country_iso=${searchIso}`);
+        const data = await res.json();
+        if (data.objects) {
+          setAvailableNumbers(data.objects);
+        }
+      } catch (err) {
+        console.error('Search numbers error:', err);
+      } finally {
+        setSearchingNumbers(false);
       }
-    } catch (err) {
-      console.error('Search numbers error:', err);
-    } finally {
-      setSearchingNumbers(false);
-    }
+    });
   };
 
   // Buy Number Handler
   const handleBuyNumber = async (number: string) => {
-    try {
-      const res = await fetch('/api/v1/numbers/buy', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          countryIso: searchIso,
-          e164: number,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(`Successfully purchased ${number}!`);
-        setShowBuyModal(false);
-        fetchData();
-      } else {
-        alert(data.error || 'Purchase failed');
+    await runExclusive(`buy-number:${number}`, async () => {
+      setBuyingNumberE164(number);
+      try {
+        const res = await authFetch('/api/v1/numbers/buy', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            countryIso: searchIso,
+            e164: number,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`Successfully purchased ${number}!`);
+          setShowBuyModal(false);
+          fetchData();
+        } else {
+          alert(data.error || 'Purchase failed');
+        }
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setBuyingNumberE164(null);
       }
-    } catch (err: any) {
-      alert(err.message);
-    }
+    });
   };
 
   // Hangup Live Call
   const handleHangupLiveCall = async (callId: string) => {
-    try {
-      await fetch(`/api/v1/calls/${callId}/live`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      const res = await fetch(`/api/v1/calls/${callId}`, {
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSelectedCallDetail(data.call);
+    await runExclusive(`hangup-call:${callId}`, async () => {
+      setHangingUpCallId(callId);
+      try {
+        await authFetch(`/api/v1/calls/${callId}/live`, {
+          method: 'DELETE',
+        });
+        const res = await authFetch(`/api/v1/calls/${callId}?fast=true`);
+        if (res.ok) {
+          const data = await res.json();
+          setSelectedCallDetail(data.call);
+        }
+        fetchData();
+      } catch (err: any) {
+        console.error('Hangup error:', err);
+      } finally {
+        setHangingUpCallId(null);
       }
-      fetchData();
-    } catch (err: any) {
-      console.error('Hangup error:', err);
-    }
+    });
   };
 
   // Create Staff
   const handleCreateStaff = async (e: React.FormEvent) => {
     e.preventDefault();
-    setStaffLoading(true);
-    try {
-      const res = await fetch('/api/v1/users', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          name: staffName,
-          email: staffEmail,
-          password: staffPassword,
-          role: staffRole,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(`Staff member ${staffName} created successfully!`);
-        setShowStaffModal(false);
-        setStaffName('');
-        setStaffEmail('');
-        setStaffPassword('');
-        setStaffRole('operator');
-        fetchData();
-      } else {
-        alert(data.error || 'Failed to create staff member');
+    await runExclusive('create-staff', async () => {
+      setStaffLoading(true);
+      try {
+        const res = await authFetch('/api/v1/users', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: staffName,
+            email: staffEmail,
+            password: staffPassword,
+            role: staffRole,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`Staff member ${staffName} created successfully!`);
+          setShowStaffModal(false);
+          setStaffName('');
+          setStaffEmail('');
+          setStaffPassword('');
+          setStaffRole('operator');
+          fetchData();
+        } else {
+          alert(data.error || 'Failed to create staff member');
+        }
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setStaffLoading(false);
       }
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setStaffLoading(false);
-    }
+    });
   };
 
   // Create Contact
   const handleCreateContact = async (e: React.FormEvent) => {
     e.preventDefault();
-    setContactLoading(true);
-    try {
-      const res = await fetch('/api/v1/contacts', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          name: contactName,
-          phone: contactPhone,
-          email: contactEmail,
-          company: contactCompany,
-          notes: contactNotes,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(`Contact ${contactName} added successfully!`);
-        setShowContactModal(false);
-        setCallDestination(contactPhone);
-        setContactName('');
-        setContactPhone('');
-        setContactEmail('');
-        setContactCompany('');
-        setContactNotes('');
-        fetchData();
-      } else {
-        alert(data.error || 'Failed to add contact');
+    await runExclusive('create-contact', async () => {
+      setContactLoading(true);
+      try {
+        const res = await authFetch('/api/v1/contacts', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: contactName,
+            phone: contactPhone,
+            email: contactEmail,
+            company: contactCompany,
+            notes: contactNotes,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`Contact ${contactName} added successfully!`);
+          setShowContactModal(false);
+          setCallDestination(contactPhone);
+          setContactName('');
+          setContactPhone('');
+          setContactEmail('');
+          setContactCompany('');
+          setContactNotes('');
+          fetchData();
+        } else {
+          alert(data.error || 'Failed to add contact');
+        }
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setContactLoading(false);
       }
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setContactLoading(false);
-    }
+    });
   };
 
   const handleDeleteContact = async (contactId: string) => {
-    if (!confirm('Are you sure you want to delete this contact?')) return;
-    try {
-      const res = await fetch(`/api/v1/contacts/${contactId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      if (res.ok) {
-        fetchData();
+    await runExclusive(`delete-contact:${contactId}`, async () => {
+      if (!confirm('Are you sure you want to delete this contact?')) return;
+      setDeletingContactId(contactId);
+      try {
+        const res = await authFetch(`/api/v1/contacts/${contactId}`, {
+          method: 'DELETE',
+        });
+        if (res.ok) {
+          setContactsList((prev) => prev.filter((c) => c.id !== contactId));
+          fetchData();
+        }
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setDeletingContactId(null);
       }
-    } catch (err: any) {
-      alert(err.message);
-    }
+    });
   };
 
   const handleSendDtmf = async (callId: string, digits: string) => {
-    await fetch(`/api/v1/calls/${callId}/live/dtmf`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        Authorization: `Bearer ${bearerToken}`,
-      },
-      body: JSON.stringify({ digits }),
+    await runExclusive(`dtmf:${callId}:${digits}`, async () => {
+      setSendingDtmfDigits(digits);
+      try {
+        await authFetch(`/api/v1/calls/${callId}/live/dtmf`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ digits }),
+        });
+        alert(`Sent DTMF digits ${digits}`);
+      } finally {
+        setSendingDtmfDigits(null);
+      }
     });
-    alert(`Sent DTMF digits ${digits}`);
   };
 
   const handleTriggerTranscription = async (
@@ -1233,47 +1346,48 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     model?: string,
     silent = false
   ) => {
-    setTranscribingRecId(recordingId);
-    setTranscribingProvider('openai');
-    try {
-      const targetModel =
-        model ||
-        integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai')?.metadata?.model;
+    await runExclusive(`transcribe-rec:${recordingId}`, async () => {
+      setTranscribingRecId(recordingId);
+      setTranscribingProvider('openai');
+      try {
+        const targetModel =
+          model ||
+          integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai')?.metadata?.model;
 
-      const res = await fetch(`/api/v1/recordings/${recordingId}/transcribe`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          provider: 'openai',
-          ...(targetModel ? { model: targetModel } : {}),
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
+        const res = await authFetch(`/api/v1/recordings/${recordingId}/transcribe`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            provider: 'openai',
+            ...(targetModel ? { model: targetModel } : {}),
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          if (!silent) {
+            alert(
+              data.message ||
+                `Transcription generated successfully with OpenAI (${data.model || targetModel || 'primary model'})!`
+            );
+          }
+          await fetchData();
+          if (selectedCallDetail) {
+            await refreshCallDetail(selectedCallDetail.id);
+          }
+        } else if (!silent) {
+          alert(data.error || 'Failed to transcribe recording');
+        }
+      } catch (err: any) {
         if (!silent) {
-          alert(
-            data.message ||
-              `Transcription generated successfully with OpenAI (${data.model || targetModel || 'primary model'})!`
-          );
+          alert(err.message || 'Transcription request failed');
         }
-        await fetchData();
-        if (selectedCallDetail) {
-          await refreshCallDetail(selectedCallDetail.id);
-        }
-      } else if (!silent) {
-        alert(data.error || 'Failed to transcribe recording');
+      } finally {
+        setTranscribingRecId(null);
+        setTranscribingProvider(null);
       }
-    } catch (err: any) {
-      if (!silent) {
-        alert(err.message || 'Transcription request failed');
-      }
-    } finally {
-      setTranscribingRecId(null);
-      setTranscribingProvider(null);
-    }
+    });
   };
 
   const handleTriggerCallTranscription = async (
@@ -1282,43 +1396,44 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     model?: string,
     silent = false
   ) => {
-    setTranscribingProvider('openai');
-    try {
-      const targetModel =
-        model ||
-        integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai')?.metadata?.model;
+    await runExclusive(`transcribe-call:${callId}`, async () => {
+      setTranscribingProvider('openai');
+      try {
+        const targetModel =
+          model ||
+          integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai')?.metadata?.model;
 
-      const res = await fetch(`/api/v1/calls/${callId}/transcribe`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          provider: 'openai',
-          ...(targetModel ? { model: targetModel } : {}),
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        if (!silent) {
-          alert(
-            data.message ||
-              `Transcription generated successfully with OpenAI (${data.model || targetModel || 'primary model'})!`
-          );
+        const res = await authFetch(`/api/v1/calls/${callId}/transcribe`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            provider: 'openai',
+            ...(targetModel ? { model: targetModel } : {}),
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          if (!silent) {
+            alert(
+              data.message ||
+                `Transcription generated successfully with OpenAI (${data.model || targetModel || 'primary model'})!`
+            );
+          }
+          await fetchData();
+          await refreshCallDetail(callId);
+        } else if (!silent) {
+          alert(data.error || 'Failed to trigger call transcription');
         }
-        await fetchData();
-        await refreshCallDetail(callId);
-      } else if (!silent) {
-        alert(data.error || 'Failed to trigger call transcription');
+      } catch (err: any) {
+        if (!silent) {
+          alert(err.message || 'Call transcription request failed');
+        }
+      } finally {
+        setTranscribingProvider(null);
       }
-    } catch (err: any) {
-      if (!silent) {
-        alert(err.message || 'Call transcription request failed');
-      }
-    } finally {
-      setTranscribingProvider(null);
-    }
+    });
   };
 
   // Helper to resolve customer email from lead record, linked contact, or call counterpart phone
@@ -1350,134 +1465,128 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   // Generate Itinerary from Call Transcription
   const handleGenerateItinerary = async (callId: string) => {
-    setGeneratingItineraryCallId(callId);
-    try {
-      const res = await fetch('/api/v1/leads/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({ callId }),
-      });
-      const data = await res.json();
-      if (res.ok && data.lead) {
-        await fetchData();
-        const leadDetailRes = await fetch(`/api/v1/leads/${data.lead.id}`, {
-          headers: { Authorization: `Bearer ${bearerToken}` },
+    await runExclusive(`gen-itinerary:${callId}`, async () => {
+      setGeneratingItineraryCallId(callId);
+      try {
+        const res = await authFetch('/api/v1/leads/generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ callId }),
         });
-        if (leadDetailRes.ok) {
-          const detailData = await leadDetailRes.json();
-          setSelectedLead(detailData.lead);
-          const resolved = resolveCustomerEmailForLead(detailData.lead, contactsList);
-          setLeadCustomerEmail(resolved.email);
-          setLeadSelectedSupplierId(detailData.lead.selectedSupplierId || (suppliersList[0]?.id || ''));
-          setLeadRevisionNotes(detailData.lead.revisionNotes || '');
-        } else {
+        const data = await res.json();
+        if (res.ok && data.lead) {
           setSelectedLead(data.lead);
           const resolved = resolveCustomerEmailForLead(data.lead, contactsList);
           setLeadCustomerEmail(resolved.email);
+          setLeadSelectedSupplierId(data.lead.selectedSupplierId || (suppliersList[0]?.id || ''));
+          setLeadRevisionNotes(data.lead.revisionNotes || '');
+          setSelectedCallDetail(null);
+          fetchData();
+        } else {
+          alert(data.error || 'Failed to generate itinerary');
         }
-        setSelectedCallDetail(null);
-      } else {
-        alert(data.error || 'Failed to generate itinerary');
+      } catch (err: any) {
+        alert(err.message || 'Error communicating with itinerary service');
+      } finally {
+        setGeneratingItineraryCallId(null);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error communicating with itinerary service');
-    } finally {
-      setGeneratingItineraryCallId(null);
-    }
+    });
   };
 
   // Generate Itinerary with Customized Intake Parameters
   const handleGenerateItineraryWithParams = async (callId: string, params: any) => {
-    setGeneratingItineraryCallId(callId);
-    try {
-      const res = await fetch('/api/v1/leads/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({ callId, ...params }),
-      });
-      const data = await res.json();
-      if (res.ok && data.lead) {
-        setShowItineraryIntakeModal(false);
-        setIntakeCallTarget(null);
-        await fetchData();
-        const leadDetailRes = await fetch(`/api/v1/leads/${data.lead.id}`, {
-          headers: { Authorization: `Bearer ${bearerToken}` },
+    await runExclusive(`gen-itinerary:${callId}`, async () => {
+      setGeneratingItineraryCallId(callId);
+      try {
+        const res = await authFetch('/api/v1/leads/generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ callId, ...params }),
         });
-        if (leadDetailRes.ok) {
-          const detailData = await leadDetailRes.json();
-          setSelectedLead(detailData.lead);
-          const resolved = resolveCustomerEmailForLead(detailData.lead, contactsList);
-          setLeadCustomerEmail(resolved.email);
-          setLeadSelectedSupplierId(detailData.lead.selectedSupplierId || (suppliersList[0]?.id || ''));
-          setLeadRevisionNotes(detailData.lead.revisionNotes || '');
-        } else {
+        const data = await res.json();
+        if (res.ok && data.lead) {
+          setShowItineraryIntakeModal(false);
+          setIntakeCallTarget(null);
           setSelectedLead(data.lead);
           const resolved = resolveCustomerEmailForLead(data.lead, contactsList);
           setLeadCustomerEmail(resolved.email);
+          setLeadSelectedSupplierId(data.lead.selectedSupplierId || (suppliersList[0]?.id || ''));
+          setLeadRevisionNotes(data.lead.revisionNotes || '');
+          setSelectedCallDetail(null);
+          fetchData();
+        } else {
+          alert(data.error || 'Failed to generate itinerary');
         }
-        setSelectedCallDetail(null);
-      } else {
-        alert(data.error || 'Failed to generate itinerary');
+      } catch (err: any) {
+        alert(err.message || 'Error communicating with itinerary service');
+      } finally {
+        setGeneratingItineraryCallId(null);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error communicating with itinerary service');
-    } finally {
-      setGeneratingItineraryCallId(null);
-    }
+    });
   };
 
-  // Select Lead Details
+  // Select Lead Details (Instant 0ms optimistic drawer open + background full load)
   const handleSelectLead = async (leadId: string) => {
-    try {
-      const res = await fetch(`/api/v1/leads/${leadId}`, {
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSelectedLead(data.lead);
-        const resolved = resolveCustomerEmailForLead(data.lead, contactsList);
+    await runExclusive(`select-lead:${leadId}`, async () => {
+      setSelectingLeadId(leadId);
+      const cachedLead = leadsList.find((l) => l.id === leadId);
+      if (cachedLead) {
+        setSelectedLead(cachedLead);
+        const resolved = resolveCustomerEmailForLead(cachedLead, contactsList);
         setLeadCustomerEmail(resolved.email);
-        setLeadSelectedSupplierId(data.lead.selectedSupplierId || (suppliersList[0]?.id || ''));
-        setLeadRevisionNotes(data.lead.revisionNotes || '');
+        setLeadSelectedSupplierId(cachedLead.selectedSupplierId || (suppliersList[0]?.id || ''));
+        setLeadRevisionNotes(cachedLead.revisionNotes || '');
       }
-    } catch (err: any) {
-      console.error('Error fetching lead detail:', err);
-    }
+      try {
+        const res = await authFetch(`/api/v1/leads/${leadId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setSelectedLead(data.lead);
+          const resolved = resolveCustomerEmailForLead(data.lead, contactsList);
+          setLeadCustomerEmail(resolved.email);
+          setLeadSelectedSupplierId(data.lead.selectedSupplierId || (suppliersList[0]?.id || ''));
+          setLeadRevisionNotes(data.lead.revisionNotes || '');
+        }
+      } catch (err: any) {
+        console.error('Error fetching lead detail:', err);
+      } finally {
+        setSelectingLeadId(null);
+      }
+    });
   };
 
   // Update Lead Status
   const handleUpdateLeadStatus = async (leadId: string, newStatus: string) => {
-    setLeadsList((prev) =>
-      prev.map((l) => (l.id === leadId ? { ...l, status: newStatus } : l))
-    );
-    if (selectedLead && selectedLead.id === leadId) {
-      setSelectedLead((prev: any) => ({ ...prev, status: newStatus }));
-    }
+    await runExclusive(`update-lead-status:${leadId}`, async () => {
+      setLeadsList((prev) =>
+        prev.map((l) => (l.id === leadId ? { ...l, status: newStatus } : l))
+      );
+      if (selectedLead && selectedLead.id === leadId) {
+        setSelectedLead((prev: any) => ({ ...prev, status: newStatus }));
+      }
 
-    try {
-      const res = await fetch(`/api/v1/leads/${leadId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        alert(data.error || 'Failed to update lead status');
+      try {
+        const res = await authFetch(`/api/v1/leads/${leadId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ status: newStatus }),
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          alert(data.error || 'Failed to update lead status');
+          fetchData();
+        }
+      } catch (err: any) {
+        console.error('Update lead status error:', err);
         fetchData();
       }
-    } catch (err: any) {
-      console.error('Update lead status error:', err);
-      fetchData();
-    }
+    });
   };
 
   // Revise Itinerary
@@ -1487,40 +1596,41 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       alert('Please enter your revision notes or corrections before submitting.');
       return;
     }
-    setLeadRevising(true);
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/revise`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({ revisionNotes: leadRevisionNotes }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        const revisedLead = data.lead;
-        const newItinerary = revisedLead?.itinerary || data.itinerary || selectedLead.itinerary || '';
-        const newRevisionNotes = revisedLead?.revisionNotes || data.revisionNotes || selectedLead.revisionNotes || '';
+    await runExclusive(`revise-lead:${selectedLead.id}`, async () => {
+      setLeadRevising(true);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/revise`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ revisionNotes: leadRevisionNotes }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          const revisedLead = data.lead;
+          const newItinerary = revisedLead?.itinerary || data.itinerary || selectedLead.itinerary || '';
+          const newRevisionNotes = revisedLead?.revisionNotes || data.revisionNotes || selectedLead.revisionNotes || '';
 
-        setSelectedLead((prev: any) => ({
-          ...(prev || {}),
-          ...(revisedLead || {}),
-          itinerary: newItinerary,
-          revisionNotes: newRevisionNotes,
-          status: revisedLead?.status || 'revision_requested',
-        }));
-        setLeadRevisionNotes('');
-        await fetchData();
-        alert('Itinerary revised successfully!');
-      } else {
-        alert(data.error || 'Failed to revise itinerary');
+          setSelectedLead((prev: any) => ({
+            ...(prev || {}),
+            ...(revisedLead || {}),
+            itinerary: newItinerary,
+            revisionNotes: newRevisionNotes,
+            status: revisedLead?.status || 'revision_requested',
+          }));
+          setLeadRevisionNotes('');
+          fetchData();
+          alert('Itinerary revised successfully!');
+        } else {
+          alert(data.error || 'Failed to revise itinerary');
+        }
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setLeadRevising(false);
       }
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setLeadRevising(false);
-    }
+    });
   };
 
   // Approve and Send Itinerary
@@ -1530,94 +1640,101 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       alert('Please enter a valid customer email address so we can dispatch the itinerary.');
       return;
     }
-    setLeadSending(true);
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/send`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          customerEmail: leadCustomerEmail,
-          supplierId: leadSelectedSupplierId || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSelectedLead((prev: any) => ({
-          ...prev,
-          status: 'approved',
-          customerEmail: leadCustomerEmail,
-          customerSentAt: new Date().toISOString(),
-          supplierSentAt: leadSelectedSupplierId ? new Date().toISOString() : null,
-          selectedSupplierId: leadSelectedSupplierId,
-        }));
-        fetchData();
-        alert(`Success! Itinerary approved.\n\n• Customer PDF dispatched to ${leadCustomerEmail}\n• Supplier RFQ PDF quotation request dispatched.`);
-      } else {
-        alert(data.error || 'Failed to send itinerary');
+    await runExclusive(`send-lead:${selectedLead.id}`, async () => {
+      setLeadSending(true);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/send`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            customerEmail: leadCustomerEmail,
+            supplierId: leadSelectedSupplierId || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setSelectedLead((prev: any) => ({
+            ...prev,
+            status: 'approved',
+            customerEmail: leadCustomerEmail,
+            customerSentAt: new Date().toISOString(),
+            supplierSentAt: leadSelectedSupplierId ? new Date().toISOString() : null,
+            selectedSupplierId: leadSelectedSupplierId,
+          }));
+          fetchData();
+          alert(`Success! Itinerary approved.\n\n• Customer PDF dispatched to ${leadCustomerEmail}\n• Supplier RFQ PDF quotation request dispatched.`);
+        } else {
+          alert(data.error || 'Failed to send itinerary');
+        }
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setLeadSending(false);
       }
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setLeadSending(false);
-    }
+    });
   };
 
   // Create Supplier
   const handleCreateSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSupplierLoading(true);
-    try {
-      const res = await fetch('/api/v1/suppliers', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          name: supplierName,
-          category: supplierCategory,
-          email: supplierEmail,
-          phone: supplierPhone,
-          contactPerson: supplierContactPerson,
-          notes: supplierNotes,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        alert(`Supplier ${supplierName} added successfully!`);
-        setShowSupplierModal(false);
-        setSupplierName('');
-        setSupplierEmail('');
-        setSupplierPhone('');
-        setSupplierContactPerson('');
-        setSupplierNotes('');
-        fetchData();
-      } else {
-        alert(data.error || 'Failed to create supplier');
+    await runExclusive('create-supplier', async () => {
+      setSupplierLoading(true);
+      try {
+        const res = await authFetch('/api/v1/suppliers', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: supplierName,
+            category: supplierCategory,
+            email: supplierEmail,
+            phone: supplierPhone,
+            contactPerson: supplierContactPerson,
+            notes: supplierNotes,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`Supplier ${supplierName} added successfully!`);
+          setShowSupplierModal(false);
+          setSupplierName('');
+          setSupplierEmail('');
+          setSupplierPhone('');
+          setSupplierContactPerson('');
+          setSupplierNotes('');
+          fetchData();
+        } else {
+          alert(data.error || 'Failed to create supplier');
+        }
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setSupplierLoading(false);
       }
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setSupplierLoading(false);
-    }
+    });
   };
 
   const handleDeleteSupplier = async (supplierId: string) => {
-    if (!confirm('Are you sure you want to delete this supplier?')) return;
-    try {
-      const res = await fetch(`/api/v1/suppliers/${supplierId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      if (res.ok) {
-        fetchData();
+    await runExclusive(`delete-supplier:${supplierId}`, async () => {
+      if (!confirm('Are you sure you want to delete this supplier?')) return;
+      setDeletingSupplierId(supplierId);
+      try {
+        const res = await authFetch(`/api/v1/suppliers/${supplierId}`, {
+          method: 'DELETE',
+        });
+        if (res.ok) {
+          setSuppliersList((prev) => prev.filter((s) => s.id !== supplierId));
+          fetchData();
+        }
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setDeletingSupplierId(null);
       }
-    } catch (err: any) {
-      alert(err.message);
-    }
+    });
   };
 
   return (
@@ -1633,6 +1750,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         loading,
         fetchData,
         handleSignOut,
+        authFetch,
         numbers,
         setNumbers,
         calls,
@@ -1695,6 +1813,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         handleTriggerCallTranscription,
         handleGenerateItinerary,
         generatingItineraryCallId,
+        hangingUpCallId,
+        sendingDtmfDigits,
         showItineraryIntakeModal,
         setShowItineraryIntakeModal,
         intakeCallTarget,
@@ -1705,6 +1825,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         handleSendDtmf,
         selectedLead,
         setSelectedLead,
+        selectingLeadId,
         leadRevisionNotes,
         setLeadRevisionNotes,
         leadCustomerEmail,
@@ -1735,6 +1856,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         supplierNotes,
         setSupplierNotes,
         supplierLoading,
+        deletingSupplierId,
         handleCreateSupplier,
         handleDeleteSupplier,
         showStaffModal,
@@ -1762,6 +1884,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         contactNotes,
         setContactNotes,
         contactLoading,
+        deletingContactId,
         handleCreateContact,
         handleDeleteContact,
         showBuyModal,
@@ -1770,6 +1893,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         setSearchIso,
         availableNumbers,
         searchingNumbers,
+        buyingNumberE164,
         handleSearchNumbers,
         handleBuyNumber,
         smsDestination,
@@ -1793,6 +1917,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         setOrganizationsList,
         showOrgModal,
         setShowOrgModal,
+        creatingOrg,
         handleSwitchOrganization,
         handleCreateOrganization,
         integrationsSummary,

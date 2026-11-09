@@ -142,6 +142,47 @@ export async function POST(
       orderBy: { version: 'desc' },
     });
 
+    // Deduplicate rapid double-clicks (identical parameters within 15 seconds)
+    if (
+      latestQuote &&
+      Date.now() - new Date(latestQuote.createdAt).getTime() < 15_000 &&
+      Number(latestQuote.supplierNetTotal) === netCost &&
+      latestQuote.marginType === mType &&
+      Number(latestQuote.marginValue) === mVal &&
+      Number(latestQuote.taxPercentage) === taxPct
+    ) {
+      return NextResponse.json(
+        {
+          api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
+          quotation: {
+            ...latestQuote,
+            supplierNetTotal: Number(latestQuote.supplierNetTotal),
+            marginValue: Number(latestQuote.marginValue),
+            marginAmount: Number(latestQuote.marginAmount),
+            taxPercentage: Number(latestQuote.taxPercentage),
+            taxAmount: Number(latestQuote.taxAmount),
+            finalSellingPrice: Number(latestQuote.finalSellingPrice),
+            floorGuardrailMin: Number(latestQuote.floorGuardrailMin),
+          },
+          formulaBreakdown: {
+            supplierNetCost: netCost,
+            marginType: mType,
+            marginValue: mVal,
+            marginAmount: Number(marginAmount.toFixed(2)),
+            subtotalBeforeTax: Number(subtotal.toFixed(2)),
+            taxPercentage: taxPct,
+            taxAmount: Number(taxAmount.toFixed(2)),
+            finalSellingPrice: Number(finalSellingPrice.toFixed(2)),
+            effectiveMarginPercentage: Number(effectiveMarginPct.toFixed(1)),
+            floorGuardrailMin: floorMin,
+            marginApproved: isApproved,
+          },
+          message: `Quotation v${latestQuote.version} calculated successfully`,
+        },
+        { status: 201 }
+      );
+    }
+
     const nextVersion = (latestQuote?.version || 0) + 1;
 
     // Mark previous quote as revised if existing

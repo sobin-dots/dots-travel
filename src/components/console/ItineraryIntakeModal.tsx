@@ -27,6 +27,7 @@ export function ItineraryIntakeModal() {
     intakeCallTarget,
     setIntakeCallTarget,
     bearerToken,
+    authFetch,
     handleGenerateItineraryWithParams,
     generatingItineraryCallId,
   } = useConsole();
@@ -63,11 +64,10 @@ export function ItineraryIntakeModal() {
     const fetchExtraction = async () => {
       setLoadingExtraction(true);
       try {
-        const res = await fetch('/api/v1/leads/extract-params', {
+        const res = await authFetch('/api/v1/leads/extract-params', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${bearerToken}`,
           },
           body: JSON.stringify({ callId: intakeCallTarget.id }),
         });
@@ -106,10 +106,11 @@ export function ItineraryIntakeModal() {
 
   if (!showItineraryIntakeModal || !intakeCallTarget) return null;
 
-  const isGenerating = generatingItineraryCallId === intakeCallTarget.id;
+  const isGenerating = Boolean(generatingItineraryCallId);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isGenerating) return;
     handleGenerateItineraryWithParams(intakeCallTarget.id, {
       destination,
       departureDate,

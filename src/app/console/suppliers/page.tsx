@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Building2, Plus, Trash2 } from 'lucide-react';
+import { Building2, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
 export default function SuppliersPage() {
@@ -9,6 +9,7 @@ export default function SuppliersPage() {
     suppliersList,
     setShowSupplierModal,
     handleDeleteSupplier,
+    deletingSupplierId,
   } = useConsole();
 
   return (
@@ -70,11 +71,16 @@ export default function SuppliersPage() {
                     <td className="py-3.5 px-4 text-right">
                       <button
                         type="button"
+                        disabled={deletingSupplierId === supp.id}
                         onClick={() => handleDeleteSupplier(supp.id)}
-                        className="text-xs bg-zinc-800 hover:bg-rose-950 text-zinc-400 hover:text-rose-400 px-2 py-1 rounded border border-zinc-700 transition"
+                        className="text-xs bg-zinc-800 hover:bg-rose-950 disabled:opacity-50 text-zinc-400 hover:text-rose-400 px-2 py-1 rounded border border-zinc-700 transition inline-flex items-center gap-1"
                         title="Delete Supplier"
                       >
-                        <Trash2 className="w-3 h-3" />
+                        {deletingSupplierId === supp.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin text-rose-400" />
+                        ) : (
+                          <Trash2 className="w-3 h-3" />
+                        )}
                       </button>
                     </td>
                   </tr>

@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { BookUser, Plus, PhoneCall, Trash2 } from 'lucide-react';
+import { BookUser, Loader2, Plus, PhoneCall, Trash2 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
 export default function ContactsPage() {
@@ -12,6 +12,7 @@ export default function ContactsPage() {
     setCallMode,
     setShowCallModal,
     handleDeleteContact,
+    deletingContactId,
   } = useConsole();
 
   return (
@@ -79,11 +80,16 @@ export default function ContactsPage() {
                       </button>
                       <button
                         type="button"
+                        disabled={deletingContactId === contact.id}
                         onClick={() => handleDeleteContact(contact.id)}
-                        className="text-xs bg-zinc-800 hover:bg-rose-950 text-zinc-400 hover:text-rose-400 px-2 py-1 rounded border border-zinc-700 transition"
+                        className="text-xs bg-zinc-800 hover:bg-rose-950 disabled:opacity-50 text-zinc-400 hover:text-rose-400 px-2 py-1 rounded border border-zinc-700 transition inline-flex items-center gap-1"
                         title="Delete Contact"
                       >
-                        <Trash2 className="w-3 h-3" />
+                        {deletingContactId === contact.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin text-rose-400" />
+                        ) : (
+                          <Trash2 className="w-3 h-3" />
+                        )}
                       </button>
                     </td>
                   </tr>

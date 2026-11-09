@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { SignupRequestSchema } from '@/lib/schemas';
-import { hashPassword, signAccessToken, generateRefreshToken, hashToken } from '@/lib/auth-tokens';
+import {
+  hashPassword,
+  signAccessToken,
+  generateRefreshToken,
+  hashToken,
+  DEFAULT_ACCESS_TOKEN_TTL,
+} from '@/lib/auth-tokens';
 import { logAuditEvent } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
@@ -181,7 +187,11 @@ export async function POST(req: NextRequest) {
         api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
         accessToken,
         tokenType: 'Bearer',
-        expiresIn: Number(process.env.ACCESS_TOKEN_TTL || '900'),
+        expiresIn: Number(
+          process.env.JWT_ACCESS_TTL_SECONDS ||
+            process.env.ACCESS_TOKEN_TTL ||
+            String(DEFAULT_ACCESS_TOKEN_TTL)
+        ),
         refreshToken: rawRefreshToken,
         user: {
           id: result.user.id,

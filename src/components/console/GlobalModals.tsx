@@ -5,6 +5,7 @@ import {
   UserPlus,
   BookUser,
   Building2,
+  Loader2,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { ItineraryIntakeModal } from './ItineraryIntakeModal';
@@ -18,6 +19,7 @@ export function GlobalModals() {
     setSearchIso,
     availableNumbers,
     searchingNumbers,
+    buyingNumberE164,
     handleSearchNumbers,
     handleBuyNumber,
 
@@ -72,6 +74,7 @@ export function GlobalModals() {
     // Organization
     showOrgModal,
     setShowOrgModal,
+    creatingOrg,
     handleCreateOrganization,
   } = useConsole();
 
@@ -97,10 +100,12 @@ export function GlobalModals() {
               </select>
               <button
                 type="button"
+                disabled={searchingNumbers}
                 onClick={handleSearchNumbers}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-xs font-medium"
+                className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-xs font-medium inline-flex items-center gap-1.5"
               >
-                Search Inventory
+                {searchingNumbers && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>{searchingNumbers ? 'Searching...' : 'Search Inventory'}</span>
               </button>
             </div>
 
@@ -116,10 +121,12 @@ export function GlobalModals() {
                     </div>
                     <button
                       type="button"
+                      disabled={Boolean(buyingNumberE164)}
                       onClick={() => handleBuyNumber(num.number)}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded text-xs font-medium"
+                      className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-3 py-1.5 rounded text-xs font-medium inline-flex items-center gap-1.5"
                     >
-                      Buy Now
+                      {buyingNumberE164 === num.number && <Loader2 className="w-3 h-3 animate-spin" />}
+                      <span>{buyingNumberE164 === num.number ? 'Purchasing...' : 'Buy Now'}</span>
                     </button>
                   </div>
                 ))
@@ -466,9 +473,11 @@ export function GlobalModals() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-indigo-600/30 transition cursor-pointer"
+                  disabled={creatingOrg}
+                  className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-md shadow-indigo-600/30 transition cursor-pointer inline-flex items-center gap-1.5"
                 >
-                  Create & Launch
+                  {creatingOrg && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{creatingOrg ? 'Creating...' : 'Create & Launch'}</span>
                 </button>
               </div>
             </form>

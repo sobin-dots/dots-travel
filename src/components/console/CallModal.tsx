@@ -342,7 +342,7 @@ export function CallModal() {
                 <button
                   type="button"
                   onClick={handleStartBrowserCall}
-                  disabled={!callDestination || contactsList.length === 0}
+                  disabled={webPhoneStatus !== 'idle' && webPhoneStatus !== 'ended' || !callDestination || contactsList.length === 0}
                   className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-emerald-600/25 flex items-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Mic className="w-4 h-4" />
@@ -355,8 +355,8 @@ export function CallModal() {
                   disabled={callLoading || !callDestination || !callForwardTo || contactsList.length === 0}
                   className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-indigo-600/25 flex items-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <PhoneCall className="w-4 h-4" />
-                  <span>{callLoading ? 'Initiating...' : 'Dial via Mobile Bridge'}</span>
+                  <PhoneCall className={`w-4 h-4 ${callLoading ? 'animate-pulse' : ''}`} />
+                  <span>{callLoading ? 'Initiating Call...' : 'Dial via Mobile Bridge'}</span>
                 </button>
               )}
             </div>

@@ -32,6 +32,7 @@ import {
   FileCheck,
   Search,
   Trash2,
+  Loader2,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { VisualItinerary } from '@/components/VisualItinerary';
@@ -41,6 +42,7 @@ export function LeadDetailDrawer() {
     selectedLead,
     setSelectedLead,
     bearerToken,
+    authFetch,
     suppliersList,
     setShowSupplierModal,
     leadRevisionNotes,
@@ -54,6 +56,17 @@ export function LeadDetailDrawer() {
     handleReviseItinerary,
     fetchData,
   } = useConsole();
+
+  const inFlightDrawerRef = React.useRef<Set<string>>(new Set());
+  const runDrawerExclusive = async (key: string, fn: () => Promise<void>) => {
+    if (inFlightDrawerRef.current.has(key)) return;
+    inFlightDrawerRef.current.add(key);
+    try {
+      await fn();
+    } finally {
+      inFlightDrawerRef.current.delete(key);
+    }
+  };
 
   // Active Drawer Tab
   const [activeTab, setActiveTab] = useState<'itinerary' | 'send_itinerary' | 'procurement' | 'pricing' | 'flights' | 'dispatch' | 'lifecycle'>('itinerary');
@@ -118,6 +131,18 @@ export function LeadDetailDrawer() {
   const [visaChecklist, setVisaChecklist] = useState<any[]>([]);
   const [lifecycleSuccessMsg, setLifecycleSuccessMsg] = useState('');
 
+  // Per-button loading states for immediate click feedback
+  const [savingSupplierQuote, setSavingSupplierQuote] = useState(false);
+  const [selectingQuoteId, setSelectingQuoteId] = useState<string | null>(null);
+  const [chasingRfp, setChasingRfp] = useState(false);
+  const [attachingFlightKey, setAttachingFlightKey] = useState<string | null>(null);
+  const [deletingFlightId, setDeletingFlightId] = useState<string | null>(null);
+  const [remindingPaymentId, setRemindingPaymentId] = useState<string | null>(null);
+  const [togglingVisaId, setTogglingVisaId] = useState<string | null>(null);
+  const [sendingPreDepMilestone, setSendingPreDepMilestone] = useState<string | null>(null);
+  const [sendingCsat, setSendingCsat] = useState(false);
+  const [sendingLoyalty, setSendingLoyalty] = useState(false);
+
   const computeReturnDateFromDep = (depStr: string, days: number): string => {
     if (!depStr) return '';
     const d = new Date(depStr);
@@ -176,103 +201,113 @@ export function LeadDetailDrawer() {
   }, [selectedLead?.id]);
 
   const handleSaveTripParams = async () => {
-    if (!selectedLead || !bearerToken) return;
-    setSavingParams(true);
-    setParamsSuccessMsg('');
-    try {
-      const payload: Record<string, any> = {
-        departureDate: editDepartureDate || null,
-        returnDate: editReturnDate || computeReturnDateFromDep(editDepartureDate, editDurationDays) || null,
-        durationDays: editDurationDays,
-        destination: editDestination,
-        headcountAdults: editAdults,
-        headcountChildren: editChildren,
-        hotelTier: editHotelTier,
-        currency: 'INR',
-      };
-      if (supplierQuotes.length > 0 && editBudget !== '') {
-        payload.targetBudget = Number(editBudget);
-      }
+    if (!selectedLead) return;
+    await runDrawerExclusive(`save-params:${selectedLead.id}`, async () => {
+      setSavingParams(true);
+      setParamsSuccessMsg('');
+      try {
+        const payload: Record<string, any> = {
+          departureDate: editDepartureDate || null,
+          returnDate: editReturnDate || computeReturnDateFromDep(editDepartureDate, editDurationDays) || null,
+          durationDays: editDurationDays,
+          destination: editDestination,
+          headcountAdults: editAdults,
+          headcountChildren: editChildren,
+          hotelTier: editHotelTier,
+          currency: 'INR',
+        };
+        if (supplierQuotes.length > 0 && editBudget !== '') {
+          payload.targetBudget = Number(editBudget);
+        }
 
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (res.ok && data.lead) {
-        setSelectedLead(data.lead);
-        setParamsSuccessMsg('✓ Trip parameters updated! Proposal PDF synchronized.');
-        if (fetchData) fetchData();
-        setTimeout(() => setParamsSuccessMsg(''), 4000);
-      } else {
-        alert(data.error || 'Failed to update parameters');
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (res.ok && data.lead) {
+          setSelectedLead(data.lead);
+          setParamsSuccessMsg('✓ Trip parameters updated! Proposal PDF synchronized.');
+          if (fetchData) fetchData();
+          setTimeout(() => setParamsSuccessMsg(''), 4000);
+        } else {
+          alert(data.error || 'Failed to update parameters');
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error updating parameters');
+      } finally {
+        setSavingParams(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error updating parameters');
-    } finally {
-      setSavingParams(false);
-    }
+    });
   };
 
-  // Fetch contextual lead data on drawer open or tab switch
+  // Fetch contextual lead data on drawer open (prioritizing core quote state first, then deferred tab data)
   useEffect(() => {
-    if (!selectedLead || !bearerToken) return;
+    if (!selectedLead?.id) return;
 
     let isMounted = true;
+    const leadId = selectedLead.id;
+
     const fetchLeadSubData = async () => {
       try {
-        // 1. Fetch supplier quotes & comparison matrix
-        const [qRes, matrixRes, custQRes, flightsRes, autoRes, payRes, visaRes] = await Promise.all([
-          fetch(`/api/v1/leads/${selectedLead.id}/supplier-quotes`, { headers: { Authorization: `Bearer ${bearerToken}` } }),
-          fetch(`/api/v1/leads/${selectedLead.id}/supplier-quotes/compare`, { headers: { Authorization: `Bearer ${bearerToken}` } }),
-          fetch(`/api/v1/leads/${selectedLead.id}/customer-quotes`, { headers: { Authorization: `Bearer ${bearerToken}` } }),
-          fetch(`/api/v1/leads/${selectedLead.id}/flights`, { headers: { Authorization: `Bearer ${bearerToken}` } }),
-          fetch(`/api/v1/leads/${selectedLead.id}/automations`, { headers: { Authorization: `Bearer ${bearerToken}` } }),
-          fetch(`/api/v1/leads/${selectedLead.id}/payments`, { headers: { Authorization: `Bearer ${bearerToken}` } }),
-          fetch(`/api/v1/leads/${selectedLead.id}/visa`, { headers: { Authorization: `Bearer ${bearerToken}` } }),
+        // Phase 1: Core quote state needed for header badges & pricing gate
+        const [qRes, custQRes] = await Promise.all([
+          authFetch(`/api/v1/leads/${leadId}/supplier-quotes`),
+          authFetch(`/api/v1/leads/${leadId}/customer-quotes`),
         ]);
 
-        if (isMounted) {
-          if (qRes.ok) {
-            const data = await qRes.json();
-            const fetchedQuotes = data.quotes || [];
-            setSupplierQuotes(fetchedQuotes);
-            const selectedOrLatest =
-              fetchedQuotes.find((q: any) => q.status === 'selected') || fetchedQuotes[0];
-            setPricingNetCost(selectedOrLatest?.totalNetCost ? Number(selectedOrLatest.totalNetCost) : 0);
+        if (!isMounted) return;
+
+        if (qRes.ok) {
+          const data = await qRes.json();
+          const fetchedQuotes = data.quotes || [];
+          setSupplierQuotes(fetchedQuotes);
+          const selectedOrLatest =
+            fetchedQuotes.find((q: any) => q.status === 'selected') || fetchedQuotes[0];
+          setPricingNetCost(selectedOrLatest?.totalNetCost ? Number(selectedOrLatest.totalNetCost) : 0);
+        }
+        if (custQRes.ok) {
+          const data = await custQRes.json();
+          const fetchedCustQuotes = data.quotations || [];
+          setCustomerQuotes(fetchedCustQuotes);
+          if (fetchedCustQuotes[0]?.finalSellingPrice != null) {
+            setEditBudget(String(Number(fetchedCustQuotes[0].finalSellingPrice)));
           }
-          if (matrixRes.ok) {
-            const data = await matrixRes.json();
-            setComparisonMatrix(data.matrix || null);
-          }
-          if (custQRes.ok) {
-            const data = await custQRes.json();
-            const fetchedCustQuotes = data.quotations || [];
-            setCustomerQuotes(fetchedCustQuotes);
-            if (fetchedCustQuotes[0]?.finalSellingPrice != null) {
-              setEditBudget(String(Number(fetchedCustQuotes[0].finalSellingPrice)));
-            }
-          }
-          if (flightsRes.ok) {
-            const data = await flightsRes.json();
-            setTripFlights(data.flights || []);
-          }
-          if (autoRes.ok) {
-            const data = await autoRes.json();
-            setAutomationLogs(data.automations || []);
-          }
-          if (payRes.ok) {
-            const data = await payRes.json();
-            setPaymentMilestones(data.milestones || []);
-          }
-          if (visaRes.ok) {
-            const data = await visaRes.json();
-            setVisaChecklist(data.checklist || []);
-          }
+        }
+
+        // Phase 2: Secondary tab data fetched non-blockingly in the background
+        const [matrixRes, flightsRes, autoRes, payRes, visaRes] = await Promise.all([
+          authFetch(`/api/v1/leads/${leadId}/supplier-quotes/compare`),
+          authFetch(`/api/v1/leads/${leadId}/flights`),
+          authFetch(`/api/v1/leads/${leadId}/automations`),
+          authFetch(`/api/v1/leads/${leadId}/payments`),
+          authFetch(`/api/v1/leads/${leadId}/visa`),
+        ]);
+
+        if (!isMounted) return;
+
+        if (matrixRes.ok) {
+          const data = await matrixRes.json();
+          setComparisonMatrix(data.matrix || null);
+        }
+        if (flightsRes.ok) {
+          const data = await flightsRes.json();
+          setTripFlights(data.flights || []);
+        }
+        if (autoRes.ok) {
+          const data = await autoRes.json();
+          setAutomationLogs(data.automations || []);
+        }
+        if (payRes.ok) {
+          const data = await payRes.json();
+          setPaymentMilestones(data.milestones || []);
+        }
+        if (visaRes.ok) {
+          const data = await visaRes.json();
+          setVisaChecklist(data.checklist || []);
         }
       } catch (err) {
         console.warn('Error loading lead sub-data:', err);
@@ -284,7 +319,7 @@ export function LeadDetailDrawer() {
     return () => {
       isMounted = false;
     };
-  }, [selectedLead?.id, bearerToken]);
+  }, [selectedLead?.id]);
 
   if (!selectedLead) return null;
 
@@ -311,132 +346,142 @@ export function LeadDetailDrawer() {
       return;
     }
 
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/supplier-quotes`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          supplierId: newQuoteSupplierId,
-          totalNetCost: parsedNetCost,
-          hotelTier: newQuoteHotelTier,
-          cancellationPolicy: newQuoteCancellation,
-          inclusions: newQuoteInclusions.split(',').map((s) => s.trim()),
-          lineItems: [
-            { category: 'accommodation', description: 'Curated Hotel Accommodations', unitCost: parsedNetCost * 0.7, totalCost: parsedNetCost * 0.7 },
-            { category: 'transfer', description: 'Executive Ground Transfers', unitCost: parsedNetCost * 0.15, totalCost: parsedNetCost * 0.15 },
-            { category: 'activity', description: 'Curated VIP Excursions & Guides', unitCost: parsedNetCost * 0.15, totalCost: parsedNetCost * 0.15 },
-          ],
-        }),
-      });
-
-      if (res.ok) {
-        setShowAddQuoteForm(false);
-        setNewQuoteCost('');
-        const data = await res.json();
-        const updatedSupplierQuotes = [data.quote, ...supplierQuotes];
-        setSupplierQuotes(updatedSupplierQuotes);
-        setPricingNetCost(parsedNetCost);
-        setSelectedLead((prev: any) => (prev ? { ...prev, supplierQuotations: updatedSupplierQuotes } : prev));
-        // Refresh comparison matrix and global leads list immediately
-        const matrixRes = await fetch(`/api/v1/leads/${selectedLead.id}/supplier-quotes/compare`, {
-          headers: { Authorization: `Bearer ${bearerToken}` },
+    await runDrawerExclusive(`add-supplier-quote:${selectedLead.id}`, async () => {
+      setSavingSupplierQuote(true);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/supplier-quotes`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            supplierId: newQuoteSupplierId,
+            totalNetCost: parsedNetCost,
+            hotelTier: newQuoteHotelTier,
+            cancellationPolicy: newQuoteCancellation,
+            inclusions: newQuoteInclusions.split(',').map((s) => s.trim()),
+            lineItems: [
+              { category: 'accommodation', description: 'Curated Hotel Accommodations', unitCost: parsedNetCost * 0.7, totalCost: parsedNetCost * 0.7 },
+              { category: 'transfer', description: 'Executive Ground Transfers', unitCost: parsedNetCost * 0.15, totalCost: parsedNetCost * 0.15 },
+              { category: 'activity', description: 'Curated VIP Excursions & Guides', unitCost: parsedNetCost * 0.15, totalCost: parsedNetCost * 0.15 },
+            ],
+          }),
         });
-        if (matrixRes.ok) {
-          const mData = await matrixRes.json();
-          setComparisonMatrix(mData.matrix || null);
+
+        if (res.ok) {
+          setShowAddQuoteForm(false);
+          setNewQuoteCost('');
+          const data = await res.json();
+          const updatedSupplierQuotes = [
+            data.quote,
+            ...supplierQuotes.filter((q) => q.id !== data.quote.id),
+          ];
+          setSupplierQuotes(updatedSupplierQuotes);
+          setPricingNetCost(parsedNetCost);
+          setSelectedLead((prev: any) => (prev ? { ...prev, supplierQuotations: updatedSupplierQuotes } : prev));
+          // Refresh comparison matrix and global leads list
+          const matrixRes = await authFetch(`/api/v1/leads/${selectedLead.id}/supplier-quotes/compare`);
+          if (matrixRes.ok) {
+            const mData = await matrixRes.json();
+            setComparisonMatrix(mData.matrix || null);
+          }
+          if (fetchData) fetchData();
+          alert('Supplier quotation recorded! You can now click "Generate Quote" in the Pricing & Margins tab.');
+        } else {
+          const err = await res.json();
+          alert(err.error || 'Failed to record supplier quotation');
         }
-        if (fetchData) await fetchData();
-        alert('Supplier quotation recorded! You can now click "Generate Quote" in the Pricing & Margins tab.');
+      } catch (err: any) {
+        alert(err.message || 'Error recording quotation');
+      } finally {
+        setSavingSupplierQuote(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error recording quotation');
-    }
+    });
   };
 
   // Handler: Send Revised / New Itinerary PDF to Customer via Email
   const handleSendItineraryToCustomer = async () => {
-    if (!selectedLead || !bearerToken) return;
+    if (!selectedLead) return;
     if (!leadCustomerEmail || !leadCustomerEmail.includes('@')) {
       setSendItineraryError('Please enter a valid customer email address.');
       return;
     }
-    setSendingToCustomer(true);
-    setSendItineraryMsg('');
-    setSendItineraryError('');
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/send`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          target: 'customer',
-          customerEmail: leadCustomerEmail,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        if (data.lead) {
-          setSelectedLead((prev: any) => ({ ...prev, ...data.lead }));
+    await runDrawerExclusive(`send-itinerary-cust:${selectedLead.id}`, async () => {
+      setSendingToCustomer(true);
+      setSendItineraryMsg('');
+      setSendItineraryError('');
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/send`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            target: 'customer',
+            customerEmail: leadCustomerEmail,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          if (data.lead) {
+            setSelectedLead((prev: any) => ({ ...prev, ...data.lead }));
+          }
+          setSendItineraryMsg(data.message || `Revised/new Itinerary PDF attached and sent to customer (${leadCustomerEmail}) via email.`);
+          if (fetchData) fetchData();
+        } else {
+          setSendItineraryError(data.error || 'Failed to send itinerary email to customer.');
         }
-        setSendItineraryMsg(data.message || `Revised/new Itinerary PDF attached and sent to customer (${leadCustomerEmail}) via email.`);
-        if (fetchData) fetchData();
-      } else {
-        setSendItineraryError(data.error || 'Failed to send itinerary email to customer.');
+      } catch (err: any) {
+        setSendItineraryError(err.message || 'Error sending itinerary email to customer.');
+      } finally {
+        setSendingToCustomer(false);
       }
-    } catch (err: any) {
-      setSendItineraryError(err.message || 'Error sending itinerary email to customer.');
-    } finally {
-      setSendingToCustomer(false);
-    }
+    });
   };
 
   // Handler: Send Itinerary PDF to Supplier via Email to Request Quote
   const handleSendItineraryToSupplier = async () => {
-    if (!selectedLead || !bearerToken) return;
+    if (!selectedLead) return;
     if (!leadSelectedSupplierId) {
       setSendItineraryError('Please select a partner supplier first.');
       return;
     }
-    setSendingToSupplier(true);
-    setSendItineraryMsg('');
-    setSendItineraryError('');
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/send`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          target: 'supplier',
-          supplierId: leadSelectedSupplierId,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        if (data.lead) {
-          setSelectedLead((prev: any) => ({ ...prev, ...data.lead }));
+    await runDrawerExclusive(`send-itinerary-supp:${selectedLead.id}`, async () => {
+      setSendingToSupplier(true);
+      setSendItineraryMsg('');
+      setSendItineraryError('');
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/send`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            target: 'supplier',
+            supplierId: leadSelectedSupplierId,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          if (data.lead) {
+            setSelectedLead((prev: any) => ({ ...prev, ...data.lead }));
+          }
+          setSendItineraryMsg(data.message || `Itinerary PDF attached and sent via email to supplier to get quote.`);
+          if (fetchData) fetchData();
+        } else {
+          setSendItineraryError(data.error || 'Failed to send itinerary email to supplier.');
         }
-        setSendItineraryMsg(data.message || `Itinerary PDF attached and sent via email to supplier to get quote.`);
-        if (fetchData) fetchData();
-      } else {
-        setSendItineraryError(data.error || 'Failed to send itinerary email to supplier.');
+      } catch (err: any) {
+        setSendItineraryError(err.message || 'Error sending itinerary email to supplier.');
+      } finally {
+        setSendingToSupplier(false);
       }
-    } catch (err: any) {
-      setSendItineraryError(err.message || 'Error sending itinerary email to supplier.');
-    } finally {
-      setSendingToSupplier(false);
-    }
+    });
   };
 
   // Handler: Send Itinerary PDF to Both Customer & Supplier via Email
   const handleSendItineraryToBoth = async () => {
-    if (!selectedLead || !bearerToken) return;
+    if (!selectedLead) return;
     if (!leadCustomerEmail || !leadCustomerEmail.includes('@')) {
       setSendItineraryError('Please enter a valid customer email address.');
       return;
@@ -445,151 +490,179 @@ export function LeadDetailDrawer() {
       setSendItineraryError('Please select a partner supplier to request a quote.');
       return;
     }
-    setSendingToBoth(true);
-    setSendItineraryMsg('');
-    setSendItineraryError('');
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/send`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          target: 'both',
-          customerEmail: leadCustomerEmail,
-          supplierId: leadSelectedSupplierId,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        if (data.lead) {
-          setSelectedLead((prev: any) => ({ ...prev, ...data.lead }));
+    await runDrawerExclusive(`send-itinerary-both:${selectedLead.id}`, async () => {
+      setSendingToBoth(true);
+      setSendItineraryMsg('');
+      setSendItineraryError('');
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/send`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            target: 'both',
+            customerEmail: leadCustomerEmail,
+            supplierId: leadSelectedSupplierId,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          if (data.lead) {
+            setSelectedLead((prev: any) => ({ ...prev, ...data.lead }));
+          }
+          setSendItineraryMsg(data.message || `Itinerary PDF dispatched to both customer (${leadCustomerEmail}) and supplier via email.`);
+          if (fetchData) fetchData();
+        } else {
+          setSendItineraryError(data.error || 'Failed to dispatch itinerary emails.');
         }
-        setSendItineraryMsg(data.message || `Itinerary PDF dispatched to both customer (${leadCustomerEmail}) and supplier via email.`);
-        if (fetchData) fetchData();
-      } else {
-        setSendItineraryError(data.error || 'Failed to dispatch itinerary emails.');
+      } catch (err: any) {
+        setSendItineraryError(err.message || 'Error dispatching itinerary emails.');
+      } finally {
+        setSendingToBoth(false);
       }
-    } catch (err: any) {
-      setSendItineraryError(err.message || 'Error dispatching itinerary emails.');
-    } finally {
-      setSendingToBoth(false);
-    }
+    });
   };
 
   // Handler: Select Winning Supplier Quote (P2-02)
   const handleSelectWinningQuote = async (quoteId: string) => {
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/supplier-quotes/${quoteId}/select`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setPricingNetCost(Number(data.quote.totalNetCost));
-        const updatedSupplierQuotes = supplierQuotes.map((q) =>
-          q.id === quoteId ? { ...q, status: 'selected' } : { ...q, status: 'rejected' }
-        );
-        setSupplierQuotes(updatedSupplierQuotes);
-        setSelectedLead((prev: any) => (prev ? { ...prev, supplierQuotations: updatedSupplierQuotes } : prev));
-        if (fetchData) await fetchData();
-        alert(`Supplier quotation selected as winning quote!`);
+    await runDrawerExclusive(`select-winning-quote:${quoteId}`, async () => {
+      setSelectingQuoteId(quoteId);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/supplier-quotes/${quoteId}/select`, {
+          method: 'POST',
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPricingNetCost(Number(data.quote.totalNetCost));
+          const updatedSupplierQuotes = supplierQuotes.map((q) =>
+            q.id === quoteId ? { ...q, status: 'selected' } : { ...q, status: 'rejected' }
+          );
+          setSupplierQuotes(updatedSupplierQuotes);
+          setComparisonMatrix((prev: any) =>
+            prev?.quotes
+              ? {
+                  ...prev,
+                  quotes: prev.quotes.map((q: any) => ({
+                    ...q,
+                    isSelected: q.id === quoteId,
+                  })),
+                }
+              : prev
+          );
+          setSelectedLead((prev: any) => (prev ? { ...prev, supplierQuotations: updatedSupplierQuotes } : prev));
+          if (fetchData) fetchData();
+          alert(`Supplier quotation selected as winning quote!`);
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error selecting quote');
+      } finally {
+        setSelectingQuoteId(null);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error selecting quote');
-    }
+    });
   };
 
   // Handler: Save Customer Quotation Version (P2-03, P2-04, P2-07, P2-09)
   const handleSaveCustomerQuote = async () => {
-    setSavingQuote(true);
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/customer-quotes`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          supplierNetTotal: pricingNetCost,
-          marginType,
-          marginValue,
-          taxPercentage,
-          floorGuardrailMin,
-        }),
-      });
+    await runDrawerExclusive(`save-cust-quote:${selectedLead.id}`, async () => {
+      setSavingQuote(true);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/customer-quotes`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            supplierNetTotal: pricingNetCost,
+            marginType,
+            marginValue,
+            taxPercentage,
+            floorGuardrailMin,
+          }),
+        });
 
-      if (res.ok) {
-        const data = await res.json();
-        const updatedCustQuotes = [data.quotation, ...customerQuotes];
-        setCustomerQuotes(updatedCustQuotes);
-        if (data.quotation?.finalSellingPrice != null) {
-          setEditBudget(String(Number(data.quotation.finalSellingPrice)));
+        if (res.ok) {
+          const data = await res.json();
+          const updatedCustQuotes = [
+            data.quotation,
+            ...customerQuotes.filter((q) => q.id !== data.quotation.id),
+          ];
+          setCustomerQuotes(updatedCustQuotes);
+          if (data.quotation?.finalSellingPrice != null) {
+            setEditBudget(String(Number(data.quotation.finalSellingPrice)));
+          }
+          setSelectedLead((prev: any) =>
+            prev
+              ? {
+                  ...prev,
+                  quotations: updatedCustQuotes,
+                  targetBudget: data.quotation?.finalSellingPrice ?? prev.targetBudget,
+                }
+              : prev
+          );
+          if (fetchData) fetchData();
+          alert(`Customer quotation v${data.quotation.version} calculated and saved!`);
+        } else {
+          const err = await res.json();
+          alert(err.error || 'Failed to save customer quotation');
         }
-        setSelectedLead((prev: any) =>
-          prev
-            ? {
-                ...prev,
-                quotations: updatedCustQuotes,
-                targetBudget: data.quotation?.finalSellingPrice ?? prev.targetBudget,
-              }
-            : prev
-        );
-        if (fetchData) await fetchData();
-        alert(`Customer quotation v${data.quotation.version} calculated and saved!`);
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to save customer quotation');
+      } catch (err: any) {
+        alert(err.message || 'Error communicating with pricing engine');
+      } finally {
+        setSavingQuote(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error communicating with pricing engine');
-    } finally {
-      setSavingQuote(false);
-    }
+    });
   };
 
   // Handler: GDS Live Flight Search (P2-05)
   const handleSearchGdsFlights = async () => {
-    setLoadingFlights(true);
-    try {
-      const destCode = selectedLead.destination.toLowerCase().includes('dubai') ? 'DXB' :
-                       selectedLead.destination.toLowerCase().includes('paris') ? 'CDG' :
-                       selectedLead.destination.toLowerCase().includes('tokyo') ? 'HND' : 'DXB';
-      const res = await fetch(`/api/v1/flights/search?origin=JFK&destination=${destCode}&cabinClass=business`, {
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setGdsSearchResults(data.flights || []);
+    await runDrawerExclusive(`search-gds:${selectedLead.id}`, async () => {
+      setLoadingFlights(true);
+      try {
+        const destCode = selectedLead.destination.toLowerCase().includes('dubai') ? 'DXB' :
+                         selectedLead.destination.toLowerCase().includes('paris') ? 'CDG' :
+                         selectedLead.destination.toLowerCase().includes('tokyo') ? 'HND' : 'DXB';
+        const res = await authFetch(`/api/v1/flights/search?origin=JFK&destination=${destCode}&cabinClass=business`);
+        if (res.ok) {
+          const data = await res.json();
+          setGdsSearchResults(data.flights || []);
+        }
+      } catch (err) {
+        console.warn('Flight search error:', err);
+      } finally {
+        setLoadingFlights(false);
       }
-    } catch (err) {
-      console.warn('Flight search error:', err);
-    } finally {
-      setLoadingFlights(false);
-    }
+    });
   };
 
   // Handler: Attach Flight to Trip File (P2-05)
   const handleAttachFlight = async (flightData: any) => {
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/flights`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify(flightData),
-      });
+    const flightKey = `${flightData.airline}-${flightData.flightNumber}`;
+    await runDrawerExclusive(`attach-flight:${flightKey}`, async () => {
+      setAttachingFlightKey(flightKey);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/flights`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(flightData),
+        });
 
-      if (res.ok) {
-        const data = await res.json();
-        setTripFlights([data.flight, ...tripFlights]);
-        setFlightActionMsg(`Flight ${flightData.flightNumber} attached to trip!`);
+        if (res.ok) {
+          const data = await res.json();
+          setTripFlights((prev) => [
+            data.flight,
+            ...prev.filter((f) => f.id !== data.flight.id),
+          ]);
+          setFlightActionMsg(`Flight ${flightData.flightNumber} attached to trip!`);
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error attaching flight');
+      } finally {
+        setAttachingFlightKey(null);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error attaching flight');
-    }
+    });
   };
 
   // Handler: Lookup GDS PNR Reservation (P2-05)
@@ -599,41 +672,41 @@ export function LeadDetailDrawer() {
       alert('Please enter a PNR code to look up (e.g. EMR882, QR702, BA178, SQ25, AI102)');
       return;
     }
-    setManualPnrSearching(true);
-    setFlightActionMsg('');
-    try {
-      const res = await fetch(`/api/v1/flights/pnr-lookup?pnr=${encodeURIComponent(codeToSearch)}`, {
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.flight) {
-          setManualPnr(data.flight.pnr || codeToSearch);
-          setManualAirline(data.flight.airline || manualAirline);
-          setManualFlightNo(data.flight.flightNumber || manualFlightNo);
-          setManualOrigin(data.flight.origin || manualOrigin);
-          setManualDest(data.flight.destination || manualDest);
-          setManualCabin(data.flight.cabinClass || manualCabin);
-          setManualBaggage(data.flight.baggageAllowance || manualBaggage);
-          setManualTicketCost(data.flight.ticketCost !== undefined ? String(data.flight.ticketCost) : manualTicketCost);
-          setManualFareRules(data.flight.fareRules || manualFareRules);
-          if (data.flight.departureTime) {
-            setManualDepartureDate(new Date(data.flight.departureTime).toISOString().slice(0, 16));
+    await runDrawerExclusive(`lookup-pnr:${codeToSearch}`, async () => {
+      setManualPnrSearching(true);
+      setFlightActionMsg('');
+      try {
+        const res = await authFetch(`/api/v1/flights/pnr-lookup?pnr=${encodeURIComponent(codeToSearch)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.flight) {
+            setManualPnr(data.flight.pnr || codeToSearch);
+            setManualAirline(data.flight.airline || manualAirline);
+            setManualFlightNo(data.flight.flightNumber || manualFlightNo);
+            setManualOrigin(data.flight.origin || manualOrigin);
+            setManualDest(data.flight.destination || manualDest);
+            setManualCabin(data.flight.cabinClass || manualCabin);
+            setManualBaggage(data.flight.baggageAllowance || manualBaggage);
+            setManualTicketCost(data.flight.ticketCost !== undefined ? String(data.flight.ticketCost) : manualTicketCost);
+            setManualFareRules(data.flight.fareRules || manualFareRules);
+            if (data.flight.departureTime) {
+              setManualDepartureDate(new Date(data.flight.departureTime).toISOString().slice(0, 16));
+            }
+            if (data.flight.arrivalTime) {
+              setManualArrivalDate(new Date(data.flight.arrivalTime).toISOString().slice(0, 16));
+            }
+            setFlightActionMsg(`Verified PNR: ${data.flight.pnr} with ${data.flight.airline} (${data.flight.status}). Flight schedule prefilled!`);
           }
-          if (data.flight.arrivalTime) {
-            setManualArrivalDate(new Date(data.flight.arrivalTime).toISOString().slice(0, 16));
-          }
-          setFlightActionMsg(`Verified PNR: ${data.flight.pnr} with ${data.flight.airline} (${data.flight.status}). Flight schedule prefilled!`);
+        } else {
+          const err = await res.json();
+          alert(err.error || 'Failed to lookup PNR');
         }
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to lookup PNR');
+      } catch (err: any) {
+        alert(err.message || 'Error looking up PNR');
+      } finally {
+        setManualPnrSearching(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error looking up PNR');
-    } finally {
-      setManualPnrSearching(false);
-    }
+    });
   };
 
   // Handler: Save / Attach Manual PNR Flight (P2-05)
@@ -647,227 +720,263 @@ export function LeadDetailDrawer() {
       alert('Airline name is required (e.g. Emirates)');
       return;
     }
-    setSavingManualFlight(true);
-    setFlightActionMsg('');
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/flights`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          pnr: manualPnr.trim().toUpperCase() || undefined,
-          airline: manualAirline.trim(),
-          flightNumber: manualFlightNo.trim(),
-          origin: (manualOrigin || 'JFK').trim().toUpperCase(),
-          destination: (manualDest || 'DXB').trim().toUpperCase(),
-          departureTime: manualDepartureDate ? new Date(manualDepartureDate).toISOString() : undefined,
-          arrivalTime: manualArrivalDate ? new Date(manualArrivalDate).toISOString() : undefined,
-          cabinClass: manualCabin,
-          baggageAllowance: manualBaggage,
-          ticketCost: manualTicketCost ? Number(manualTicketCost) : null,
-          fareRules: manualFareRules,
-        }),
-      });
+    await runDrawerExclusive(`save-manual-flight:${selectedLead.id}`, async () => {
+      setSavingManualFlight(true);
+      setFlightActionMsg('');
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/flights`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            pnr: manualPnr.trim().toUpperCase() || undefined,
+            airline: manualAirline.trim(),
+            flightNumber: manualFlightNo.trim(),
+            origin: (manualOrigin || 'JFK').trim().toUpperCase(),
+            destination: (manualDest || 'DXB').trim().toUpperCase(),
+            departureTime: manualDepartureDate ? new Date(manualDepartureDate).toISOString() : undefined,
+            arrivalTime: manualArrivalDate ? new Date(manualArrivalDate).toISOString() : undefined,
+            cabinClass: manualCabin,
+            baggageAllowance: manualBaggage,
+            ticketCost: manualTicketCost ? Number(manualTicketCost) : null,
+            fareRules: manualFareRules,
+          }),
+        });
 
-      if (res.ok) {
-        const data = await res.json();
-        setTripFlights([data.flight, ...tripFlights]);
-        setShowManualFlightForm(false);
-        setFlightActionMsg(`Flight ${data.flight.flightNumber} (PNR: ${data.flight.pnr}) attached to trip successfully!`);
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to attach manual flight');
+        if (res.ok) {
+          const data = await res.json();
+          setTripFlights((prev) => [
+            data.flight,
+            ...prev.filter((f) => f.id !== data.flight.id),
+          ]);
+          setShowManualFlightForm(false);
+          setFlightActionMsg(`Flight ${data.flight.flightNumber} (PNR: ${data.flight.pnr}) attached to trip successfully!`);
+        } else {
+          const err = await res.json();
+          alert(err.error || 'Failed to attach manual flight');
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error saving manual flight');
+      } finally {
+        setSavingManualFlight(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error saving manual flight');
-    } finally {
-      setSavingManualFlight(false);
-    }
+    });
   };
 
   // Handler: Delete / Detach Flight from Trip
   const handleDeleteFlight = async (flightId: string) => {
     if (!confirm('Remove this flight schedule from the trip file?')) return;
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/flights?flightId=${flightId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      if (res.ok) {
-        setTripFlights(tripFlights.filter((f) => f.id !== flightId));
-        setFlightActionMsg('Flight schedule removed from trip.');
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to remove flight');
+    await runDrawerExclusive(`delete-flight:${flightId}`, async () => {
+      setDeletingFlightId(flightId);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/flights?flightId=${flightId}`, {
+          method: 'DELETE',
+        });
+        if (res.ok) {
+          setTripFlights((prev) => prev.filter((f) => f.id !== flightId));
+          setFlightActionMsg('Flight schedule removed from trip.');
+        } else {
+          const err = await res.json();
+          alert(err.error || 'Failed to remove flight');
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error removing flight');
+      } finally {
+        setDeletingFlightId(null);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error removing flight');
-    }
+    });
   };
 
   // Handler: Email Quotation Dispatch (P2-12, P2-13, P2-14, P2-15)
   const handleDispatchQuotation = async () => {
-    setDispatching(true);
-    setDispatchSuccessMsg('');
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/send-quotation`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          sendEmail,
-          scheduleAutomatedFollowUps: scheduleFollowUps,
-        }),
-      });
+    await runDrawerExclusive(`dispatch-quote:${selectedLead.id}`, async () => {
+      setDispatching(true);
+      setDispatchSuccessMsg('');
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/send-quotation`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            sendEmail,
+            scheduleAutomatedFollowUps: scheduleFollowUps,
+          }),
+        });
 
-      if (res.ok) {
-        const data = await res.json();
-        setDispatchSuccessMsg(`Quotation dispatched successfully via Email with ${data.results?.automatedFollowUpsScheduled || 3} automated follow-ups scheduled!`);
-        await fetchData();
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to dispatch quotation');
+        if (res.ok) {
+          const data = await res.json();
+          setDispatchSuccessMsg(`Quotation dispatched successfully via Email with ${data.results?.automatedFollowUpsScheduled || 3} automated follow-ups scheduled!`);
+          fetchData();
+        } else {
+          const err = await res.json();
+          alert(err.error || 'Failed to dispatch quotation');
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error dispatching quotation');
+      } finally {
+        setDispatching(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error dispatching quotation');
-    } finally {
-      setDispatching(false);
-    }
+    });
   };
 
   // Handler: Supplier RFP Chasing (P2-16)
   const handleChaseRfp = async () => {
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/supplier-rfp-chase`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      if (res.ok) {
-        alert('Automated SLA warning RFP reminders dispatched to partner suppliers!');
+    await runDrawerExclusive(`chase-rfp:${selectedLead.id}`, async () => {
+      setChasingRfp(true);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/supplier-rfp-chase`, {
+          method: 'POST',
+        });
+        if (res.ok) {
+          alert('Automated SLA warning RFP reminders dispatched to partner suppliers!');
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error chasing RFPs');
+      } finally {
+        setChasingRfp(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error chasing RFPs');
-    }
+    });
   };
 
   // Handler: Confirm Booking & Handover (P2-18)
   const handleConfirmBooking = async () => {
-    setConfirmingBooking(true);
-    setLifecycleSuccessMsg('');
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/confirm-booking`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          specialInstructions: 'VIP Concierge fulfillment requested with meet & greet',
-        }),
-      });
+    await runDrawerExclusive(`confirm-booking:${selectedLead.id}`, async () => {
+      setConfirmingBooking(true);
+      setLifecycleSuccessMsg('');
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/confirm-booking`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            specialInstructions: 'VIP Concierge fulfillment requested with meet & greet',
+          }),
+        });
 
-      if (res.ok) {
-        const data = await res.json();
-        setLifecycleSuccessMsg(`Booking confirmed (${data.bookingReference})! Handed over to fulfillment desk and voucher PDF generated.`);
-        await fetchData();
+        if (res.ok) {
+          const data = await res.json();
+          setLifecycleSuccessMsg(`Booking confirmed (${data.bookingReference})! Handed over to fulfillment desk and voucher PDF generated.`);
+          fetchData();
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error confirming booking');
+      } finally {
+        setConfirmingBooking(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error confirming booking');
-    } finally {
-      setConfirmingBooking(false);
-    }
+    });
   };
 
   // Handler: Send Payment Reminder (P2-19)
   const handleSendPaymentReminder = async (paymentId: string) => {
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/payments/${paymentId}/remind`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      if (res.ok) {
-        alert('Automated Email payment reminder dispatched with secure checkout link!');
+    await runDrawerExclusive(`remind-payment:${paymentId}`, async () => {
+      setRemindingPaymentId(paymentId);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/payments/${paymentId}/remind`, {
+          method: 'POST',
+        });
+        if (res.ok) {
+          alert('Automated Email payment reminder dispatched with secure checkout link!');
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error sending payment reminder');
+      } finally {
+        setRemindingPaymentId(null);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error sending payment reminder');
-    }
+    });
   };
 
   // Handler: Toggle Visa Document Status (P2-20)
   const handleToggleVisaStatus = async (requirementId: string, currentStatus: string) => {
     const nextStatus = currentStatus === 'verified' ? 'pending' : currentStatus === 'pending' ? 'submitted' : 'verified';
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/visa`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({ requirementId, status: nextStatus }),
-      });
-      if (res.ok) {
-        setVisaChecklist(visaChecklist.map((d) => d.id === requirementId ? { ...d, status: nextStatus } : d));
+    await runDrawerExclusive(`toggle-visa:${requirementId}`, async () => {
+      setTogglingVisaId(requirementId);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/visa`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ requirementId, status: nextStatus }),
+        });
+        if (res.ok) {
+          setVisaChecklist((prev) =>
+            prev.map((d) => (d.id === requirementId ? { ...d, status: nextStatus } : d))
+          );
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error updating visa document');
+      } finally {
+        setTogglingVisaId(null);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error updating visa document');
-    }
+    });
   };
 
   // Handler: Pre-Departure Briefing (P2-21)
   const handleSendPreDeparture = async (milestone: string) => {
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/pre-departure`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({ milestone }),
-      });
-      if (res.ok) {
-        alert(`Pre-departure ${milestone} briefing package dispatched to customer via Email!`);
+    await runDrawerExclusive(`pre-dep:${selectedLead.id}:${milestone}`, async () => {
+      setSendingPreDepMilestone(milestone);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/pre-departure`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ milestone }),
+        });
+        if (res.ok) {
+          alert(`Pre-departure ${milestone} briefing package dispatched to customer via Email!`);
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error dispatching briefing');
+      } finally {
+        setSendingPreDepMilestone(null);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error dispatching briefing');
-    }
+    });
   };
 
   // Handler: Post-Trip CSAT (P2-22)
   const handleSendCsat = async () => {
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/csat`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${bearerToken}` },
-      });
-      if (res.ok) {
-        alert('Post-trip CSAT & NPS survey invitation dispatched via Email!');
+    await runDrawerExclusive(`csat:${selectedLead.id}`, async () => {
+      setSendingCsat(true);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/csat`, {
+          method: 'POST',
+        });
+        if (res.ok) {
+          alert('Post-trip CSAT & NPS survey invitation dispatched via Email!');
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error dispatching survey');
+      } finally {
+        setSendingCsat(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error dispatching survey');
-    }
+    });
   };
 
   // Handler: Loyalty Marketing (P2-23)
   const handleSendLoyalty = async () => {
-    try {
-      const res = await fetch(`/api/v1/leads/${selectedLead.id}/loyalty-trigger`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({ campaignType: 'anniversary', promotionalDiscount: 500 }),
-      });
-      if (res.ok) {
-        alert('$500 VIP Member Anniversary reward dispatched to customer via Email!');
+    await runDrawerExclusive(`loyalty:${selectedLead.id}`, async () => {
+      setSendingLoyalty(true);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/loyalty-trigger`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ campaignType: 'anniversary', promotionalDiscount: 500 }),
+        });
+        if (res.ok) {
+          alert('$500 VIP Member Anniversary reward dispatched to customer via Email!');
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error dispatching loyalty reward');
+      } finally {
+        setSendingLoyalty(false);
       }
-    } catch (err: any) {
-      alert(err.message || 'Error dispatching loyalty reward');
-    }
+    });
   };
 
   return (
@@ -1564,11 +1673,16 @@ export function LeadDetailDrawer() {
                   <button
                     type="button"
                     onClick={handleChaseRfp}
-                    className="text-xs bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 px-3 py-1.5 rounded-lg border border-amber-500/30 font-medium transition flex items-center gap-1.5"
+                    disabled={chasingRfp}
+                    className="text-xs bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 px-3 py-1.5 rounded-lg border border-amber-500/30 font-medium transition flex items-center gap-1.5 disabled:opacity-50"
                     title="Send automated reminders to slow-responding suppliers before SLA breach"
                   >
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>Chase Outstanding RFPs (P2-16)</span>
+                    {chasingRfp ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Clock className="w-3.5 h-3.5" />
+                    )}
+                    <span>{chasingRfp ? 'Chasing RFPs...' : 'Chase Outstanding RFPs (P2-16)'}</span>
                   </button>
                   <button
                     type="button"
@@ -1644,9 +1758,11 @@ export function LeadDetailDrawer() {
                     </button>
                     <button
                       type="submit"
-                      className="px-4 py-1.5 bg-indigo-600 text-white text-xs font-semibold rounded-lg"
+                      disabled={savingSupplierQuote}
+                      className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 transition disabled:opacity-50"
                     >
-                      Save Supplier Quote
+                      {savingSupplierQuote && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      <span>{savingSupplierQuote ? 'Saving Quote...' : 'Save Supplier Quote'}</span>
                     </button>
                   </div>
                 </form>
@@ -1715,9 +1831,11 @@ export function LeadDetailDrawer() {
                                 <button
                                   type="button"
                                   onClick={() => handleSelectWinningQuote(q.id)}
-                                  className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-2.5 py-1 rounded transition"
+                                  disabled={selectingQuoteId === q.id}
+                                  className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-2.5 py-1 rounded transition inline-flex items-center gap-1.5 disabled:opacity-50"
                                 >
-                                  Select Winning Quote
+                                  {selectingQuoteId === q.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                                  <span>{selectingQuoteId === q.id ? 'Selecting...' : 'Select Winning Quote'}</span>
                                 </button>
                               )}
                             </td>
@@ -2294,10 +2412,15 @@ export function LeadDetailDrawer() {
                           <button
                             type="button"
                             onClick={() => handleDeleteFlight(f.id)}
-                            className="p-1.5 text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition cursor-pointer"
+                            disabled={deletingFlightId === f.id}
+                            className="p-1.5 text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition cursor-pointer disabled:opacity-50"
                             title="Remove flight from trip"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            {deletingFlightId === f.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
+                            ) : (
+                              <Trash2 className="w-3.5 h-3.5" />
+                            )}
                           </button>
                         </div>
                       </div>
@@ -2311,7 +2434,10 @@ export function LeadDetailDrawer() {
                 <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800 space-y-3">
                   <span className="text-xs font-bold text-white">GDS Aggregator Live Results</span>
                   <div className="space-y-2">
-                    {gdsSearchResults.map((gds, idx) => (
+                    {gdsSearchResults.map((gds, idx) => {
+                      const flightKey = `${gds.airline}-${gds.flightNumber}`;
+                      const isAttaching = attachingFlightKey === flightKey;
+                      return (
                       <div key={idx} className="p-3 bg-zinc-900 rounded-lg border border-zinc-800 flex items-center justify-between text-xs">
                         <div>
                           <div className="font-semibold text-white flex items-center gap-2">
@@ -2329,13 +2455,16 @@ export function LeadDetailDrawer() {
                           <button
                             type="button"
                             onClick={() => handleAttachFlight(gds)}
-                            className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded text-xs font-medium transition"
+                            disabled={isAttaching}
+                            className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded text-xs font-medium transition flex items-center gap-1.5 disabled:opacity-50"
                           >
-                            Attach to Trip
+                            {isAttaching && <Loader2 className="w-3 h-3 animate-spin" />}
+                            <span>{isAttaching ? 'Attaching...' : 'Attach to Trip'}</span>
                           </button>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -2532,9 +2661,11 @@ export function LeadDetailDrawer() {
                             <button
                               type="button"
                               onClick={() => handleSendPaymentReminder(m.id)}
-                              className="text-xs bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white px-2.5 py-1 rounded transition"
+                              disabled={remindingPaymentId === m.id}
+                              className="text-xs bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white px-2.5 py-1 rounded transition inline-flex items-center gap-1 disabled:opacity-50"
                             >
-                              Remind
+                              {remindingPaymentId === m.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                              <span>{remindingPaymentId === m.id ? 'Sending...' : 'Remind'}</span>
                             </button>
                           )}
                         </div>
@@ -2560,7 +2691,8 @@ export function LeadDetailDrawer() {
                       <button
                         type="button"
                         onClick={() => handleToggleVisaStatus(doc.id, doc.status)}
-                        className={`text-[10px] font-mono px-2.5 py-1 rounded transition uppercase ${
+                        disabled={togglingVisaId === doc.id}
+                        className={`text-[10px] font-mono px-2.5 py-1 rounded transition uppercase inline-flex items-center gap-1 disabled:opacity-50 ${
                           doc.status === 'verified'
                             ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                             : doc.status === 'submitted'
@@ -2568,7 +2700,8 @@ export function LeadDetailDrawer() {
                             : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
                         }`}
                       >
-                        {doc.status} (Click to toggle)
+                        {togglingVisaId === doc.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                        <span>{doc.status} (Click to toggle)</span>
                       </button>
                     </div>
                   ))}
@@ -2584,16 +2717,20 @@ export function LeadDetailDrawer() {
                     <button
                       type="button"
                       onClick={() => handleSendPreDeparture('T-7')}
-                      className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded transition flex-1"
+                      disabled={Boolean(sendingPreDepMilestone)}
+                      className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded transition flex-1 flex items-center justify-center gap-1 disabled:opacity-50"
                     >
-                      Send T-7
+                      {sendingPreDepMilestone === 'T-7' && <Loader2 className="w-3 h-3 animate-spin" />}
+                      <span>Send T-7</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => handleSendPreDeparture('T-3')}
-                      className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded transition flex-1"
+                      disabled={Boolean(sendingPreDepMilestone)}
+                      className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded transition flex-1 flex items-center justify-center gap-1 disabled:opacity-50"
                     >
-                      Send T-3
+                      {sendingPreDepMilestone === 'T-3' && <Loader2 className="w-3 h-3 animate-spin" />}
+                      <span>Send T-3</span>
                     </button>
                   </div>
                 </div>
@@ -2604,9 +2741,11 @@ export function LeadDetailDrawer() {
                   <button
                     type="button"
                     onClick={handleSendCsat}
-                    className="w-full mt-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-amber-300 text-xs rounded transition"
+                    disabled={sendingCsat}
+                    className="w-full mt-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-amber-300 text-xs rounded transition flex items-center justify-center gap-1.5 disabled:opacity-50"
                   >
-                    Send CSAT Survey (T+1)
+                    {sendingCsat && <Loader2 className="w-3 h-3 animate-spin" />}
+                    <span>{sendingCsat ? 'Sending Survey...' : 'Send CSAT Survey (T+1)'}</span>
                   </button>
                 </div>
 
@@ -2616,9 +2755,11 @@ export function LeadDetailDrawer() {
                   <button
                     type="button"
                     onClick={handleSendLoyalty}
-                    className="w-full mt-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-emerald-300 text-xs rounded transition"
+                    disabled={sendingLoyalty}
+                    className="w-full mt-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-emerald-300 text-xs rounded transition flex items-center justify-center gap-1.5 disabled:opacity-50"
                   >
-                    Trigger Anniversary Offer
+                    {sendingLoyalty && <Loader2 className="w-3 h-3 animate-spin" />}
+                    <span>{sendingLoyalty ? 'Sending Offer...' : 'Trigger Anniversary Offer'}</span>
                   </button>
                 </div>
               </div>

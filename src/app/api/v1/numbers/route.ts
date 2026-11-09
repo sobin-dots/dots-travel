@@ -6,12 +6,23 @@ import { getTenantTelephonyProvider } from '@/lib/telephony';
 
 export const runtime = 'nodejs';
 
+const NUMBER_SYNC_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const lastNumberSyncByOrg = new Map<string, number>();
+
 export async function GET(req: NextRequest) {
   const { auth, errorResponse } = await authenticateRequest(req, 'viewer');
   if (errorResponse) return errorResponse;
 
-  // Auto-sync numbers if live mode is active
-  if (process.env.TELEPHONY_MODE === 'live') {
+  const url = new URL(req.url);
+  const forceSync = url.searchParams.get('sync') === 'true';
+  const lastSyncAt = lastNumberSyncByOrg.get(auth!.organizationId) || 0;
+  const shouldSyncLive =
+    process.env.TELEPHONY_MODE === 'live' &&
+    (forceSync || Date.now() - lastSyncAt > NUMBER_SYNC_TTL_MS);
+
+  // Auto-sync numbers if live mode is active and TTL elapsed (or explicitly requested)
+  if (shouldSyncLive) {
+    lastNumberSyncByOrg.set(auth!.organizationId, Date.now());
     try {
       const provider = await getTenantTelephonyProvider(auth!.organizationId);
       if (provider.mode === 'live') {
@@ -119,7 +130,6 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const url = new URL(req.url);
   const status = url.searchParams.get('status') || 'active';
 
   const numbers = await db.phoneNumber.findMany({
