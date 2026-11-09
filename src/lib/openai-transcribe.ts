@@ -183,10 +183,10 @@ export async function transcribeRecording(
     headers: fetchHeaders,
   });
 
-  // If carrier bucket requires Basic Auth, retry with tenant or env Plivo credentials
+  // If carrier bucket requires Basic Auth, retry with tenant DB Plivo credentials
   if (!response.ok && (response.status === 401 || response.status === 403)) {
-    let plivoAuthId = process.env.PLIVO_AUTH_ID;
-    let plivoAuthToken = process.env.PLIVO_AUTH_TOKEN;
+    let plivoAuthId: string | undefined;
+    let plivoAuthToken: string | undefined;
 
     if (options.organizationId) {
       try {

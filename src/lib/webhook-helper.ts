@@ -120,8 +120,8 @@ async function resolveCandidateAuthTokens(
     } catch {}
   }
 
-  // 3. Resolve by destination phone number (To / to)
-  const destNumber = params.To || params.to;
+  // 3. Resolve by destination phone number (To / to) or callerId header
+  const destNumber = params['X-PH-callerId'] || params['x-ph-callerid'] || params.To || params.to;
   if (destNumber && candidateTokens.size === 0) {
     try {
       const cleanNumber = String(destNumber).replace(/\D/g, '');
@@ -143,13 +143,7 @@ async function resolveCandidateAuthTokens(
     } catch {}
   }
 
-  // 4. Global environment fallbacks
-  if (process.env.PLIVO_WEBHOOK_AUTH_TOKEN) {
-    candidateTokens.add(process.env.PLIVO_WEBHOOK_AUTH_TOKEN);
-  }
-  if (process.env.PLIVO_AUTH_TOKEN) {
-    candidateTokens.add(process.env.PLIVO_AUTH_TOKEN);
-  }
+  // 4. If still empty in test environment, allow simulator token
   if (candidateTokens.size === 0 && (process.env.NODE_ENV === 'test' || process.env.TELEPHONY_MODE !== 'live')) {
     candidateTokens.add('simulator-auth-token-2026');
   }
@@ -204,7 +198,7 @@ export async function processIncomingWebhook(
     });
   }
 
-  // Resolve actual public URL that Plivo signed against (supports ngrok and reverse proxies)
+  // Resolve actual public URL that Plivo signed against from request headers or DB-configured webhookBaseUrl
   const originalUrlObj = new URL(req.url);
   const forwardedProto = req.headers.get('x-forwarded-proto') || 'https';
   const forwardedHost = req.headers.get('x-forwarded-host') || req.headers.get('host');
@@ -212,14 +206,24 @@ export async function processIncomingWebhook(
     ? `${forwardedProto}://${forwardedHost}${originalUrlObj.pathname}${originalUrlObj.search}`
     : req.url;
 
-  const publicBaseUrl = process.env.PUBLIC_BASE_URL
-    ? `${process.env.PUBLIC_BASE_URL.trim().replace(/\/+$/, '')}${originalUrlObj.pathname}${originalUrlObj.search}`
-    : proxyUrl;
+  const candidateUrlsSet = new Set<string>([proxyUrl, req.url].filter(Boolean));
+  const orgIdParam = originalUrlObj.searchParams.get('orgId') || params.orgId;
+  if (orgIdParam) {
+    try {
+      const tenantInteg = await getTenantIntegration(orgIdParam, 'plivo');
+      const dbBase = tenantInteg?.metadata?.webhookBaseUrl;
+      if (dbBase) {
+        candidateUrlsSet.add(
+          `${String(dbBase).trim().replace(/\/+$/, '')}${originalUrlObj.pathname}${originalUrlObj.search}`
+        );
+      }
+    } catch {}
+  }
 
-  const candidateUrls = Array.from(new Set([proxyUrl, publicBaseUrl, req.url].filter(Boolean)));
+  const candidateUrls = Array.from(candidateUrlsSet);
   const candidateTokens = await resolveCandidateAuthTokens(originalUrlObj, params);
 
-  let isSignatureValid = process.env.PLIVO_SIGNATURE_VALIDATION_ENABLED === 'false';
+  let isSignatureValid = false;
 
   if (!isSignatureValid) {
     for (const testUrl of candidateUrls) {

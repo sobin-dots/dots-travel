@@ -209,6 +209,85 @@ export async function getTenantIntegration(
   }
 }
 
+export function buildOrgWebhookUrls(baseUrl: string, organizationId: string) {
+  const cleanBase = (baseUrl || 'http://localhost:3000').trim().replace(/\/+$/, '');
+  return {
+    voiceAnswer: `${cleanBase}/api/v1/webhooks/voice/answer?orgId=${organizationId}`,
+    voiceFallback: `${cleanBase}/api/v1/webhooks/voice/fallback?orgId=${organizationId}`,
+    voiceHangup: `${cleanBase}/api/v1/webhooks/voice/hangup?orgId=${organizationId}`,
+    voiceRecord: `${cleanBase}/api/v1/webhooks/voice/record?orgId=${organizationId}`,
+    voiceStatus: `${cleanBase}/api/v1/webhooks/voice/status?orgId=${organizationId}`,
+    messageInbound: `${cleanBase}/api/v1/webhooks/message/inbound?orgId=${organizationId}`,
+    messageStatus: `${cleanBase}/api/v1/webhooks/message/status?orgId=${organizationId}`,
+    msg91Voice: `${cleanBase}/api/v1/webhooks/msg91/voice?orgId=${organizationId}`,
+    msg91Sms: `${cleanBase}/api/v1/webhooks/msg91/sms?orgId=${organizationId}`,
+  };
+}
+
+/**
+ * Resolves a tenant's DB-stored Plivo integration by organizationId, Plivo ParentAuthID, or called phone number.
+ * Never reads from environment variables.
+ */
+export async function resolveTenantPlivoIntegration(params: {
+  organizationId?: string | null;
+  parentAuthId?: string | null;
+  phoneNumber?: string | null;
+}): Promise<{ organizationId: string; integration: DecryptedIntegration } | null> {
+  // 1. Direct lookup by organizationId if provided
+  if (params.organizationId) {
+    const direct = await getTenantIntegration(params.organizationId, 'plivo');
+    if (direct?.credentials?.authId && direct?.credentials?.authToken) {
+      return { organizationId: params.organizationId, integration: direct };
+    }
+  }
+
+  // 2. Lookup by phoneNumber in PhoneNumber table
+  if (params.phoneNumber) {
+    const cleanDigits = String(params.phoneNumber).replace(/\D/g, '');
+    const phoneRow = await db.phoneNumber.findFirst({
+      where: {
+        OR: [
+          { e164: params.phoneNumber },
+          ...(cleanDigits ? [{ e164: `+${cleanDigits}` }, { e164: cleanDigits }] : []),
+        ],
+      },
+      select: { organizationId: true },
+    });
+    if (phoneRow?.organizationId) {
+      const byPhoneOrg = await getTenantIntegration(phoneRow.organizationId, 'plivo');
+      if (byPhoneOrg?.credentials?.authId && byPhoneOrg?.credentials?.authToken) {
+        return { organizationId: phoneRow.organizationId, integration: byPhoneOrg };
+      }
+    }
+  }
+
+  // 3. Scan all Plivo tenant integrations in DB to match parentAuthId or callerId
+  const allPlivoRows = await db.tenantIntegration.findMany({
+    where: { provider: 'plivo' },
+    orderBy: { updatedAt: 'desc' },
+  });
+
+  const cleanTargetPhone = params.phoneNumber ? String(params.phoneNumber).replace(/\D/g, '') : '';
+
+  for (const row of allPlivoRows) {
+    const integ = await getTenantIntegration(row.organizationId, 'plivo');
+    if (!integ?.credentials?.authId || !integ?.credentials?.authToken) continue;
+
+    if (params.parentAuthId && integ.credentials.authId === params.parentAuthId) {
+      return { organizationId: row.organizationId, integration: integ };
+    }
+
+    if (cleanTargetPhone && integ.credentials.callerId) {
+      const cleanCallerId = String(integ.credentials.callerId).replace(/\D/g, '');
+      if (cleanCallerId && cleanCallerId === cleanTargetPhone) {
+        return { organizationId: row.organizationId, integration: integ };
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Saves and encrypts credentials for a tenant, validating them live with the provider.
  */
@@ -220,17 +299,30 @@ export async function saveTenantIntegration(
     credentials: Record<string, any>;
     metadata?: Record<string, any>;
     label?: string;
+    webhookBaseUrl?: string;
   }
 ): Promise<{
   success: boolean;
   integration: any;
   verification: VerificationResult;
 }> {
-  const { provider, metadata = {}, label = 'Default' } = data;
+  const { provider, label = 'Default' } = data;
   let credentials = { ...data.credentials };
 
   // If partial credentials are provided (e.g. updating callerId or leaving authToken unchanged), merge with existing
   const existing = await getTenantIntegration(organizationId, provider);
+  const mergedMetadata: Record<string, any> = {
+    ...(existing?.metadata || {}),
+    ...(data.metadata || {}),
+  };
+
+  if (data.webhookBaseUrl) {
+    mergedMetadata.webhookBaseUrl = data.webhookBaseUrl.trim().replace(/\/+$/, '');
+  }
+  if (mergedMetadata.webhookBaseUrl) {
+    mergedMetadata.webhookUrls = buildOrgWebhookUrls(mergedMetadata.webhookBaseUrl, organizationId);
+  }
+
   if (existing?.credentials) {
     if (provider === 'plivo') {
       if (!credentials.authId && existing.credentials.authId) {
@@ -241,6 +333,21 @@ export async function saveTenantIntegration(
       }
       if (credentials.callerId === undefined && existing.credentials.callerId) {
         credentials.callerId = existing.credentials.callerId;
+      }
+      if (!credentials.sipEndpoint && existing.credentials.sipEndpoint) {
+        credentials.sipEndpoint = existing.credentials.sipEndpoint;
+      }
+      if (!credentials.endpointUsername && existing.credentials.endpointUsername) {
+        credentials.endpointUsername = existing.credentials.endpointUsername;
+      }
+      if (!credentials.endpointPassword && existing.credentials.endpointPassword) {
+        credentials.endpointPassword = existing.credentials.endpointPassword;
+      }
+      if (!credentials.endpointId && existing.credentials.endpointId) {
+        credentials.endpointId = existing.credentials.endpointId;
+      }
+      if (!credentials.appId && existing.credentials.appId) {
+        credentials.appId = existing.credentials.appId;
       }
     } else if (provider === 'msg91') {
       if (!credentials.authKey && existing.credentials.authKey) {
@@ -270,31 +377,118 @@ export async function saveTenantIntegration(
       ? 'intelligence'
       : 'telephony');
 
+  // Live validation
+  const verification = await testProviderCredentials(provider, credentials, mergedMetadata);
+
+  // If Plivo credentials verified, sync SIP endpoint, callerId, and Plivo Application webhook URLs into DB
+  if (provider === 'plivo' && verification.valid && credentials.authId && credentials.authToken) {
+    try {
+      const plivoModule = await import('plivo');
+      const client = new (plivoModule as any).Client(credentials.authId, credentials.authToken);
+      const endpointPassword = credentials.endpointPassword || 'PilvoAgent2026!Secure';
+      credentials.endpointPassword = endpointPassword;
+
+      // Sync or discover Plivo Application
+      const apps = await client.applications.list();
+      let app =
+        apps.find((a: any) => credentials.appId && String(a.appId) === String(credentials.appId)) ||
+        apps.find((a: any) => a.defaultEndpointApp) ||
+        apps[0];
+
+      const webhookUrls = mergedMetadata.webhookUrls;
+      const isPublicHttps =
+        mergedMetadata.webhookBaseUrl &&
+        mergedMetadata.webhookBaseUrl.startsWith('https://') &&
+        !mergedMetadata.webhookBaseUrl.includes('localhost');
+
+      if (app && isPublicHttps && webhookUrls) {
+        try {
+          await client.applications.update(app.appId, {
+            answer_url: webhookUrls.voiceAnswer,
+            answer_method: 'POST',
+            fallback_answer_url: webhookUrls.voiceFallback,
+            fallback_method: 'POST',
+            hangup_url: webhookUrls.voiceHangup,
+            hangup_method: 'POST',
+          });
+        } catch (appUpdateErr) {
+          console.warn('[CredentialsManager] Plivo application webhook sync notice:', appUpdateErr);
+        }
+      }
+
+      if (app?.appId) {
+        credentials.appId = String(app.appId);
+      }
+
+      // Sync or provision WebRTC SIP Endpoint
+      const endpoints = await client.endpoints.list();
+      let endpoint =
+        endpoints.find((e: any) => credentials.endpointUsername && e.username === credentials.endpointUsername) ||
+        endpoints[0];
+
+      if (!endpoint) {
+        const cleanAuthId = String(credentials.authId).replace(/[^a-zA-Z0-9]/g, '').slice(-4).toLowerCase() || 'agent';
+        const cleanOrg = organizationId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase() || 'line';
+        const username = `agent${cleanOrg}${cleanAuthId}`;
+        try {
+          endpoint = await client.endpoints.create(username, endpointPassword, `Agent-${cleanOrg}`, app?.appId);
+        } catch (epCreateErr) {
+          console.warn('[CredentialsManager] Plivo endpoint auto-create notice:', epCreateErr);
+        }
+      } else if (app?.appId && endpoint.endpointId && String(endpoint.appId || '') !== String(app.appId)) {
+        try {
+          await client.endpoints.update(endpoint.endpointId, { appId: app.appId });
+        } catch {}
+      }
+
+      if (endpoint?.username) {
+        credentials.endpointUsername = endpoint.username;
+        credentials.endpointId = endpoint.endpointId || endpoint.id || credentials.endpointId;
+        credentials.sipEndpoint = endpoint.sipUri || `sip:${endpoint.username}@phone.plivo.com`;
+      }
+
+      // Sync callerId from owned Plivo numbers if not manually entered, and link number to the Plivo Application
+      const ownedNumbers = await client.numbers.list();
+      if (!credentials.callerId && ownedNumbers && ownedNumbers[0]?.number) {
+        const rawNum = String(ownedNumbers[0].number);
+        credentials.callerId = rawNum.startsWith('+') ? rawNum : `+${rawNum}`;
+      }
+      if (app?.appId && ownedNumbers?.length) {
+        for (const numObj of ownedNumbers) {
+          try {
+            await client.numbers.update(numObj.number, { appId: app.appId });
+          } catch {}
+        }
+      }
+    } catch (plivoSyncErr) {
+      console.warn('[CredentialsManager] Plivo endpoint/app sync notice:', plivoSyncErr);
+    }
+  }
+
   // Compute safe masked details for UI display (never plain secrets)
   const maskedDetails: Record<string, any> = {};
   if (provider === 'openai') {
     const rawKey = credentials.apiKey || '';
     maskedDetails.apiKeyLast4 = rawKey.length > 4 ? rawKey.slice(-4) : '****';
-    maskedDetails.model = metadata.model || 'gpt-4o-transcribe';
+    maskedDetails.model = mergedMetadata.model || 'gpt-4o-transcribe';
   } else if (provider === 'deepseek') {
     const rawKey = credentials.apiKey || '';
     maskedDetails.apiKeyLast4 = rawKey.length > 4 ? rawKey.slice(-4) : '****';
-    maskedDetails.model = metadata.model || 'deepseek-chat';
+    maskedDetails.model = mergedMetadata.model || 'deepseek-chat';
   } else if (provider === 'plivo') {
     const rawAuth = credentials.authId || '';
     maskedDetails.authIdLast4 = rawAuth.length > 4 ? rawAuth.slice(-4) : '****';
     maskedDetails.authIdMasked = rawAuth.length > 8 ? `${rawAuth.slice(0, 6)}...${rawAuth.slice(-4)}` : rawAuth;
     maskedDetails.callerId = credentials.callerId || '';
     maskedDetails.appId = credentials.appId || '';
+    maskedDetails.sipEndpoint = credentials.sipEndpoint || '';
+    maskedDetails.endpointUsername = credentials.endpointUsername || '';
   } else if (provider === 'msg91') {
     const rawKey = credentials.authKey || '';
     maskedDetails.authKeyLast4 = rawKey.length > 4 ? rawKey.slice(-4) : '****';
     maskedDetails.senderId = credentials.senderId || '';
     maskedDetails.callerId = credentials.callerId || '';
   }
-
-  // Live validation
-  const verification = await testProviderCredentials(provider, credentials, metadata);
 
   // Encrypt credentials JSON
   const encrypted = encryptData(JSON.stringify(credentials));
@@ -317,7 +511,7 @@ export async function saveTenantIntegration(
       status: verification.valid ? 'verified' : 'failed',
       lastVerifiedAt: new Date(),
       lastVerifyError: verification.valid ? null : verification.error,
-      metadata,
+      metadata: mergedMetadata,
     },
     create: {
       organizationId,
@@ -332,7 +526,7 @@ export async function saveTenantIntegration(
       status: verification.valid ? 'verified' : 'failed',
       lastVerifiedAt: new Date(),
       lastVerifyError: verification.valid ? null : verification.error,
-      metadata,
+      metadata: mergedMetadata,
     },
   });
 
@@ -430,8 +624,9 @@ export async function deleteTenantIntegration(organizationId: string, provider: 
 
 /**
  * Returns safe summary of all configured integrations for tenant settings view.
+ * Resolves webhook URLs from the DB-persisted tenant integration metadata or request origin.
  */
-export async function getTenantIntegrationsSummary(organizationId: string) {
+export async function getTenantIntegrationsSummary(organizationId: string, requestBaseUrl?: string) {
   const rows = await db.tenantIntegration.findMany({
     where: { organizationId },
     select: {
@@ -459,22 +654,40 @@ export async function getTenantIntegrationsSummary(organizationId: string) {
     },
   });
 
-  const publicBase = (process.env.PUBLIC_BASE_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
-  const orgSlug = org?.slug || organizationId;
+  const plivoRow = rows.find((r) => r.provider === 'plivo');
+  const plivoMeta = (plivoRow?.metadata as Record<string, any>) || {};
+  const dbBaseUrl = plivoMeta.webhookBaseUrl as string | undefined;
+
+  const effectiveBase = (
+    requestBaseUrl ||
+    dbBaseUrl ||
+    'http://localhost:3000'
+  ).trim().replace(/\/+$/, '');
+
+  const webhookUrls = buildOrgWebhookUrls(effectiveBase, organizationId);
+
+  // If Plivo row exists in DB and doesn't yet have webhookUrls persisted for this base, persist it in DB
+  if (plivoRow && (!plivoMeta.webhookUrls || (requestBaseUrl && !requestBaseUrl.includes('localhost') && plivoMeta.webhookBaseUrl !== effectiveBase))) {
+    try {
+      await db.tenantIntegration.update({
+        where: { id: plivoRow.id },
+        data: {
+          metadata: {
+            ...plivoMeta,
+            webhookBaseUrl: effectiveBase,
+            webhookUrls,
+          },
+        },
+      });
+    } catch {}
+  }
 
   return {
     organizationId,
     primaryTelephonyProvider: org?.primaryTelephonyProvider || 'plivo',
     integrations: rows,
-    webhookUrls: {
-      voiceAnswer: `${publicBase}/api/v1/webhooks/voice/answer?orgId=${organizationId}`,
-      voiceFallback: `${publicBase}/api/v1/webhooks/voice/fallback?orgId=${organizationId}`,
-      voiceHangup: `${publicBase}/api/v1/webhooks/voice/hangup?orgId=${organizationId}`,
-      voiceRecord: `${publicBase}/api/v1/webhooks/voice/record?orgId=${organizationId}`,
-      messageInbound: `${publicBase}/api/v1/webhooks/message/inbound?orgId=${organizationId}`,
-      messageStatus: `${publicBase}/api/v1/webhooks/message/status?orgId=${organizationId}`,
-      msg91Voice: `${publicBase}/api/v1/webhooks/msg91/voice?orgId=${organizationId}`,
-      msg91Sms: `${publicBase}/api/v1/webhooks/msg91/sms?orgId=${organizationId}`,
-    },
+    webhookUrls: (plivoMeta.webhookUrls && (!requestBaseUrl || requestBaseUrl.includes('localhost')))
+      ? plivoMeta.webhookUrls
+      : webhookUrls,
   };
 }

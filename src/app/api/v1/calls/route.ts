@@ -126,21 +126,33 @@ export async function POST(req: NextRequest) {
 
     const resolvedLanguage = transcriptionLanguage || phoneNumber.transcriptionLanguage || 'en-US';
 
-    // Construct Answer URL and Webhook URLs
-    const publicBase = (process.env.PUBLIC_BASE_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+    // Construct Answer URL and Webhook URLs from DB-stored Plivo webhookUrls or request origin
+    const { getTenantIntegration, buildOrgWebhookUrls } = await import('@/lib/integrations/credentials-manager');
+    const plivoInteg = await getTenantIntegration(auth!.organizationId, 'plivo');
+    const proto = req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http');
+    const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
+    const requestBase = host ? `${proto}://${host}` : 'http://localhost:3000';
+    const effectiveBase = (
+      plivoInteg?.metadata?.webhookBaseUrl ||
+      requestBase
+    ).trim().replace(/\/+$/, '');
+    const dbWebhookUrls = plivoInteg?.metadata?.webhookUrls || buildOrgWebhookUrls(effectiveBase, auth!.organizationId);
+
     let answerUrl: string;
 
     if (mode === 'url' && url) {
       answerUrl = url;
     } else {
-      answerUrl = `${publicBase}/api/v1/webhooks/voice/answer?mode=${mode}&orgId=${auth!.organizationId}`;
+      const baseAnswerUrl = dbWebhookUrls.voiceAnswer || `${effectiveBase}/api/v1/webhooks/voice/answer?orgId=${auth!.organizationId}`;
+      const sep = baseAnswerUrl.includes('?') ? '&' : '?';
+      answerUrl = `${baseAnswerUrl}${sep}mode=${mode}`;
       if ((mode === 'forward' || mode === 'bridge') && forwardTo) {
         answerUrl += `&forwardTo=${encodeURIComponent(forwardTo)}`;
       }
     }
 
-    const ringUrl = `${publicBase}/api/v1/webhooks/voice/status?orgId=${auth!.organizationId}`;
-    const hangupUrl = `${publicBase}/api/v1/webhooks/voice/hangup?orgId=${auth!.organizationId}`;
+    const ringUrl = dbWebhookUrls.voiceStatus || `${effectiveBase}/api/v1/webhooks/voice/status?orgId=${auth!.organizationId}`;
+    const hangupUrl = dbWebhookUrls.voiceHangup || `${effectiveBase}/api/v1/webhooks/voice/hangup?orgId=${auth!.organizationId}`;
 
     // Initialize Call record with temporary UUID
     const tempUuid = `temp_${crypto.randomBytes(12).toString('hex')}`;

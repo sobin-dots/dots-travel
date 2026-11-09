@@ -70,16 +70,11 @@ export async function getTenantTelephonyProvider(
     } catch {}
   }
 
-  // Fallback to server env only if TELEPHONY_MODE is simulator or development fallback
-  if (process.env.TELEPHONY_MODE !== 'live' && process.env.PLIVO_AUTH_ID && process.env.PLIVO_AUTH_TOKEN) {
-    return new PlivoProvider(process.env.PLIVO_AUTH_ID, process.env.PLIVO_AUTH_TOKEN);
-  }
-
-  throw new Error('No telephony provider credentials configured for this organization. Please configure your Plivo or MSG91 keys in Settings.');
+  throw new Error('No telephony provider credentials configured for this organization. Please configure your Plivo or MSG91 keys in Settings -> Platform & BYOK.');
 }
 
 /**
- * Direct synchronous provider getter (for script utilities or direct credentials).
+ * Direct synchronous provider getter (requires explicit credentials).
  */
 export function getTelephonyProvider(options: GetTelephonyProviderOptions = {}): TelephonyProvider {
   if (options.provider === 'msg91' && options.msg91AuthKey) {
@@ -89,12 +84,12 @@ export function getTelephonyProvider(options: GetTelephonyProviderOptions = {}):
     });
   }
 
-  const authId = options.authId || process.env.PLIVO_AUTH_ID;
-  const authToken = options.authToken || process.env.PLIVO_AUTH_TOKEN;
+  const authId = options.authId;
+  const authToken = options.authToken;
 
   if (!authId || !authToken) {
     throw new Error(
-      'Live Plivo credentials required: PLIVO_AUTH_ID or PLIVO_AUTH_TOKEN is missing.'
+      'Plivo credentials required: please configure your Plivo Auth ID & Auth Token in Settings -> Platform & BYOK.'
     );
   }
   return new PlivoProvider(authId, authToken);

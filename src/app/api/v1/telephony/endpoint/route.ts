@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import * as plivo from 'plivo';
 import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
-import { getTenantIntegration } from '@/lib/integrations/credentials-manager';
+import { getTenantIntegration, saveTenantIntegration } from '@/lib/integrations/credentials-manager';
 
 export const runtime = 'nodejs';
 
@@ -10,46 +10,41 @@ export async function GET(req: NextRequest) {
   const { auth, errorResponse } = await authenticateRequest(req, 'viewer');
   if (errorResponse) return errorResponse;
 
-  let authId = process.env.PLIVO_AUTH_ID;
-  let authToken = process.env.PLIVO_AUTH_TOKEN;
-  let callerId = process.env.PLIVO_CALLER_ID;
-
-  if (auth?.organizationId) {
-    const plivoInteg = await getTenantIntegration(auth.organizationId, 'plivo');
-    if (plivoInteg?.credentials?.authId && plivoInteg?.credentials?.authToken) {
-      authId = plivoInteg.credentials.authId;
-      authToken = plivoInteg.credentials.authToken;
-      if (plivoInteg.credentials.callerId) {
-        callerId = plivoInteg.credentials.callerId;
-      }
-    }
-
-    if (!callerId) {
-      const activeNumber = await db.phoneNumber.findFirst({
-        where: { organizationId: auth.organizationId, status: 'active' },
-        orderBy: { createdAt: 'desc' },
-      });
-      if (activeNumber) {
-        callerId = activeNumber.e164;
-      }
-    }
+  if (!auth?.organizationId) {
+    return NextResponse.json({ error: 'Organization context required' }, { status: 400 });
   }
 
-  if (!callerId) {
-    callerId = process.env.PLIVO_CALLER_ID || '+918065531234';
-  }
+  const plivoInteg = await getTenantIntegration(auth.organizationId, 'plivo');
+  const authId = plivoInteg?.credentials?.authId;
+  const authToken = plivoInteg?.credentials?.authToken;
+  let callerId = plivoInteg?.credentials?.callerId;
 
   if (!authId || !authToken) {
     return NextResponse.json({
-      error: 'Plivo is not configured for this organization. Please enter your Plivo Auth ID & Token in Settings.',
+      error: 'Plivo is not configured for this organization. Please enter your Plivo Auth ID & Token in Settings -> Platform & BYOK.',
     }, { status: 400 });
+  }
+
+  if (!callerId) {
+    const activeNumber = await db.phoneNumber.findFirst({
+      where: { organizationId: auth.organizationId, status: 'active' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (activeNumber) {
+      callerId = activeNumber.e164;
+    }
   }
 
   try {
     const client = new (plivo as any).Client(authId, authToken);
-    const password = process.env.PLIVO_ENDPOINT_PASSWORD || 'PilvoAgent2026!Secure';
-    let endpoints = await client.endpoints.list();
-    let endpoint = endpoints[0];
+    const password = plivoInteg?.credentials?.endpointPassword || 'PilvoAgent2026!Secure';
+    const endpoints = await client.endpoints.list();
+    let endpoint =
+      endpoints.find(
+        (e: any) =>
+          plivoInteg?.credentials?.endpointUsername &&
+          e.username === plivoInteg.credentials.endpointUsername
+      ) || endpoints[0];
 
     // Auto-provision endpoint on Plivo for this tenant if not yet created
     if (!endpoint) {
@@ -57,7 +52,7 @@ export async function GET(req: NextRequest) {
         const apps = await client.applications.list();
         const app = apps.find((a: any) => a.defaultEndpointApp) || apps[0];
         const cleanAuthId = String(authId).replace(/[^a-zA-Z0-9]/g, '').slice(-4).toLowerCase() || 'agent';
-        const cleanOrg = auth?.organizationId ? auth.organizationId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase() : 'line';
+        const cleanOrg = auth.organizationId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase() || 'line';
         const username = `agent${cleanOrg}${cleanAuthId}`;
         endpoint = await client.endpoints.create(username, password, `Agent-${cleanOrg}`, app?.appId);
       } catch (createErr: any) {
@@ -71,13 +66,41 @@ export async function GET(req: NextRequest) {
       }, { status: 500 });
     }
 
+    const sipUri = endpoint.sipUri || `sip:${endpoint.username}@phone.plivo.com`;
+
+    // Persist endpoint details into DB if not yet stored on TenantIntegration
+    if (
+      plivoInteg.credentials.sipEndpoint !== sipUri ||
+      plivoInteg.credentials.endpointUsername !== endpoint.username ||
+      (callerId && !plivoInteg.credentials.callerId)
+    ) {
+      const proto = req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http');
+      const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
+      const requestBaseUrl = host && !host.includes('localhost') ? `${proto}://${host}` : undefined;
+      try {
+        await saveTenantIntegration(auth.organizationId, {
+          provider: 'plivo',
+          credentials: {
+            ...plivoInteg.credentials,
+            callerId: callerId || plivoInteg.credentials.callerId || '',
+            sipEndpoint: sipUri,
+            endpointUsername: endpoint.username,
+            endpointPassword: password,
+            endpointId: endpoint.endpointId || endpoint.id,
+          },
+          metadata: plivoInteg.metadata,
+          webhookBaseUrl: requestBaseUrl,
+        });
+      } catch {}
+    }
+
     return NextResponse.json({
       mode: 'live',
       username: endpoint.username,
       password,
-      callerId,
+      callerId: callerId || '',
       alias: endpoint.alias,
-      sipUri: endpoint.sipUri || `sip:${endpoint.username}@phone.plivo.com`,
+      sipUri,
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || 'Failed to retrieve endpoint' }, { status: 500 });
