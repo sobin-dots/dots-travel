@@ -62,17 +62,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ api_id: 'not_found', error: 'Call not found' }, { status: 404 });
     }
 
-    // Resolve transcription text or intelligent concierge fallback
+    // Resolve transcription text strictly from call transcriptions (no synthetic fallback text)
     const targetPhone = call.direction === 'outbound' ? call.to : call.from;
     const transcription = call.transcriptions?.find(
       (t) => t.status === 'completed' && t.text && t.text.trim().length > 0
     ) || call.transcriptions?.find(
       (t) => t.text && t.text.trim().length > 0
     ) || call.transcriptions?.[0];
-    const defaultText = `Customer travel consultation with ${targetPhone}. Duration of conversation: ${call.durationSeconds || 45} seconds. The client is seeking a premier vacation package with flights, accommodation, and guided local excursions. Please synthesize a high-end customized travel itinerary.`;
     const transcriptText = (transcription?.text && transcription.text.trim().length > 0)
       ? transcription.text.trim()
-      : defaultText;
+      : '';
 
     // Match contact by phone number (exact match or stripped digits)
     const cleanTarget = targetPhone.replace(/\D/g, '');
@@ -90,10 +89,10 @@ export async function POST(req: NextRequest) {
       destination: customDestination,
       departureDate,
       returnDate,
-      durationDays: durationDays ? Number(durationDays) : undefined,
-      headcountAdults: headcountAdults != null ? Number(headcountAdults) : undefined,
-      headcountChildren: headcountChildren != null ? Number(headcountChildren) : undefined,
-      headcountInfants: headcountInfants != null ? Number(headcountInfants) : undefined,
+      durationDays: durationDays != null && durationDays !== '' ? Number(durationDays) : undefined,
+      headcountAdults: headcountAdults != null && headcountAdults !== '' ? Number(headcountAdults) : undefined,
+      headcountChildren: headcountChildren != null && headcountChildren !== '' ? Number(headcountChildren) : undefined,
+      headcountInfants: headcountInfants != null && headcountInfants !== '' ? Number(headcountInfants) : undefined,
       targetBudget: targetBudget ? Number(targetBudget) : undefined,
       hotelTier,
       specialRequests,
@@ -103,11 +102,11 @@ export async function POST(req: NextRequest) {
     };
 
     const generateAndPersistLead = async () => {
-      // Generate Itinerary with DeepSeek adhering to confirmed parameters
+      // Generate Itinerary with DeepSeek adhering to confirmed parameters (no fallback defaults)
       const result = await generateItineraryFromTranscript(
         transcriptText,
         {
-          name: customName || contact?.name || 'Valued Client',
+          name: customName || contact?.name || undefined,
           phone: targetPhone,
           email: customEmail || contact?.email || undefined,
           company: contact?.company || undefined,
@@ -116,12 +115,15 @@ export async function POST(req: NextRequest) {
         customParams
       );
 
-      // Create or update Lead record with rich structured trip parameters connected from extraction & synthesis
-      const resolvedDurationDays = durationDays ? Number(durationDays) : (result.durationDays || 5);
+      // Create or update Lead record with only extracted or user-supplied parameters (no fallback defaults)
+      const resolvedDurationDays =
+        durationDays != null && durationDays !== ''
+          ? Number(durationDays)
+          : result.durationDays ?? null;
       const effectiveDepStr = departureDate || result.departureDate || null;
       const parsedDeparture = effectiveDepStr ? new Date(effectiveDepStr) : null;
       let parsedReturn = returnDate ? new Date(returnDate) : null;
-      if (!parsedReturn && parsedDeparture && !isNaN(parsedDeparture.getTime())) {
+      if (!parsedReturn && parsedDeparture && !isNaN(parsedDeparture.getTime()) && resolvedDurationDays) {
         parsedReturn = new Date(parsedDeparture);
         parsedReturn.setUTCDate(parsedReturn.getUTCDate() + Math.max(0, resolvedDurationDays - 1));
       }
@@ -134,12 +136,12 @@ export async function POST(req: NextRequest) {
           : contact?.name || result.customerName || null;
       const resolvedCustomerEmail = customEmail || contact?.email || result.customerEmail || null;
 
-      if (!contactToLink && targetPhone) {
+      if (!contactToLink && targetPhone && (resolvedCustomerName || resolvedCustomerEmail)) {
         try {
           contactToLink = await db.contact.create({
             data: {
               organizationId: auth!.organizationId,
-              name: resolvedCustomerName || 'Customer',
+              name: resolvedCustomerName || '',
               phone: targetPhone,
               email: resolvedCustomerEmail || null,
             },
@@ -161,20 +163,38 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      const resolvedDestination = result.destination || customDestination || '';
+      const resolvedTitle =
+        result.title ||
+        (resolvedDestination
+          ? resolvedDurationDays
+            ? `Bespoke ${resolvedDurationDays}-Day Journey to ${resolvedDestination}`
+            : `${resolvedDestination} Itinerary`
+          : '');
+
       const leadDataPayload = {
         contactId: contactToLink?.id || null,
-        title: result.title,
-        destination: result.destination || customDestination || 'Curated Destination',
+        title: resolvedTitle,
+        destination: resolvedDestination,
         departureDate: parsedDeparture,
         returnDate: parsedReturn,
         durationDays: resolvedDurationDays,
-        headcountAdults: headcountAdults != null ? Number(headcountAdults) : (result.headcountAdults ?? 2),
-        headcountChildren: headcountChildren != null ? Number(headcountChildren) : (result.headcountChildren ?? 0),
-        headcountInfants: headcountInfants != null ? Number(headcountInfants) : (result.headcountInfants ?? 0),
+        headcountAdults:
+          headcountAdults != null && headcountAdults !== ''
+            ? Number(headcountAdults)
+            : (result.headcountAdults ?? 0),
+        headcountChildren:
+          headcountChildren != null && headcountChildren !== ''
+            ? Number(headcountChildren)
+            : (result.headcountChildren ?? 0),
+        headcountInfants:
+          headcountInfants != null && headcountInfants !== ''
+            ? Number(headcountInfants)
+            : (result.headcountInfants ?? 0),
         targetBudget: targetBudget ? Number(targetBudget) : null,
-        hotelTier: hotelTier || result.hotelTier || 'luxury_5star',
+        hotelTier: hotelTier || result.hotelTier || null,
         specialRequests: specialRequests || result.specialRequests || null,
-        itinerary: result.itinerary,
+        itinerary: result.itinerary || '',
         customerEmail: resolvedCustomerEmail,
         metadata: {
           customerName: resolvedCustomerName || undefined,

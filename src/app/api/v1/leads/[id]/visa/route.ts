@@ -24,58 +24,10 @@ export async function GET(
       return NextResponse.json({ api_id: 'not_found', error: 'Lead not found' }, { status: 404 });
     }
 
-    let checklist = await db.visaRequirement.findMany({
+    const checklist = await db.visaRequirement.findMany({
       where: { leadId, organizationId: auth!.organizationId },
       orderBy: { createdAt: 'asc' },
     });
-
-    // Auto-generate destination-specific visa checklist if none exist yet
-    if (checklist.length === 0) {
-      const dest = (lead.destination || '').toLowerCase();
-      let countryIso = 'AE'; // default UAE
-      let defaultDocs = [
-        { documentName: 'Valid Passport (6+ Months Validity)', description: 'Color scanned copy of passport biographical page', mandatory: true },
-        { documentName: 'Passport Sized Color Photographs', description: 'Recent 35x45mm white background photographs', mandatory: true },
-        { documentName: 'Proof of Accommodation & Hotel Voucher', description: 'Official hotel reservation voucher for the full duration', mandatory: true },
-        { documentName: 'Confirmed Return Flight Ticket', description: 'Confirmed return or onward flight booking with PNR', mandatory: true },
-      ];
-
-      if (dest.includes('france') || dest.includes('paris') || dest.includes('italy') || dest.includes('switzerland') || dest.includes('schengen')) {
-        countryIso = 'FR';
-        defaultDocs.push(
-          { documentName: 'Travel Medical Insurance (EUR 30,000+)', description: 'Valid Schengen travel insurance covering emergency hospitalization and repatriation', mandatory: true },
-          { documentName: 'Bank Statements (Past 3 Months)', description: 'Stamped personal bank statements showing sufficient funds', mandatory: true }
-        );
-      } else if (dest.includes('japan') || dest.includes('tokyo')) {
-        countryIso = 'JP';
-        defaultDocs.push(
-          { documentName: 'Japan eVisa Application Form', description: 'Signed tourist visa application with travel schedule', mandatory: true },
-          { documentName: 'Income Tax Return / Proof of Solvency', description: 'Recent tax assessment certificate or financial statement', mandatory: false }
-        );
-      } else if (dest.includes('dubai') || dest.includes('uae')) {
-        countryIso = 'AE';
-        defaultDocs.push(
-          { documentName: 'UAE 30-Day Single Entry Tourist Visa Form', description: 'Standard immigration tourist entry clearance form', mandatory: true }
-        );
-      }
-
-      await db.visaRequirement.createMany({
-        data: defaultDocs.map((doc) => ({
-          organizationId: auth!.organizationId,
-          leadId,
-          countryIso,
-          documentName: doc.documentName,
-          description: doc.description,
-          mandatory: doc.mandatory,
-          status: 'pending',
-        })),
-      });
-
-      checklist = await db.visaRequirement.findMany({
-        where: { leadId, organizationId: auth!.organizationId },
-        orderBy: { createdAt: 'asc' },
-      });
-    }
 
     const verifiedCount = checklist.filter((d) => d.status === 'verified').length;
     const pendingCount = checklist.filter((d) => d.status === 'pending').length;

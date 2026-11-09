@@ -96,7 +96,7 @@ interface ConsoleContextType {
   selectedCallDetail: any | null;
   setSelectedCallDetail: (call: any | null) => void;
   callDetailSyncing: boolean;
-  refreshCallDetail: (callId: string) => Promise<void>;
+  refreshCallDetail: (callId: string, retry?: boolean) => Promise<void>;
   transcribingRecId: string | null;
   setTranscribingRecId: (id: string | null) => void;
   transcribingProvider: 'openai' | null;
@@ -309,7 +309,12 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [callLoading, setCallLoading] = useState(false);
 
   // Call detail drawer state
-  const [selectedCallDetail, setSelectedCallDetail] = useState<any | null>(null);
+  const [selectedCallDetail, setSelectedCallDetailState] = useState<any | null>(null);
+  const selectedCallIdRef = useRef<string | null>(null);
+  const setSelectedCallDetail = (call: any | null) => {
+    selectedCallIdRef.current = call?.id || null;
+    setSelectedCallDetailState(call);
+  };
   const [callDetailSyncing, setCallDetailSyncing] = useState<boolean>(false);
   const [transcribingRecId, setTranscribingRecId] = useState<string | null>(null);
   const [transcribingProvider, setTranscribingProvider] = useState<'openai' | null>(null);
@@ -768,15 +773,16 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       .catch(() => {});
   }, [bearerToken, activeThreadId]);
 
-  // Refresh single call details
-  const refreshCallDetail = async (callId: string) => {
+  // Refresh single call details (never reopens the drawer if the user closed it)
+  const refreshCallDetail = async (callId: string, retry = false) => {
     if (!callId) return;
     setCallDetailSyncing(true);
     try {
-      const res = await authFetch(`/api/v1/calls/${callId}`);
-      if (res.ok) {
+      const query = retry ? '?retry=true' : '';
+      const res = await authFetch(`/api/v1/calls/${callId}${query}`);
+      if (res.ok && selectedCallIdRef.current === callId) {
         const data = await res.json();
-        setSelectedCallDetail(data.call);
+        setSelectedCallDetailState(data.call);
       }
     } catch {}
     finally {
@@ -784,27 +790,44 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // Auto-polling for Call Details drawer when recording or transcription is processing
+  // Auto-polling for Call Details drawer ONLY when call is actively in-progress or explicitly processing
   useEffect(() => {
-    if (!selectedCallDetail) return;
+    if (!selectedCallDetail?.id) return;
+    const activeCallId = selectedCallDetail.id;
 
-    const hasRecordings = Boolean(selectedCallDetail.recordings && selectedCallDetail.recordings.length > 0);
-    const hasTranscriptions = Boolean(selectedCallDetail.transcriptions && selectedCallDetail.transcriptions.length > 0);
+    const shouldPoll =
+      selectedCallDetail.status === 'in-progress' ||
+      Boolean(selectedCallDetail.isRecordingProcessing) ||
+      Boolean(selectedCallDetail.isTranscriptionProcessing);
 
-    if (!hasRecordings || !hasTranscriptions || selectedCallDetail.status === 'in-progress' || selectedCallDetail.isRecordingProcessing || selectedCallDetail.isTranscriptionProcessing) {
-      const interval = setInterval(async () => {
-        try {
-          const res = await authFetch(`/api/v1/calls/${selectedCallDetail.id}`);
-          if (res.ok) {
-            const data = await res.json();
-            setSelectedCallDetail(data.call);
-          }
-        } catch {}
-      }, 2500);
-
-      return () => clearInterval(interval);
+    if (!shouldPoll || selectedCallDetail.recordingError || selectedCallDetail.transcriptionError) {
+      return;
     }
-  }, [selectedCallDetail?.id, selectedCallDetail?.recordings?.length, selectedCallDetail?.transcriptions?.length, selectedCallDetail?.status]);
+
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      if (cancelled || selectedCallIdRef.current !== activeCallId) return;
+      try {
+        const res = await authFetch(`/api/v1/calls/${activeCallId}`);
+        if (res.ok && !cancelled && selectedCallIdRef.current === activeCallId) {
+          const data = await res.json();
+          setSelectedCallDetailState(data.call);
+        }
+      } catch {}
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [
+    selectedCallDetail?.id,
+    selectedCallDetail?.status,
+    selectedCallDetail?.isRecordingProcessing,
+    selectedCallDetail?.isTranscriptionProcessing,
+    selectedCallDetail?.recordingError,
+    selectedCallDetail?.transcriptionError,
+  ]);
 
   // Initialize In-Browser Web Phone
   const initWebPhone = async () => {
@@ -1210,9 +1233,9 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           method: 'DELETE',
         });
         const res = await authFetch(`/api/v1/calls/${callId}?fast=true`);
-        if (res.ok) {
+        if (res.ok && selectedCallIdRef.current === callId) {
           const data = await res.json();
-          setSelectedCallDetail(data.call);
+          setSelectedCallDetailState(data.call);
         }
         fetchData();
       } catch (err: any) {
@@ -1373,8 +1396,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
             );
           }
           await fetchData();
-          if (selectedCallDetail) {
-            await refreshCallDetail(selectedCallDetail.id);
+          if (selectedCallIdRef.current) {
+            await refreshCallDetail(selectedCallIdRef.current, true);
           }
         } else if (!silent) {
           alert(data.error || 'Failed to transcribe recording');
@@ -1422,7 +1445,9 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
             );
           }
           await fetchData();
-          await refreshCallDetail(callId);
+          if (selectedCallIdRef.current === callId) {
+            await refreshCallDetail(callId, true);
+          }
         } else if (!silent) {
           alert(data.error || 'Failed to trigger call transcription');
         }

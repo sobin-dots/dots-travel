@@ -120,14 +120,15 @@ describe('DeepSeek Concierge Itinerary & Leads Workflow', () => {
     });
   });
 
-  it('synthesizes structured travel itinerary from voice call transcription', async () => {
+  it('extracts structured travel parameters from voice call transcription without offline fallback templates', async () => {
     const transcriptText = 'Hi there, I would like to book a 4-day romantic vacation in Switzerland for 2 people in December. We want scenic train rides, fondue dinner in Zurich, and luxury chalet accommodation near Zermatt with Matterhorn views. Our budget is around $6000.';
     const result = await generateItineraryFromTranscript(transcriptText, { name: 'Sarah Connor' });
 
-    expect(result.destination).toBeDefined();
-    expect(result.title).toBeDefined();
-    expect(result.itinerary).toContain('Day 1');
-    expect(result.itinerary.length).toBeGreaterThan(100);
+    expect(result.destination).toBe('Switzerland');
+    expect(result.durationDays).toBe(4);
+    expect(result.headcountAdults).toBe(2);
+    expect(result.title).toContain('Switzerland');
+    expect(typeof result.itinerary).toBe('string');
   }, 60000);
 
   it('revises itinerary based on client correction notes', async () => {

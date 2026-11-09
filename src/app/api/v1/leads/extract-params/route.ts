@@ -63,20 +63,38 @@ export async function POST(req: NextRequest) {
           (t) => t.text && t.text.trim().length > 0
         ) || call.transcriptions?.[0];
 
-        textToAnalyze = transcription?.text?.trim() || `Customer consultation with ${targetPhone}. Seeking customized vacation itinerary with flights and luxury accommodations.`;
+        textToAnalyze = transcription?.text?.trim() || '';
       }
     }
 
-    const params = await extractTripParametersFromTranscript(
-      textToAnalyze,
-      contactInfo,
-      auth!.organizationId
-    );
+    const params = textToAnalyze.trim()
+      ? await extractTripParametersFromTranscript(
+          textToAnalyze,
+          contactInfo,
+          auth!.organizationId
+        )
+      : {
+          destination: '',
+          departureDate: '',
+          returnDate: '',
+          durationDays: undefined,
+          headcountAdults: undefined,
+          headcountChildren: undefined,
+          headcountInfants: undefined,
+          targetBudget: undefined,
+          hotelTier: '',
+          specialRequests: '',
+          customerName: contactInfo?.name || '',
+          customerEmail: contactInfo?.email || '',
+          customerPhone: contactInfo?.phone || '',
+        };
 
     return NextResponse.json({
       api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
       params,
-      transcriptSnippet: textToAnalyze.slice(0, 300) + (textToAnalyze.length > 300 ? '...' : ''),
+      transcriptSnippet: textToAnalyze
+        ? textToAnalyze.slice(0, 300) + (textToAnalyze.length > 300 ? '...' : '')
+        : '',
     });
   } catch (err: any) {
     console.error('Error extracting trip parameters:', err);

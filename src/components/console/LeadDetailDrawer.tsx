@@ -85,16 +85,16 @@ export function LeadDetailDrawer() {
   const [showAddQuoteForm, setShowAddQuoteForm] = useState(false);
   const [newQuoteSupplierId, setNewQuoteSupplierId] = useState('');
   const [newQuoteCost, setNewQuoteCost] = useState<string>('');
-  const [newQuoteHotelTier, setNewQuoteHotelTier] = useState('luxury_5star');
-  const [newQuoteInclusions, setNewQuoteInclusions] = useState('Luxury Suite, VIP airport transfers, gourmet breakfast');
-  const [newQuoteCancellation, setNewQuoteCancellation] = useState('Full refund up to 14 days before arrival');
+  const [newQuoteHotelTier, setNewQuoteHotelTier] = useState('');
+  const [newQuoteInclusions, setNewQuoteInclusions] = useState('');
+  const [newQuoteCancellation, setNewQuoteCancellation] = useState('');
 
   // CPQ Pricing & Margins state (P2-03, P2-04, P2-07, P2-09)
   const [customerQuotes, setCustomerQuotes] = useState<any[]>([]);
   const [marginType, setMarginType] = useState<'percentage' | 'fixed_dollar'>('percentage');
-  const [marginValue, setMarginValue] = useState<number>(18.0);
-  const [taxPercentage, setTaxPercentage] = useState<number>(5.0);
-  const [floorGuardrailMin, setFloorGuardrailMin] = useState<number>(10.0);
+  const [marginValue, setMarginValue] = useState<string>('');
+  const [taxPercentage, setTaxPercentage] = useState<string>('');
+  const [floorGuardrailMin, setFloorGuardrailMin] = useState<string>('');
   const [pricingNetCost, setPricingNetCost] = useState<number>(0);
   const [savingQuote, setSavingQuote] = useState(false);
 
@@ -103,17 +103,17 @@ export function LeadDetailDrawer() {
   const [gdsSearchResults, setGdsSearchResults] = useState<any[]>([]);
   const [loadingFlights, setLoadingFlights] = useState(false);
   const [showManualFlightForm, setShowManualFlightForm] = useState(false);
-  const [manualAirline, setManualAirline] = useState('Emirates');
-  const [manualFlightNo, setManualFlightNo] = useState('EK 202');
-  const [manualOrigin, setManualOrigin] = useState('JFK');
-  const [manualDest, setManualDest] = useState('DXB');
-  const [manualCabin, setManualCabin] = useState('business');
-  const [manualPnr, setManualPnr] = useState('EMR882');
+  const [manualAirline, setManualAirline] = useState('');
+  const [manualFlightNo, setManualFlightNo] = useState('');
+  const [manualOrigin, setManualOrigin] = useState('');
+  const [manualDest, setManualDest] = useState('');
+  const [manualCabin, setManualCabin] = useState('economy');
+  const [manualPnr, setManualPnr] = useState('');
   const [manualDepartureDate, setManualDepartureDate] = useState('');
   const [manualArrivalDate, setManualArrivalDate] = useState('');
-  const [manualBaggage, setManualBaggage] = useState('2x 32kg check-in + 14kg cabin');
-  const [manualTicketCost, setManualTicketCost] = useState('3850');
-  const [manualFareRules, setManualFareRules] = useState('Confirmed GDS PNR. Seat assignment included.');
+  const [manualBaggage, setManualBaggage] = useState('');
+  const [manualTicketCost, setManualTicketCost] = useState('');
+  const [manualFareRules, setManualFareRules] = useState('');
   const [manualPnrSearching, setManualPnrSearching] = useState(false);
   const [savingManualFlight, setSavingManualFlight] = useState(false);
   const [flightActionMsg, setFlightActionMsg] = useState('');
@@ -129,6 +129,9 @@ export function LeadDetailDrawer() {
   const [confirmingBooking, setConfirmingBooking] = useState(false);
   const [paymentMilestones, setPaymentMilestones] = useState<any[]>([]);
   const [visaChecklist, setVisaChecklist] = useState<any[]>([]);
+  const [newVisaDocName, setNewVisaDocName] = useState('');
+  const [newVisaDocDesc, setNewVisaDocDesc] = useState('');
+  const [addingVisaDoc, setAddingVisaDoc] = useState(false);
   const [lifecycleSuccessMsg, setLifecycleSuccessMsg] = useState('');
 
   // Per-button loading states for immediate click feedback
@@ -143,15 +146,16 @@ export function LeadDetailDrawer() {
   const [sendingCsat, setSendingCsat] = useState(false);
   const [sendingLoyalty, setSendingLoyalty] = useState(false);
 
-  const computeReturnDateFromDep = (depStr: string, days: number): string => {
-    if (!depStr) return '';
+  const computeReturnDateFromDep = (depStr: string, days: string | number): string => {
+    const numDays = Number(days);
+    if (!depStr || !numDays || numDays < 1) return '';
     const d = new Date(depStr);
     if (isNaN(d.getTime())) return '';
-    d.setUTCDate(d.getUTCDate() + Math.max(0, Number(days || 1) - 1));
+    d.setUTCDate(d.getUTCDate() + Math.max(0, numDays - 1));
     return d.toISOString().split('T')[0];
   };
 
-  // Trip Parameters editing state
+  // Trip Parameters editing state (no fallback defaults when blank)
   const [editBudget, setEditBudget] = useState<string>('');
   const [editDepartureDate, setEditDepartureDate] = useState<string>(
     selectedLead?.departureDate ? new Date(selectedLead.departureDate).toISOString().split('T')[0] : ''
@@ -159,11 +163,17 @@ export function LeadDetailDrawer() {
   const [editReturnDate, setEditReturnDate] = useState<string>(
     selectedLead?.returnDate ? new Date(selectedLead.returnDate).toISOString().split('T')[0] : ''
   );
-  const [editDurationDays, setEditDurationDays] = useState<number>(selectedLead?.durationDays || 5);
+  const [editDurationDays, setEditDurationDays] = useState<string>(
+    selectedLead?.durationDays != null ? String(selectedLead.durationDays) : ''
+  );
   const [editDestination, setEditDestination] = useState<string>(selectedLead?.destination || '');
-  const [editAdults, setEditAdults] = useState<number>(selectedLead?.headcountAdults || 2);
-  const [editChildren, setEditChildren] = useState<number>(selectedLead?.headcountChildren || 0);
-  const [editHotelTier, setEditHotelTier] = useState<string>(selectedLead?.hotelTier || 'luxury_5star');
+  const [editAdults, setEditAdults] = useState<string>(
+    selectedLead?.headcountAdults ? String(selectedLead.headcountAdults) : ''
+  );
+  const [editChildren, setEditChildren] = useState<string>(
+    selectedLead?.headcountChildren ? String(selectedLead.headcountChildren) : ''
+  );
+  const [editHotelTier, setEditHotelTier] = useState<string>(selectedLead?.hotelTier || '');
   const [savingParams, setSavingParams] = useState(false);
   const [paramsSuccessMsg, setParamsSuccessMsg] = useState('');
 
@@ -173,19 +183,21 @@ export function LeadDetailDrawer() {
     const depStr = selectedLead.departureDate
       ? new Date(selectedLead.departureDate).toISOString().split('T')[0]
       : '';
-    const dur = selectedLead.durationDays || 5;
+    const dur = selectedLead.durationDays != null ? String(selectedLead.durationDays) : '';
     const retStr = selectedLead.returnDate
       ? new Date(selectedLead.returnDate).toISOString().split('T')[0]
-      : computeReturnDateFromDep(depStr, dur);
+      : depStr && dur
+      ? computeReturnDateFromDep(depStr, dur)
+      : '';
 
     setEditBudget(selectedLead.targetBudget ? String(Number(selectedLead.targetBudget)) : '');
     setEditDepartureDate(depStr);
     setEditReturnDate(retStr);
     setEditDurationDays(dur);
     setEditDestination(selectedLead.destination || '');
-    setEditAdults(selectedLead.headcountAdults || 2);
-    setEditChildren(selectedLead.headcountChildren || 0);
-    setEditHotelTier(selectedLead.hotelTier || 'luxury_5star');
+    setEditAdults(selectedLead.headcountAdults ? String(selectedLead.headcountAdults) : '');
+    setEditChildren(selectedLead.headcountChildren ? String(selectedLead.headcountChildren) : '');
+    setEditHotelTier(selectedLead.hotelTier || '');
     setParamsSuccessMsg('');
     setSendItineraryMsg('');
     setSendItineraryError('');
@@ -198,6 +210,24 @@ export function LeadDetailDrawer() {
     setCustomerQuotes(Array.isArray(selectedLead?.quotations) ? selectedLead.quotations : []);
     setComparisonMatrix(null);
     setPricingNetCost(0);
+    setMarginValue('');
+    setTaxPercentage('');
+    setFloorGuardrailMin('');
+    setNewQuoteSupplierId('');
+    setNewQuoteCost('');
+    setNewQuoteHotelTier('');
+    setNewQuoteInclusions('');
+    setNewQuoteCancellation('');
+    setManualAirline('');
+    setManualFlightNo('');
+    setManualOrigin('');
+    setManualDest('');
+    setManualPnr('');
+    setManualDepartureDate('');
+    setManualArrivalDate('');
+    setManualBaggage('');
+    setManualTicketCost('');
+    setManualFareRules('');
   }, [selectedLead?.id]);
 
   const handleSaveTripParams = async () => {
@@ -209,11 +239,11 @@ export function LeadDetailDrawer() {
         const payload: Record<string, any> = {
           departureDate: editDepartureDate || null,
           returnDate: editReturnDate || computeReturnDateFromDep(editDepartureDate, editDurationDays) || null,
-          durationDays: editDurationDays,
-          destination: editDestination,
-          headcountAdults: editAdults,
-          headcountChildren: editChildren,
-          hotelTier: editHotelTier,
+          durationDays: editDurationDays !== '' ? Number(editDurationDays) : null,
+          destination: editDestination.trim(),
+          headcountAdults: editAdults !== '' ? Number(editAdults) : null,
+          headcountChildren: editChildren !== '' ? Number(editChildren) : null,
+          hotelTier: editHotelTier || null,
           currency: 'INR',
         };
         if (supplierQuotes.length > 0 && editBudget !== '') {
@@ -324,14 +354,17 @@ export function LeadDetailDrawer() {
   if (!selectedLead) return null;
 
   // Real-time Pricing Calculations (P2-04)
+  const numericMarginValue = marginValue !== '' ? Number(marginValue) : 0;
+  const numericTaxPercentage = taxPercentage !== '' ? Number(taxPercentage) : 0;
+  const numericFloorGuardrail = floorGuardrailMin !== '' ? Number(floorGuardrailMin) : 0;
   const calcMarginAmount = marginType === 'percentage'
-    ? (pricingNetCost * marginValue) / 100
-    : Number(marginValue);
+    ? (pricingNetCost * numericMarginValue) / 100
+    : numericMarginValue;
   const calcSubtotal = pricingNetCost + calcMarginAmount;
-  const calcTaxAmount = (calcSubtotal * taxPercentage) / 100;
+  const calcTaxAmount = (calcSubtotal * numericTaxPercentage) / 100;
   const calcFinalPrice = calcSubtotal + calcTaxAmount;
   const effectiveMarginPercent = pricingNetCost > 0 ? (calcMarginAmount / pricingNetCost) * 100 : 0;
-  const isFloorApproved = effectiveMarginPercent >= floorGuardrailMin;
+  const isFloorApproved = effectiveMarginPercent >= numericFloorGuardrail;
 
   // Handler: Add Inbound Supplier Quotation (P2-01)
   const handleAddSupplierQuote = async (e: React.FormEvent) => {
@@ -357,14 +390,12 @@ export function LeadDetailDrawer() {
           body: JSON.stringify({
             supplierId: newQuoteSupplierId,
             totalNetCost: parsedNetCost,
-            hotelTier: newQuoteHotelTier,
-            cancellationPolicy: newQuoteCancellation,
-            inclusions: newQuoteInclusions.split(',').map((s) => s.trim()),
-            lineItems: [
-              { category: 'accommodation', description: 'Curated Hotel Accommodations', unitCost: parsedNetCost * 0.7, totalCost: parsedNetCost * 0.7 },
-              { category: 'transfer', description: 'Executive Ground Transfers', unitCost: parsedNetCost * 0.15, totalCost: parsedNetCost * 0.15 },
-              { category: 'activity', description: 'Curated VIP Excursions & Guides', unitCost: parsedNetCost * 0.15, totalCost: parsedNetCost * 0.15 },
-            ],
+            hotelTier: newQuoteHotelTier || undefined,
+            cancellationPolicy: newQuoteCancellation.trim() || undefined,
+            inclusions: newQuoteInclusions.trim()
+              ? newQuoteInclusions.split(',').map((s) => s.trim()).filter(Boolean)
+              : [],
+            lineItems: [],
           }),
         });
 
@@ -575,9 +606,9 @@ export function LeadDetailDrawer() {
           body: JSON.stringify({
             supplierNetTotal: pricingNetCost,
             marginType,
-            marginValue,
-            taxPercentage,
-            floorGuardrailMin,
+            marginValue: numericMarginValue,
+            taxPercentage: numericTaxPercentage,
+            floorGuardrailMin: numericFloorGuardrail,
           }),
         });
 
@@ -712,12 +743,8 @@ export function LeadDetailDrawer() {
   // Handler: Save / Attach Manual PNR Flight (P2-05)
   const handleSaveManualFlight = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!manualFlightNo.trim()) {
-      alert('Flight number is required (e.g. EK 202)');
-      return;
-    }
-    if (!manualAirline.trim()) {
-      alert('Airline name is required (e.g. Emirates)');
+    if (!manualFlightNo.trim() || !manualAirline.trim() || !manualOrigin.trim() || !manualDest.trim() || !manualDepartureDate || !manualArrivalDate) {
+      alert('Please fill in Airline, Flight Number, Origin, Destination, Departure Schedule, and Arrival Schedule.');
       return;
     }
     await runDrawerExclusive(`save-manual-flight:${selectedLead.id}`, async () => {
@@ -733,14 +760,14 @@ export function LeadDetailDrawer() {
             pnr: manualPnr.trim().toUpperCase() || undefined,
             airline: manualAirline.trim(),
             flightNumber: manualFlightNo.trim(),
-            origin: (manualOrigin || 'JFK').trim().toUpperCase(),
-            destination: (manualDest || 'DXB').trim().toUpperCase(),
-            departureTime: manualDepartureDate ? new Date(manualDepartureDate).toISOString() : undefined,
-            arrivalTime: manualArrivalDate ? new Date(manualArrivalDate).toISOString() : undefined,
+            origin: manualOrigin.trim().toUpperCase(),
+            destination: manualDest.trim().toUpperCase(),
+            departureTime: new Date(manualDepartureDate).toISOString(),
+            arrivalTime: new Date(manualArrivalDate).toISOString(),
             cabinClass: manualCabin,
-            baggageAllowance: manualBaggage,
+            baggageAllowance: manualBaggage.trim() || undefined,
             ticketCost: manualTicketCost ? Number(manualTicketCost) : null,
-            fareRules: manualFareRules,
+            fareRules: manualFareRules.trim() || undefined,
           }),
         });
 
@@ -910,6 +937,40 @@ export function LeadDetailDrawer() {
         alert(err.message || 'Error updating visa document');
       } finally {
         setTogglingVisaId(null);
+      }
+    });
+  };
+
+  // Handler: Add Custom Visa Requirement Document (P2-20)
+  const handleAddVisaDocument = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newVisaDocName.trim()) return;
+    await runDrawerExclusive(`add-visa:${selectedLead.id}`, async () => {
+      setAddingVisaDoc(true);
+      try {
+        const res = await authFetch(`/api/v1/leads/${selectedLead.id}/visa`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            documentName: newVisaDocName.trim(),
+            description: newVisaDocDesc.trim() || undefined,
+            mandatory: true,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.requirement) {
+            setVisaChecklist((prev) => [...prev, data.requirement]);
+          }
+          setNewVisaDocName('');
+          setNewVisaDocDesc('');
+        }
+      } catch (err: any) {
+        alert(err.message || 'Error adding visa document');
+      } finally {
+        setAddingVisaDoc(false);
       }
     });
   };
@@ -1242,8 +1303,9 @@ export function LeadDetailDrawer() {
                           onChange={(e) => {
                             const nextDep = e.target.value;
                             setEditDepartureDate(nextDep);
-                            if (nextDep) {
-                              setEditReturnDate(computeReturnDateFromDep(nextDep, editDurationDays));
+                            const durNum = Number(editDurationDays);
+                            if (nextDep && durNum >= 1) {
+                              setEditReturnDate(computeReturnDateFromDep(nextDep, durNum));
                             }
                           }}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
@@ -1265,7 +1327,7 @@ export function LeadDetailDrawer() {
                                   (new Date(nextRet).getTime() - new Date(editDepartureDate).getTime()) / 86400000
                                 ) + 1;
                               if (diffDays >= 1 && diffDays <= 60) {
-                                setEditDurationDays(diffDays);
+                                setEditDurationDays(String(diffDays));
                               }
                             }
                           }}
@@ -1285,10 +1347,12 @@ export function LeadDetailDrawer() {
                           min={1}
                           max={60}
                           value={editDurationDays}
+                          placeholder="—"
                           onChange={(e) => {
-                            const nextDur = Math.max(1, parseInt(e.target.value || '1', 10));
-                            setEditDurationDays(nextDur);
-                            if (editDepartureDate) {
+                            const val = e.target.value;
+                            setEditDurationDays(val);
+                            const nextDur = parseInt(val, 10);
+                            if (editDepartureDate && !isNaN(nextDur) && nextDur >= 1) {
                               setEditReturnDate(computeReturnDateFromDep(editDepartureDate, nextDur));
                             }
                           }}
@@ -1320,7 +1384,8 @@ export function LeadDetailDrawer() {
                           min={1}
                           max={20}
                           value={editAdults}
-                          onChange={(e) => setEditAdults(parseInt(e.target.value || '1', 10))}
+                          placeholder="—"
+                          onChange={(e) => setEditAdults(e.target.value)}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 font-mono"
                         />
                       </div>
@@ -1333,7 +1398,8 @@ export function LeadDetailDrawer() {
                           min={0}
                           max={20}
                           value={editChildren}
-                          onChange={(e) => setEditChildren(parseInt(e.target.value || '0', 10))}
+                          placeholder="—"
+                          onChange={(e) => setEditChildren(e.target.value)}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 font-mono"
                         />
                       </div>
@@ -1349,6 +1415,7 @@ export function LeadDetailDrawer() {
                         onChange={(e) => setEditHotelTier(e.target.value)}
                         className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
                       >
+                        <option value="">-- Select Hotel Tier --</option>
                         <option value="standard_3star">4-star hotel in a central location</option>
                         <option value="luxury_5star">5-star Luxury Hotel</option>
                         <option value="boutique_4star">4-star Boutique Hotel</option>
@@ -1733,6 +1800,7 @@ export function LeadDetailDrawer() {
                         onChange={(e) => setNewQuoteHotelTier(e.target.value)}
                         className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-white"
                       >
+                        <option value="">-- Select Hotel Category --</option>
                         <option value="luxury_5star">5-Star Luxury Resort</option>
                         <option value="boutique_4star">4-Star Boutique</option>
                         <option value="chalet_villa">Private Luxury Villa</option>
@@ -1745,6 +1813,7 @@ export function LeadDetailDrawer() {
                       type="text"
                       value={newQuoteInclusions}
                       onChange={(e) => setNewQuoteInclusions(e.target.value)}
+                      placeholder="e.g. Daily Breakfast, Return Airport Transfers"
                       className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-white"
                     />
                   </div>
@@ -1937,7 +2006,8 @@ export function LeadDetailDrawer() {
                         type="number"
                         step="0.5"
                         value={marginValue}
-                        onChange={(e) => setMarginValue(Number(e.target.value))}
+                        placeholder="0"
+                        onChange={(e) => setMarginValue(e.target.value)}
                         className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-white font-mono"
                       />
                     </div>
@@ -1951,7 +2021,8 @@ export function LeadDetailDrawer() {
                         type="number"
                         step="0.5"
                         value={taxPercentage}
-                        onChange={(e) => setTaxPercentage(Number(e.target.value))}
+                        placeholder="0"
+                        onChange={(e) => setTaxPercentage(e.target.value)}
                         className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-white font-mono"
                       />
                     </div>
@@ -1961,7 +2032,8 @@ export function LeadDetailDrawer() {
                         type="number"
                         step="1"
                         value={floorGuardrailMin}
-                        onChange={(e) => setFloorGuardrailMin(Number(e.target.value))}
+                        placeholder="0"
+                        onChange={(e) => setFloorGuardrailMin(e.target.value)}
                         className="w-full bg-zinc-900 border border-zinc-800 rounded-lg p-2 text-xs text-white font-mono"
                       />
                     </div>
@@ -1992,7 +2064,7 @@ export function LeadDetailDrawer() {
                         </span>
                       ) : (
                         <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30 flex items-center gap-1">
-                          <AlertTriangle className="w-2.5 h-2.5" /> Margin Below Floor ({effectiveMarginPercent.toFixed(1)}% &lt; {floorGuardrailMin}%)
+                          <AlertTriangle className="w-2.5 h-2.5" /> Margin Below Floor ({effectiveMarginPercent.toFixed(1)}% &lt; {numericFloorGuardrail}%)
                         </span>
                       )}
                     </div>
@@ -2011,7 +2083,7 @@ export function LeadDetailDrawer() {
                         <span>₹{calcSubtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                       <div className="flex items-center justify-between py-1 text-zinc-400">
-                        <span>Taxes & Compliance ({taxPercentage}%):</span>
+                        <span>Taxes & Compliance ({numericTaxPercentage}%):</span>
                         <span>+₹{calcTaxAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
                       </div>
                     </div>
@@ -2188,30 +2260,6 @@ export function LeadDetailDrawer() {
                           </>
                         )}
                       </button>
-                    </div>
-
-                    {/* Quick PNR Presets */}
-                    <div className="flex items-center gap-1.5 flex-wrap pt-1 text-[10px]">
-                      <span className="text-zinc-500 font-mono">Quick PNRs:</span>
-                      {[
-                        { code: 'EMR882', label: 'Emirates (EK 202)' },
-                        { code: 'QR702', label: 'Qatar (QR 702)' },
-                        { code: 'BA178', label: 'British Airways (BA 178)' },
-                        { code: 'SQ25', label: 'Singapore Air (SQ 25)' },
-                        { code: 'AI102', label: 'Air India (AI 102)' },
-                      ].map((item) => (
-                        <button
-                          key={item.code}
-                          type="button"
-                          onClick={() => {
-                            setManualPnr(item.code);
-                            handleLookupPnr(item.code);
-                          }}
-                          className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono border border-zinc-700/60 transition cursor-pointer"
-                        >
-                          {item.code} • {item.label}
-                        </button>
-                      ))}
                     </div>
                   </div>
 
@@ -2681,31 +2729,64 @@ export function LeadDetailDrawer() {
                   <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
                   Visa Document Checklist & Verification (P2-20)
                 </span>
-                <div className="space-y-2">
-                  {visaChecklist.map((doc) => (
-                    <div key={doc.id} className="p-2.5 bg-zinc-900 rounded-lg border border-zinc-800 flex items-center justify-between text-xs">
-                      <div>
-                        <div className="font-semibold text-white">{doc.documentName}</div>
-                        <div className="text-[10px] text-zinc-400">{doc.description}</div>
+
+                <form onSubmit={handleAddVisaDocument} className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                  <input
+                    type="text"
+                    value={newVisaDocName}
+                    onChange={(e) => setNewVisaDocName(e.target.value)}
+                    placeholder="Document name (e.g. Original Passport)"
+                    required
+                    className="sm:col-span-5 bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                  <input
+                    type="text"
+                    value={newVisaDocDesc}
+                    onChange={(e) => setNewVisaDocDesc(e.target.value)}
+                    placeholder="Requirement notes (optional)"
+                    className="sm:col-span-5 bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  />
+                  <button
+                    type="submit"
+                    disabled={addingVisaDoc || !newVisaDocName.trim()}
+                    className="sm:col-span-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg px-2.5 py-1.5 text-xs font-semibold flex items-center justify-center gap-1 transition disabled:opacity-50 cursor-pointer"
+                  >
+                    {addingVisaDoc ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                    <span>Add</span>
+                  </button>
+                </form>
+
+                {visaChecklist.length === 0 ? (
+                  <div className="py-4 text-center text-xs text-zinc-500">
+                    No visa checklist items added yet. Enter required documents above.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {visaChecklist.map((doc) => (
+                      <div key={doc.id} className="p-2.5 bg-zinc-900 rounded-lg border border-zinc-800 flex items-center justify-between text-xs">
+                        <div>
+                          <div className="font-semibold text-white">{doc.documentName}</div>
+                          {doc.description && <div className="text-[10px] text-zinc-400">{doc.description}</div>}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleVisaStatus(doc.id, doc.status)}
+                          disabled={togglingVisaId === doc.id}
+                          className={`text-[10px] font-mono px-2.5 py-1 rounded transition uppercase inline-flex items-center gap-1 disabled:opacity-50 ${
+                            doc.status === 'verified'
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                              : doc.status === 'submitted'
+                              ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                              : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                          }`}
+                        >
+                          {togglingVisaId === doc.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                          <span>{doc.status} (Click to toggle)</span>
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleToggleVisaStatus(doc.id, doc.status)}
-                        disabled={togglingVisaId === doc.id}
-                        className={`text-[10px] font-mono px-2.5 py-1 rounded transition uppercase inline-flex items-center gap-1 disabled:opacity-50 ${
-                          doc.status === 'verified'
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                            : doc.status === 'submitted'
-                            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
-                            : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
-                        }`}
-                      >
-                        {togglingVisaId === doc.id && <Loader2 className="w-3 h-3 animate-spin" />}
-                        <span>{doc.status} (Click to toggle)</span>
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* 4. Pre/Post-Trip Cadences & Loyalty (P2-21, P2-22, P2-23) */}
