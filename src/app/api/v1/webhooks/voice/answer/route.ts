@@ -320,6 +320,9 @@ export async function handleAnswer(req: NextRequest) {
       });
     } else if (isSipEndpointCall) {
       if (effectiveOrgId) {
+        const actorUserId = params['X-PH-actorUserId'] || params['x-ph-actoruserid'] || undefined;
+        const actorName = params['X-PH-actorName'] || params['x-ph-actorname'] || undefined;
+        const actorEmail = params['X-PH-actorEmail'] || params['x-ph-actoremail'] || undefined;
         const newCall = await db.call.create({
           data: {
             organizationId: effectiveOrgId,
@@ -333,6 +336,10 @@ export async function handleAnswer(req: NextRequest) {
             transcriptionEnabled: true,
             transcriptionLanguage: 'en-US',
             answeredAt: new Date(),
+            requestedMode: 'browser',
+            requestedParams: actorUserId || actorName || actorEmail
+              ? { actorUserId, actorName, actorEmail }
+              : undefined,
           },
         });
 

@@ -995,7 +995,11 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         const cleanDestination = callDestination.trim().replace(/[^\d+]/g, '');
         const callerId = endpointConfig.callerId || '+918065531234';
         console.log('[WebPhone] Placing outgoing call to:', cleanDestination, 'from callerId:', callerId);
-        plivoClientRef.current.call(cleanDestination, { 'X-PH-callerId': callerId });
+        const sipHeaders: Record<string, string> = { 'X-PH-callerId': callerId };
+        if (currentUser?.id) sipHeaders['X-PH-actorUserId'] = String(currentUser.id);
+        if (currentUser?.email) sipHeaders['X-PH-actorEmail'] = String(currentUser.email);
+        if (currentUser?.name) sipHeaders['X-PH-actorName'] = String(currentUser.name);
+        plivoClientRef.current.call(cleanDestination, sipHeaders);
         setTimeout(() => setWebPhoneStatus((c) => (c === 'calling' ? 'ringing' : c)), 2600);
       } else {
         throw new Error('Plivo Web Phone client is not registered with carrier. Please refresh or verify Plivo credentials.');
