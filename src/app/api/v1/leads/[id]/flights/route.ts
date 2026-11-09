@@ -117,24 +117,50 @@ export async function POST(
 
     const finalPnr = (pnr && pnr.trim()) ? pnr.trim().toUpperCase() : `PNR${Date.now().toString().slice(-6)}`;
 
-    const createdFlight = await db.tripFlight.create({
-      data: {
+    // Deduplicate: If the exact same flight (airline + flightNumber + origin + destination) is already attached to this lead, update/return it instead of creating a duplicate
+    const existingFlight = await db.tripFlight.findFirst({
+      where: {
         organizationId: auth!.organizationId,
         leadId,
         airline,
-        airlineCode: finalAirlineCode,
         flightNumber,
         origin: finalOrigin,
         destination: finalDest,
-        departureTime: baseDepDate,
-        arrivalTime: baseArrDate,
-        cabinClass: cabinClass || 'economy',
-        baggageAllowance: baggageAllowance || '1x 23kg check-in + 7kg cabin',
-        pnr: finalPnr,
-        fareRules: fareRules || 'Standard fare rules apply. E-ticket issued under PNR ' + finalPnr,
-        ticketCost: ticketCost !== undefined && ticketCost !== null && ticketCost !== '' ? Number(ticketCost) : null,
       },
     });
+
+    const createdFlight = existingFlight
+      ? await db.tripFlight.update({
+          where: { id: existingFlight.id },
+          data: {
+            departureTime: baseDepDate,
+            arrivalTime: baseArrDate,
+            cabinClass: cabinClass || existingFlight.cabinClass,
+            baggageAllowance: baggageAllowance || existingFlight.baggageAllowance,
+            ...(pnr && pnr.trim() ? { pnr: finalPnr } : {}),
+            ...(ticketCost !== undefined && ticketCost !== null && ticketCost !== ''
+              ? { ticketCost: Number(ticketCost) }
+              : {}),
+          },
+        })
+      : await db.tripFlight.create({
+          data: {
+            organizationId: auth!.organizationId,
+            leadId,
+            airline,
+            airlineCode: finalAirlineCode,
+            flightNumber,
+            origin: finalOrigin,
+            destination: finalDest,
+            departureTime: baseDepDate,
+            arrivalTime: baseArrDate,
+            cabinClass: cabinClass || 'economy',
+            baggageAllowance: baggageAllowance || '1x 23kg check-in + 7kg cabin',
+            pnr: finalPnr,
+            fareRules: fareRules || 'Standard fare rules apply. E-ticket issued under PNR ' + finalPnr,
+            ticketCost: ticketCost !== undefined && ticketCost !== null && ticketCost !== '' ? Number(ticketCost) : null,
+          },
+        });
 
     await logAuditEvent({
       organizationId: auth!.organizationId,

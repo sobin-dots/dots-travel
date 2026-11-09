@@ -97,6 +97,33 @@ export async function POST(
       return NextResponse.json({ api_id: 'not_found', error: 'Supplier not found' }, { status: 404 });
     }
 
+    // Deduplicate rapid double-clicks (same supplier + net cost within 15 seconds)
+    const recentDuplicate = await db.supplierQuotation.findFirst({
+      where: {
+        organizationId: auth!.organizationId,
+        leadId,
+        supplierId,
+        totalNetCost: Number(totalNetCost),
+        createdAt: { gte: new Date(Date.now() - 15_000) },
+      },
+      include: {
+        supplier: true,
+        lineItems: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (recentDuplicate) {
+      return NextResponse.json(
+        {
+          api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
+          quote: recentDuplicate,
+          message: 'Supplier quotation already recorded',
+        },
+        { status: 201 }
+      );
+    }
+
     const createdQuote = await db.supplierQuotation.create({
       data: {
         organizationId: auth!.organizationId,

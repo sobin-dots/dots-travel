@@ -6,6 +6,8 @@ import { generateItineraryFromTranscript } from '@/lib/deepseek';
 
 export const runtime = 'nodejs';
 
+const inFlightLeadGenerationByKey = new Map<string, Promise<any>>();
+
 export async function POST(req: NextRequest) {
   const { auth, errorResponse } = await authenticateRequest(req, 'operator');
   if (errorResponse) return errorResponse;
@@ -30,6 +32,20 @@ export async function POST(req: NextRequest) {
 
     if (!callId) {
       return NextResponse.json({ api_id: 'val_err', error: 'Missing required field: callId' }, { status: 400 });
+    }
+
+    const dedupeKey = `${auth!.organizationId}:${callId}`;
+    const existingInFlight = inFlightLeadGenerationByKey.get(dedupeKey);
+    if (existingInFlight) {
+      const lead = await existingInFlight;
+      return NextResponse.json(
+        {
+          api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
+          lead,
+          message: 'Itinerary generated successfully from call transcription',
+        },
+        { status: 201 }
+      );
     }
 
     const call = await db.call.findFirst({
@@ -86,69 +102,67 @@ export async function POST(req: NextRequest) {
       customerPhone: targetPhone,
     };
 
-    // Generate Itinerary with DeepSeek adhering to confirmed parameters
-    const result = await generateItineraryFromTranscript(
-      transcriptText,
-      {
-        name: customName || contact?.name || 'Valued Client',
-        phone: targetPhone,
-        email: customEmail || contact?.email || undefined,
-        company: contact?.company || undefined,
-      },
-      auth!.organizationId,
-      customParams
-    );
+    const generateAndPersistLead = async () => {
+      // Generate Itinerary with DeepSeek adhering to confirmed parameters
+      const result = await generateItineraryFromTranscript(
+        transcriptText,
+        {
+          name: customName || contact?.name || 'Valued Client',
+          phone: targetPhone,
+          email: customEmail || contact?.email || undefined,
+          company: contact?.company || undefined,
+        },
+        auth!.organizationId,
+        customParams
+      );
 
-    // Create Lead record with rich structured trip parameters connected from extraction & synthesis
-    const resolvedDurationDays = durationDays ? Number(durationDays) : (result.durationDays || 5);
-    const effectiveDepStr = departureDate || result.departureDate || null;
-    const parsedDeparture = effectiveDepStr ? new Date(effectiveDepStr) : null;
-    let parsedReturn = returnDate ? new Date(returnDate) : null;
-    if (!parsedReturn && parsedDeparture && !isNaN(parsedDeparture.getTime())) {
-      parsedReturn = new Date(parsedDeparture);
-      parsedReturn.setUTCDate(parsedReturn.getUTCDate() + Math.max(0, resolvedDurationDays - 1));
-    }
-
-    // Ensure contact is linked or updated if customerName/customerEmail was provided
-    let contactToLink = contact;
-    const resolvedCustomerName =
-      customName && customName !== 'Valued Client'
-        ? customName
-        : contact?.name || result.customerName || null;
-    const resolvedCustomerEmail = customEmail || contact?.email || result.customerEmail || null;
-
-    if (!contactToLink && targetPhone) {
-      try {
-        contactToLink = await db.contact.create({
-          data: {
-            organizationId: auth!.organizationId,
-            name: resolvedCustomerName || 'Customer',
-            phone: targetPhone,
-            email: resolvedCustomerEmail || null,
-          },
-        });
-      } catch {
-        // Ignore if concurrent creation or phone format conflict
+      // Create or update Lead record with rich structured trip parameters connected from extraction & synthesis
+      const resolvedDurationDays = durationDays ? Number(durationDays) : (result.durationDays || 5);
+      const effectiveDepStr = departureDate || result.departureDate || null;
+      const parsedDeparture = effectiveDepStr ? new Date(effectiveDepStr) : null;
+      let parsedReturn = returnDate ? new Date(returnDate) : null;
+      if (!parsedReturn && parsedDeparture && !isNaN(parsedDeparture.getTime())) {
+        parsedReturn = new Date(parsedDeparture);
+        parsedReturn.setUTCDate(parsedReturn.getUTCDate() + Math.max(0, resolvedDurationDays - 1));
       }
-    } else if (contactToLink && (customName || customEmail)) {
-      try {
-        contactToLink = await db.contact.update({
-          where: { id: contactToLink.id },
-          data: {
-            ...(customName && customName !== 'Valued Client' ? { name: customName } : {}),
-            ...(customEmail ? { email: customEmail } : {}),
-          },
-        });
-      } catch {
-        // Ignore non-critical contact update error
-      }
-    }
 
-    const lead = await db.lead.create({
-      data: {
-        organizationId: auth!.organizationId,
+      // Ensure contact is linked or updated if customerName/customerEmail was provided
+      let contactToLink = contact;
+      const resolvedCustomerName =
+        customName && customName !== 'Valued Client'
+          ? customName
+          : contact?.name || result.customerName || null;
+      const resolvedCustomerEmail = customEmail || contact?.email || result.customerEmail || null;
+
+      if (!contactToLink && targetPhone) {
+        try {
+          contactToLink = await db.contact.create({
+            data: {
+              organizationId: auth!.organizationId,
+              name: resolvedCustomerName || 'Customer',
+              phone: targetPhone,
+              email: resolvedCustomerEmail || null,
+            },
+          });
+        } catch {
+          // Ignore if concurrent creation or phone format conflict
+        }
+      } else if (contactToLink && (customName || customEmail)) {
+        try {
+          contactToLink = await db.contact.update({
+            where: { id: contactToLink.id },
+            data: {
+              ...(customName && customName !== 'Valued Client' ? { name: customName } : {}),
+              ...(customEmail ? { email: customEmail } : {}),
+            },
+          });
+        } catch {
+          // Ignore non-critical contact update error
+        }
+      }
+
+      const leadDataPayload = {
         contactId: contactToLink?.id || null,
-        callId: call.id,
         title: result.title,
         destination: result.destination || customDestination || 'Curated Destination',
         departureDate: parsedDeparture,
@@ -160,8 +174,6 @@ export async function POST(req: NextRequest) {
         targetBudget: targetBudget ? Number(targetBudget) : null,
         hotelTier: hotelTier || result.hotelTier || 'luxury_5star',
         specialRequests: specialRequests || result.specialRequests || null,
-        status: 'pending_approval',
-        stage: 'new_inquiry',
         itinerary: result.itinerary,
         customerEmail: resolvedCustomerEmail,
         metadata: {
@@ -169,16 +181,17 @@ export async function POST(req: NextRequest) {
           customerPhone: targetPhone || undefined,
           currency: 'INR',
         },
-      },
-      include: {
+      };
+
+      const leadInclude = {
         contact: true,
         supplier: true,
         quotations: {
-          orderBy: { version: 'desc' },
+          orderBy: { version: 'desc' as const },
         },
         supplierQuotations: {
           include: { supplier: true },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { createdAt: 'desc' as const },
         },
         call: {
           include: {
@@ -186,17 +199,51 @@ export async function POST(req: NextRequest) {
             transcriptions: true,
           },
         },
-      },
-    });
+      };
 
-    await logAuditEvent({
-      organizationId: auth!.organizationId,
-      actorUserId: auth!.userId,
-      action: 'lead.generate_itinerary',
-      targetType: 'Lead',
-      targetId: lead.id,
-      metadata: { callId: call.id, title: result.title, destination: result.destination },
+      // Deduplicate: If a lead already exists for this call in this organization, update it instead of creating a duplicate
+      const existingLeadForCall = await db.lead.findFirst({
+        where: {
+          organizationId: auth!.organizationId,
+          callId: call.id,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const savedLead = existingLeadForCall
+        ? await db.lead.update({
+            where: { id: existingLeadForCall.id },
+            data: leadDataPayload,
+            include: leadInclude,
+          })
+        : await db.lead.create({
+            data: {
+              organizationId: auth!.organizationId,
+              callId: call.id,
+              status: 'pending_approval',
+              stage: 'new_inquiry',
+              ...leadDataPayload,
+            },
+            include: leadInclude,
+          });
+
+      await logAuditEvent({
+        organizationId: auth!.organizationId,
+        actorUserId: auth!.userId,
+        action: 'lead.generate_itinerary',
+        targetType: 'Lead',
+        targetId: savedLead.id,
+        metadata: { callId: call.id, title: result.title, destination: result.destination },
+      });
+
+      return savedLead;
+    };
+
+    const genPromise = generateAndPersistLead().finally(() => {
+      inFlightLeadGenerationByKey.delete(dedupeKey);
     });
+    inFlightLeadGenerationByKey.set(dedupeKey, genPromise);
+    const lead = await genPromise;
 
     return NextResponse.json(
       {

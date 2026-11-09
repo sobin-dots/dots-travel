@@ -19,6 +19,7 @@ import {
   CheckCircle2,
   Clock,
   ShieldAlert,
+  Loader2,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
@@ -103,12 +104,14 @@ function getLeadCustomerPhone(lead: any): string {
 export default function LeadsPage() {
   const {
     leadsList,
+    setLeadsList,
     handleUpdateLeadStatus,
     setCallDestination,
     setCallMode,
     setShowCallModal,
     handleSelectLead,
-    bearerToken,
+    selectingLeadId,
+    authFetch,
     fetchData,
   } = useConsole();
 
@@ -129,28 +132,33 @@ export default function LeadsPage() {
       return sum + (val ?? 0);
     }, 0);
 
-  // Stage transition helper
+  // Stage transition helper with optimistic update & in-flight lock
   const handleMoveStage = async (leadId: string, currentStage: string, direction: 'next' | 'prev') => {
+    if (updatingStageId === leadId) return;
     const currentIdx = PIPELINE_STAGES.findIndex((s) => s.id === currentStage);
     const targetIdx = direction === 'next' ? currentIdx + 1 : currentIdx - 1;
     if (targetIdx < 0 || targetIdx >= PIPELINE_STAGES.length) return;
 
     const targetStage = PIPELINE_STAGES[targetIdx].id;
     setUpdatingStageId(leadId);
+    // Optimistically move card immediately
+    setLeadsList((prev) =>
+      prev.map((l) => (l.id === leadId ? { ...l, stage: targetStage } : l))
+    );
     try {
-      const res = await fetch(`/api/v1/leads/${leadId}/stage`, {
+      const res = await authFetch(`/api/v1/leads/${leadId}/stage`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
         },
         body: JSON.stringify({ stage: targetStage }),
       });
-      if (res.ok) {
+      if (!res.ok) {
         await fetchData();
       }
     } catch (err) {
       console.warn('Error updating stage:', err);
+      await fetchData();
     } finally {
       setUpdatingStageId(null);
     }
@@ -312,13 +320,20 @@ export default function LeadsPage() {
                           <div className="flex items-center justify-between pt-1 text-[10px]">
                             <button
                               type="button"
+                              disabled={selectingLeadId === lead.id}
                               onClick={() => handleSelectLead(lead.id)}
-                              className="text-xs bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 hover:text-white px-2 py-1 rounded transition flex items-center gap-1 font-medium"
+                              className="text-xs bg-indigo-600/30 hover:bg-indigo-600 disabled:opacity-60 text-indigo-200 hover:text-white px-2 py-1 rounded transition flex items-center gap-1 font-medium"
                             >
-                              <Edit3 className="w-2.5 h-2.5" /> Review
+                              {selectingLeadId === lead.id ? (
+                                <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                              ) : (
+                                <Edit3 className="w-2.5 h-2.5" />
+                              )}
+                              <span>{selectingLeadId === lead.id ? 'Opening...' : 'Review'}</span>
                             </button>
 
                             <div className="flex items-center gap-1">
+                              {isUpdating && <Loader2 className="w-3 h-3 animate-spin text-indigo-400 mr-0.5" />}
                               {colIdx > 0 && (
                                 <button
                                   type="button"
@@ -463,11 +478,16 @@ export default function LeadsPage() {
                           )}
                           <button
                             type="button"
+                            disabled={selectingLeadId === lead.id}
                             onClick={() => handleSelectLead(lead.id)}
-                            className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded font-medium shadow-sm transition inline-flex items-center gap-1.5"
+                            className="text-xs bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white px-3 py-1.5 rounded font-medium shadow-sm transition inline-flex items-center gap-1.5"
                           >
-                            <Edit3 className="w-3 h-3" />
-                            <span>Review & CPQ</span>
+                            {selectingLeadId === lead.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Edit3 className="w-3 h-3" />
+                            )}
+                            <span>{selectingLeadId === lead.id ? 'Opening...' : 'Review & CPQ'}</span>
                           </button>
                         </td>
                       </tr>

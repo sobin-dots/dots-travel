@@ -50,6 +50,7 @@ export default function SettingsPage() {
   const {
     currentOrg,
     bearerToken,
+    authFetch,
     settings,
     fetchData,
     integrationsSummary,
@@ -298,6 +299,7 @@ Fallback Answer URL (POST): ${plivoFallbackAnswerUrl}`;
   // Save Organization Details & Letterhead
   const handleSaveOrganization = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (savingOrg) return;
     if (!orgName.trim()) {
       setOrgError('Organization name is required');
       return;
@@ -308,11 +310,10 @@ Fallback Answer URL (POST): ${plivoFallbackAnswerUrl}`;
     setOrgError(null);
 
     try {
-      const res = await fetch('/api/v1/settings', {
+      const res = await authFetch('/api/v1/settings', {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
         },
         body: JSON.stringify({
           organizationName: orgName.trim(),
@@ -343,14 +344,14 @@ Fallback Answer URL (POST): ${plivoFallbackAnswerUrl}`;
 
   // Primary provider switch
   const handlePrimaryProviderChange = async (provider: 'plivo' | 'msg91') => {
+    if (switchingProvider) return;
     setPrimaryProvider(provider);
     setSwitchingProvider(true);
     try {
-      const res = await fetch('/api/v1/settings/primary-provider', {
+      const res = await authFetch('/api/v1/settings/primary-provider', {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
         },
         body: JSON.stringify({ primaryProvider: provider }),
       });
@@ -368,6 +369,7 @@ Fallback Answer URL (POST): ${plivoFallbackAnswerUrl}`;
   // Save Plivo
   const handleSavePlivo = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (savingPlivo) return;
 
     // Guard against browser password managers autofilling the user login email
     if (plivoAuthId && plivoAuthId.includes('@')) {
@@ -382,11 +384,10 @@ Fallback Answer URL (POST): ${plivoFallbackAnswerUrl}`;
     setPlivoResult(null);
 
     try {
-      const res = await fetch('/api/v1/settings/integrations', {
+      const res = await authFetch('/api/v1/settings/integrations', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
         },
         body: JSON.stringify({
           provider: 'plivo',
@@ -424,15 +425,15 @@ Fallback Answer URL (POST): ${plivoFallbackAnswerUrl}`;
   // Save MSG91
   const handleSaveMsg91 = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (savingMsg91) return;
     setSavingMsg91(true);
     setMsg91Result(null);
 
     try {
-      const res = await fetch('/api/v1/settings/integrations', {
+      const res = await authFetch('/api/v1/settings/integrations', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
         },
         body: JSON.stringify({
           provider: 'msg91',
@@ -469,15 +470,15 @@ Fallback Answer URL (POST): ${plivoFallbackAnswerUrl}`;
   // Save OpenAI
   const handleSaveOpenAi = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (savingOpenAi) return;
     setSavingOpenAi(true);
     setOpenAiResult(null);
 
     try {
-      const res = await fetch('/api/v1/settings/integrations', {
+      const res = await authFetch('/api/v1/settings/integrations', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
         },
         body: JSON.stringify({
           provider: 'openai',
@@ -517,15 +518,15 @@ Fallback Answer URL (POST): ${plivoFallbackAnswerUrl}`;
   // Save DeepSeek
   const handleSaveDeepseek = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (savingDeepseek) return;
     setSavingDeepseek(true);
     setDeepseekResult(null);
 
     try {
-      const res = await fetch('/api/v1/settings/integrations', {
+      const res = await authFetch('/api/v1/settings/integrations', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
         },
         body: JSON.stringify({
           provider: 'deepseek',
@@ -565,15 +566,15 @@ Fallback Answer URL (POST): ${plivoFallbackAnswerUrl}`;
   // Save Policies
   const handleSavePolicies = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (savingPolicies) return;
     setSavingPolicies(true);
     setPoliciesSaved(false);
 
     try {
-      const res = await fetch('/api/v1/settings', {
+      const res = await authFetch('/api/v1/settings', {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
         },
         body: JSON.stringify({
           transcriptionDefaultEnabled,

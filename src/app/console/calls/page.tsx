@@ -1,19 +1,25 @@
 'use client';
 
-import React from 'react';
-import { Phone, PhoneIncoming, Radio, Sparkles } from 'lucide-react';
+import React, { useState } from 'react';
+import { Loader2, Phone, PhoneIncoming, Radio, Sparkles } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
 export default function CallsPage() {
   const {
     calls,
     setShowCallModal,
-    bearerToken,
+    authFetch,
     setSelectedCallDetail,
+    refreshCallDetail,
     handleHangupLiveCall,
+    hangingUpCallId,
     integrationsSummary,
     openItineraryIntakeModal,
+    setIntakeCallTarget,
   } = useConsole();
+
+  const [openingDetailId, setOpeningDetailId] = useState<string | null>(null);
+  const [openingItineraryId, setOpeningItineraryId] = useState<string | null>(null);
 
   const openaiInteg = integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai');
   const configuredTranscriptionModel = openaiInteg?.metadata?.model || 'gpt-4o-transcribe';
@@ -100,39 +106,58 @@ export default function CallsPage() {
                     <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
                       <button
                         type="button"
+                        disabled={openingDetailId === call.id}
                         onClick={async () => {
-                          const res = await fetch(`/api/v1/calls/${call.id}`, {
-                            headers: { Authorization: `Bearer ${bearerToken}` },
-                          });
-                          const data = await res.json();
-                          setSelectedCallDetail(data.call);
+                          setOpeningDetailId(call.id);
+                          // Open drawer immediately (0ms) with row data, then sync full details in background
+                          setSelectedCallDetail(call);
+                          try {
+                            await refreshCallDetail(call.id);
+                          } finally {
+                            setOpeningDetailId(null);
+                          }
                         }}
-                        className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-2.5 py-1 rounded border border-zinc-700 cursor-pointer"
+                        className="text-xs bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 text-zinc-200 px-2.5 py-1 rounded border border-zinc-700 inline-flex items-center gap-1 cursor-pointer transition"
                       >
-                        Detail
+                        {openingDetailId === call.id && <Loader2 className="w-3 h-3 animate-spin text-zinc-300" />}
+                        <span>Detail</span>
                       </button>
                       <button
                         type="button"
+                        disabled={openingItineraryId === call.id}
                         onClick={async () => {
-                          const res = await fetch(`/api/v1/calls/${call.id}`, {
-                            headers: { Authorization: `Bearer ${bearerToken}` },
-                          });
-                          const data = await res.json();
-                          openItineraryIntakeModal(data.call || call);
+                          setOpeningItineraryId(call.id);
+                          // Open Itinerary Intake Modal immediately (0ms), then enrich in background
+                          openItineraryIntakeModal(call);
+                          try {
+                            const res = await authFetch(`/api/v1/calls/${call.id}?fast=true`);
+                            if (res.ok) {
+                              const data = await res.json();
+                              if (data.call) setIntakeCallTarget(data.call);
+                            }
+                          } catch {} finally {
+                            setOpeningItineraryId(null);
+                          }
                         }}
-                        className="text-xs bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 px-2.5 py-1 rounded border border-indigo-500/30 inline-flex items-center gap-1 cursor-pointer transition"
+                        className="text-xs bg-indigo-600/20 hover:bg-indigo-600/30 disabled:opacity-60 text-indigo-300 px-2.5 py-1 rounded border border-indigo-500/30 inline-flex items-center gap-1 cursor-pointer transition"
                         title="Open Itinerary Builder with prefilled transcription parameters"
                       >
-                        <Sparkles className="w-3 h-3 text-indigo-400" />
+                        {openingItineraryId === call.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />
+                        ) : (
+                          <Sparkles className="w-3 h-3 text-indigo-400" />
+                        )}
                         <span>Itinerary</span>
                       </button>
                       {call.status === 'in-progress' && (
                         <button
                           type="button"
+                          disabled={hangingUpCallId === call.id}
                           onClick={() => handleHangupLiveCall(call.id)}
-                          className="text-xs bg-rose-600/20 hover:bg-rose-600/30 text-rose-400 px-2.5 py-1 rounded border border-rose-500/30 cursor-pointer"
+                          className="text-xs bg-rose-600/20 hover:bg-rose-600/30 disabled:opacity-60 text-rose-400 px-2.5 py-1 rounded border border-rose-500/30 inline-flex items-center gap-1 cursor-pointer transition"
                         >
-                          Hang Up
+                          {hangingUpCallId === call.id && <Loader2 className="w-3 h-3 animate-spin" />}
+                          <span>{hangingUpCallId === call.id ? 'Ending...' : 'Hang Up'}</span>
                         </button>
                       )}
                     </td>

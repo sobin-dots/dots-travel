@@ -6,6 +6,7 @@ import {
   Mic,
   FileText,
   Sparkles,
+  Loader2,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
@@ -16,7 +17,9 @@ export function CallDetailDrawer() {
     callDetailSyncing,
     refreshCallDetail,
     handleSendDtmf,
+    sendingDtmfDigits,
     handleHangupLiveCall,
+    hangingUpCallId,
     handleTriggerTranscription,
     handleTriggerCallTranscription,
     transcribingRecId,
@@ -129,34 +132,27 @@ export function CallDetailDrawer() {
               Live Call Controls
             </div>
             <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => handleSendDtmf(selectedCallDetail.id, '1')}
-                className="p-2 bg-zinc-800 hover:bg-zinc-700 rounded text-center font-mono font-bold"
-              >
-                1
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSendDtmf(selectedCallDetail.id, '2')}
-                className="p-2 bg-zinc-800 hover:bg-zinc-700 rounded text-center font-mono font-bold"
-              >
-                2
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSendDtmf(selectedCallDetail.id, '#')}
-                className="p-2 bg-zinc-800 hover:bg-zinc-700 rounded text-center font-mono font-bold"
-              >
-                #
-              </button>
+              {(['1', '2', '#'] as const).map((digit) => (
+                <button
+                  key={digit}
+                  type="button"
+                  disabled={Boolean(sendingDtmfDigits)}
+                  onClick={() => handleSendDtmf(selectedCallDetail.id, digit)}
+                  className="p-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 rounded text-center font-mono font-bold flex items-center justify-center gap-1"
+                >
+                  {sendingDtmfDigits === digit && <Loader2 className="w-3 h-3 animate-spin" />}
+                  <span>{digit}</span>
+                </button>
+              ))}
             </div>
             <button
               type="button"
+              disabled={hangingUpCallId === selectedCallDetail.id}
               onClick={() => handleHangupLiveCall(selectedCallDetail.id)}
-              className="w-full py-2 bg-rose-600 hover:bg-rose-500 text-white rounded font-bold"
+              className="w-full py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded font-bold flex items-center justify-center gap-1.5"
             >
-              Terminate Call
+              {hangingUpCallId === selectedCallDetail.id && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>{hangingUpCallId === selectedCallDetail.id ? 'Terminating...' : 'Terminate Call'}</span>
             </button>
           </div>
         )}

@@ -14,12 +14,18 @@ function getJwtSecret(): Uint8Array {
   return new TextEncoder().encode(secret);
 }
 
+export const DEFAULT_ACCESS_TOKEN_TTL = 28800; // 8 hours
+
 /**
- * Creates short-lived JWT Access Token (~15 mins) for Bearer authentication.
+ * Creates JWT Access Token for Bearer authentication.
  */
 export async function signAccessToken(payload: TokenPayload): Promise<string> {
   const secret = getJwtSecret();
-  const ttlSeconds = Number(process.env.ACCESS_TOKEN_TTL || '900');
+  const ttlSeconds = Number(
+    process.env.JWT_ACCESS_TTL_SECONDS ||
+      process.env.ACCESS_TOKEN_TTL ||
+      String(DEFAULT_ACCESS_TOKEN_TTL)
+  );
 
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })

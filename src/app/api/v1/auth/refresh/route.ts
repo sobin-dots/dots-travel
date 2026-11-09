@@ -2,10 +2,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { RefreshTokenRequestSchema } from '@/lib/schemas';
-import { hashToken, generateRefreshToken, signAccessToken } from '@/lib/auth-tokens';
+import {
+  hashToken,
+  generateRefreshToken,
+  signAccessToken,
+  DEFAULT_ACCESS_TOKEN_TTL,
+} from '@/lib/auth-tokens';
 import { logAuditEvent } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
+
+const CONCURRENT_REFRESH_GRACE_MS = 30_000;
+const recentRotatedTokenCache = new Map<
+  string,
+  { accessToken: string; refreshToken: string; expiresIn: number; expiresAt: number }
+>();
 
 export async function POST(req: NextRequest) {
   try {
@@ -20,6 +31,18 @@ export async function POST(req: NextRequest) {
 
     const { refreshToken } = parsed.data;
     const tokenHash = hashToken(refreshToken);
+
+    // Fast path for concurrent refresh requests within the 30-second grace window
+    const cachedRotation = recentRotatedTokenCache.get(tokenHash);
+    if (cachedRotation && cachedRotation.expiresAt > Date.now()) {
+      return NextResponse.json({
+        api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
+        accessToken: cachedRotation.accessToken,
+        tokenType: 'Bearer',
+        expiresIn: cachedRotation.expiresIn,
+        refreshToken: cachedRotation.refreshToken,
+      });
+    }
 
     const existingSession = await db.session.findUnique({
       where: { tokenHash },
@@ -39,8 +62,41 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Reuse detection: If token was already revoked, token theft has occurred!
+    const expiresInSeconds = Number(
+      process.env.JWT_ACCESS_TTL_SECONDS ||
+        process.env.ACCESS_TOKEN_TTL ||
+        String(DEFAULT_ACCESS_TOKEN_TTL)
+    );
+
+    // Reuse detection with 30-second concurrent request grace period
     if (existingSession.revokedAt) {
+      const msSinceRevoked = Date.now() - existingSession.revokedAt.getTime();
+      if (msSinceRevoked <= CONCURRENT_REFRESH_GRACE_MS) {
+        const childSession = await db.session.findFirst({
+          where: {
+            rotatedFromId: existingSession.id,
+            revokedAt: null,
+          },
+        });
+        const membership = existingSession.user.memberships.find(
+          (m) => m.organizationId === existingSession.organizationId
+        );
+        if (childSession && membership && existingSession.user.status === 'active') {
+          const graceAccessToken = await signAccessToken({
+            userId: existingSession.userId,
+            email: existingSession.user.email,
+            organizationId: membership.organizationId,
+            role: membership.role,
+          });
+          return NextResponse.json({
+            api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
+            accessToken: graceAccessToken,
+            tokenType: 'Bearer',
+            expiresIn: expiresInSeconds,
+          });
+        }
+      }
+
       console.warn(`[Security Alert] Refresh token reuse detected for family ${existingSession.familyId}!`);
       if (existingSession.familyId) {
         await db.session.updateMany({
@@ -117,11 +173,25 @@ export async function POST(req: NextRequest) {
       role: membership.role,
     });
 
+    // Store in short-lived grace cache so concurrent requests from the same browser tab/context don't fail
+    recentRotatedTokenCache.set(tokenHash, {
+      accessToken,
+      refreshToken: newRawRefreshToken,
+      expiresIn: expiresInSeconds,
+      expiresAt: Date.now() + CONCURRENT_REFRESH_GRACE_MS,
+    });
+    if (recentRotatedTokenCache.size > 200) {
+      const now = Date.now();
+      for (const [k, v] of recentRotatedTokenCache.entries()) {
+        if (v.expiresAt <= now) recentRotatedTokenCache.delete(k);
+      }
+    }
+
     return NextResponse.json({
       api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
       accessToken,
       tokenType: 'Bearer',
-      expiresIn: Number(process.env.ACCESS_TOKEN_TTL || '900'),
+      expiresIn: expiresInSeconds,
       refreshToken: newRawRefreshToken,
     });
   } catch (err: any) {
