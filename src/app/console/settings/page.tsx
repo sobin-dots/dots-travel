@@ -55,6 +55,7 @@ export default function SettingsPage() {
     fetchData,
     integrationsSummary,
     fetchIntegrations,
+    initWebPhone,
   } = useConsole();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('organization');
@@ -415,6 +416,7 @@ Fallback Answer URL (POST): ${plivoFallbackAnswerUrl}`;
         setPlivoAuthToken('');
         await fetchIntegrations();
         await fetchData();
+        await initWebPhone();
       }
     } catch (err: any) {
       setPlivoResult({ success: false, message: err.message || 'Error saving Plivo credentials' });

@@ -31,8 +31,15 @@ export async function POST(req: NextRequest) {
       where: { email },
       include: {
         memberships: {
+          orderBy: { createdAt: 'asc' },
           include: {
-            organization: true,
+            organization: {
+              include: {
+                integrations: {
+                  select: { provider: true, status: true },
+                },
+              },
+            },
           },
         },
       },
@@ -54,8 +61,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Select primary organization
-    const primaryMembership = user.memberships[0];
+    // Select primary organization (preferring an organization with active Plivo integration if user belongs to multiple)
+    const primaryMembership =
+      user.memberships.find((m) =>
+        m.organization?.integrations?.some((i) => i.provider === 'plivo' && i.status === 'verified')
+      ) ||
+      user.memberships.find((m) => (m.organization?.integrations?.length || 0) > 0) ||
+      user.memberships[0];
     if (!primaryMembership) {
       return NextResponse.json(
         { api_id: 'auth_err', error: 'User does not belong to any active organization' },
