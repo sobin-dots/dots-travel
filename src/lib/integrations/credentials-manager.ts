@@ -404,12 +404,12 @@ export async function saveTenantIntegration(
       if (app && isPublicHttps && webhookUrls) {
         try {
           await client.applications.update(app.appId, {
-            answer_url: webhookUrls.voiceAnswer,
-            answer_method: 'POST',
-            fallback_answer_url: webhookUrls.voiceFallback,
-            fallback_method: 'POST',
-            hangup_url: webhookUrls.voiceHangup,
-            hangup_method: 'POST',
+            answerUrl: webhookUrls.voiceAnswer,
+            answerMethod: 'POST',
+            fallbackAnswerUrl: webhookUrls.voiceFallback,
+            fallbackMethod: 'POST',
+            hangupUrl: webhookUrls.voiceHangup,
+            hangupMethod: 'POST',
           });
         } catch (appUpdateErr) {
           console.warn('[CredentialsManager] Plivo application webhook sync notice:', appUpdateErr);
@@ -435,9 +435,13 @@ export async function saveTenantIntegration(
         } catch (epCreateErr) {
           console.warn('[CredentialsManager] Plivo endpoint auto-create notice:', epCreateErr);
         }
-      } else if (app?.appId && endpoint.endpointId && String(endpoint.appId || '') !== String(app.appId)) {
+      } else if (endpoint.endpointId) {
+        // Ensure the endpoint password and appId on Plivo match our stored endpointPassword so WebRTC SIP login always succeeds
         try {
-          await client.endpoints.update(endpoint.endpointId, { appId: app.appId });
+          await client.endpoints.update(endpoint.endpointId, {
+            password: endpointPassword,
+            ...(app?.appId ? { appId: app.appId } : {}),
+          });
         } catch {}
       }
 

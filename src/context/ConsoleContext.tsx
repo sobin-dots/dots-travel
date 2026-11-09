@@ -328,6 +328,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [incomingCall, setIncomingCall] = useState<{ callerId: string; extraHeaders?: any } | null>(null);
 
   const plivoClientRef = useRef<any>(null);
+  const webPhoneUsernameRef = useRef<string | null>(null);
+  const isInitializingWebPhoneRef = useRef<boolean>(false);
   const callTimerRef = useRef<any>(null);
   const toneGenRef = useRef<CallToneGenerator | null>(null);
 
@@ -712,6 +714,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
           // Immediately load new organization's data with the new access token
           await executeFetchWithToken(data.accessToken);
+          await initWebPhone();
         } else {
           alert(data.error || 'Failed to switch organization');
         }
@@ -829,110 +832,213 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     selectedCallDetail?.transcriptionError,
   ]);
 
-  // Initialize In-Browser Web Phone
+  // Initialize In-Browser Web Phone (concurrency-safe, auto-retries if SDK script still loading, and auto-reconnects)
   const initWebPhone = async () => {
+    if (typeof window === 'undefined') return;
+    const activeToken = tokenRef.current || bearerToken || localStorage.getItem('plivo_access_token') || '';
+    if (!activeToken) return;
+
+    if (isInitializingWebPhoneRef.current) return;
+    isInitializingWebPhoneRef.current = true;
+
     try {
       const res = await authFetch('/api/v1/telephony/endpoint');
       const data = await res.json();
-      if (res.ok && data.username) {
+      if (res.ok && data.username && data.password) {
         setEndpointConfig(data);
-        if (typeof window !== 'undefined' && (window as any).Plivo) {
-          const PlivoClass = (window as any).Plivo;
-          patchPlivoSDK(PlivoClass);
-          let clientInstance: any = null;
 
-          try {
-            const plivoSdk = new PlivoClass({ debug: 'INFO', permOnClick: true, enableNoiseReduction: false });
-            clientInstance = plivoSdk.client || plivoSdk;
-          } catch {
+        if (!(window as any).Plivo) {
+          // Plivo SDK script is still loading in layout.tsx — retry once it finishes loading
+          setTimeout(() => {
+            isInitializingWebPhoneRef.current = false;
+            initWebPhone();
+          }, 600);
+          return;
+        }
+
+        // If already initialized for this exact SIP endpoint username, simply ensure it is logged in
+        if (plivoClientRef.current && webPhoneUsernameRef.current === data.username) {
+          if (!plivoClientRef.current.isLoggedIn) {
             try {
-              clientInstance = new PlivoClass.Client({ enableNoiseReduction: false });
+              plivoClientRef.current.login(data.username, data.password);
             } catch {}
           }
+          return;
+        }
 
-          if (clientInstance) {
-            patchPlivoSDK(PlivoClass, clientInstance);
-            if (!clientInstance.noiseSuppresion) {
-              clientInstance.noiseSuppresion = createNoiseSuppressionShim(clientInstance);
+        // Clean up any previous client instance from another org/endpoint before creating a new one
+        if (plivoClientRef.current) {
+          try {
+            if (typeof plivoClientRef.current.logout === 'function') {
+              plivoClientRef.current.logout();
             }
-            if (!clientInstance.noiseSuppression) {
-              clientInstance.noiseSuppression = clientInstance.noiseSuppresion;
-            }
-            clientInstance.on('onLogin', () => {
-              console.log('[WebPhone] SIP registered successfully with Plivo');
-              setWebPhoneStatus('ready');
-              setWebPhoneError(null);
-            });
-            clientInstance.on('onLoginFailed', (cause: any) => {
-              console.error('[WebPhone] SIP registration failed:', cause);
-              setWebPhoneStatus('error');
-              setWebPhoneError(`SIP Auth Failed: ${cause?.message || cause || 'Check credentials'}`);
-            });
-            clientInstance.on('onCalling', () => setWebPhoneStatus('calling'));
-            clientInstance.on('onCallRemoteRinging', () => setWebPhoneStatus('ringing'));
-            clientInstance.on('onCallAnswered', () => {
-              toneGenRef.current?.stop();
-              setWebPhoneStatus('connected');
-            });
-            clientInstance.on('onCallConnected', () => {
-              toneGenRef.current?.stop();
-              setWebPhoneStatus('connected');
-            });
-            clientInstance.on('onCallTerminated', () => {
-              toneGenRef.current?.stop();
-              setIncomingCall(null);
-              setWebPhoneStatus('ended');
-              fetchData();
-            });
-            clientInstance.on('onCallFailed', (cause: any) => {
-              toneGenRef.current?.stop();
-              setIncomingCall(null);
-              setWebPhoneStatus('error');
-              setWebPhoneError(cause?.message || 'Call failed');
-            });
-            const handleIncoming = (callerId: any, extraHeaders: any) => {
-              console.log('[WebPhone] Incoming call received from:', callerId);
-              const rawId = typeof callerId === 'string'
-                ? callerId.replace('@phone.plivo.com', '')
-                : (callerId?.callerId || callerId?.callerName || callerId?.src || 'Inbound Caller');
-              toneGenRef.current?.startIncomingRingtone();
-              setIncomingCall({
-                callerId: rawId,
-                extraHeaders,
-              });
-              setWebPhoneStatus('ringing');
-            };
+          } catch {}
+          plivoClientRef.current = null;
+          webPhoneUsernameRef.current = null;
+        }
 
-            const handleIncomingCanceled = () => {
-              console.log('[WebPhone] Inbound caller hung up / canceled');
-              toneGenRef.current?.stop();
-              setIncomingCall(null);
-              setWebPhoneStatus('ended');
-            };
+        const PlivoClass = (window as any).Plivo;
+        patchPlivoSDK(PlivoClass);
+        let clientInstance: any = null;
 
-            clientInstance.on('onIncomingCall', handleIncoming);
-            clientInstance.on('incomingCall', handleIncoming);
-            clientInstance.on('onIncomingCallHangup', handleIncomingCanceled);
-            clientInstance.on('onIncomingCallCanceled', handleIncomingCanceled);
-            clientInstance.on('incomingCallHangup', handleIncomingCanceled);
-            clientInstance.on('incomingCallCanceled', handleIncomingCanceled);
+        try {
+          const plivoSdk = new PlivoClass({ debug: 'INFO', permOnClick: true, enableNoiseReduction: false });
+          clientInstance = plivoSdk.client || plivoSdk;
+        } catch {
+          try {
+            clientInstance = new PlivoClass.Client({ enableNoiseReduction: false });
+          } catch {}
+        }
 
-            clientInstance.login(data.username, data.password);
-            plivoClientRef.current = clientInstance;
-            if (typeof window !== 'undefined') {
-              (window as any).plivoClient = clientInstance;
-            }
-          } else {
-            setWebPhoneStatus('ready');
+        if (clientInstance) {
+          patchPlivoSDK(PlivoClass, clientInstance);
+          if (!clientInstance.noiseSuppresion) {
+            clientInstance.noiseSuppresion = createNoiseSuppressionShim(clientInstance);
           }
-        } else {
-          setWebPhoneStatus('ready');
+          if (!clientInstance.noiseSuppression) {
+            clientInstance.noiseSuppression = clientInstance.noiseSuppresion;
+          }
+          clientInstance.on('onLogin', () => {
+            console.log('[WebPhone] SIP registered successfully with Plivo:', data.username);
+            setWebPhoneStatus('ready');
+            setWebPhoneError(null);
+          });
+          clientInstance.on('onLoginFailed', (cause: any) => {
+            console.error('[WebPhone] SIP registration failed:', cause);
+            setWebPhoneStatus('error');
+            setWebPhoneError(`SIP Auth Failed: ${cause?.message || cause || 'Check credentials'}`);
+          });
+          clientInstance.on('onLogout', () => {
+            console.log('[WebPhone] SIP logged out — scheduling auto-reconnect if session active');
+            if (tokenRef.current) {
+              setTimeout(() => {
+                try {
+                  clientInstance.login(data.username, data.password);
+                } catch {}
+              }, 1500);
+            }
+          });
+          clientInstance.on('onConnectionChange', (obj: any) => {
+            const state = String(obj?.state || obj || '').toLowerCase();
+            if ((state === 'disconnected' || state === 'closed') && tokenRef.current) {
+              setTimeout(() => {
+                try {
+                  clientInstance.login(data.username, data.password);
+                } catch {}
+              }, 2000);
+            }
+          });
+          clientInstance.on('onCalling', () => setWebPhoneStatus('calling'));
+          clientInstance.on('onCallRemoteRinging', () => setWebPhoneStatus('ringing'));
+          clientInstance.on('onCallAnswered', () => {
+            toneGenRef.current?.stop();
+            setWebPhoneStatus('connected');
+          });
+          clientInstance.on('onCallConnected', () => {
+            toneGenRef.current?.stop();
+            setWebPhoneStatus('connected');
+          });
+          clientInstance.on('onCallTerminated', () => {
+            toneGenRef.current?.stop();
+            setIncomingCall(null);
+            setWebPhoneStatus('ended');
+            fetchData();
+          });
+          clientInstance.on('onCallFailed', (cause: any) => {
+            toneGenRef.current?.stop();
+            setIncomingCall(null);
+            setWebPhoneStatus('error');
+            setWebPhoneError(cause?.message || 'Call failed');
+          });
+          const handleIncoming = (callerId: any, extraHeaders: any) => {
+            console.log('[WebPhone] Incoming call received from:', callerId);
+            const rawId = typeof callerId === 'string'
+              ? callerId.replace('@phone.plivo.com', '')
+              : (callerId?.callerId || callerId?.callerName || callerId?.src || 'Inbound Caller');
+            toneGenRef.current?.startIncomingRingtone();
+            setIncomingCall({
+              callerId: rawId,
+              extraHeaders,
+            });
+            setWebPhoneStatus('ringing');
+          };
+
+          const handleIncomingCanceled = () => {
+            console.log('[WebPhone] Inbound caller hung up / canceled');
+            toneGenRef.current?.stop();
+            setIncomingCall(null);
+            setWebPhoneStatus('ended');
+          };
+
+          clientInstance.on('onIncomingCall', handleIncoming);
+          clientInstance.on('incomingCall', handleIncoming);
+          clientInstance.on('onIncomingCallHangup', handleIncomingCanceled);
+          clientInstance.on('onIncomingCallCanceled', handleIncomingCanceled);
+          clientInstance.on('incomingCallHangup', handleIncomingCanceled);
+          clientInstance.on('incomingCallCanceled', handleIncomingCanceled);
+
+          webPhoneUsernameRef.current = data.username;
+          plivoClientRef.current = clientInstance;
+          if (typeof window !== 'undefined') {
+            (window as any).plivoClient = clientInstance;
+          }
+          clientInstance.login(data.username, data.password);
         }
       }
     } catch (e: any) {
       console.warn('Web phone init notice:', e.message);
+    } finally {
+      isInitializingWebPhoneRef.current = false;
     }
   };
+
+  // Periodic SIP registration keepalive & tab wake recovery so WebPhone never drops registration after a few minutes
+  useEffect(() => {
+    if (!bearerToken) return;
+
+    const ensureSipRegistered = () => {
+      if (
+        webPhoneStatus === 'calling' ||
+        webPhoneStatus === 'ringing' ||
+        webPhoneStatus === 'connected'
+      ) {
+        return;
+      }
+      if (!plivoClientRef.current) {
+        initWebPhone();
+        return;
+      }
+      if (
+        endpointConfig?.username &&
+        endpointConfig?.password &&
+        (!plivoClientRef.current.isLoggedIn || webPhoneStatus === 'error' || webPhoneStatus === 'idle')
+      ) {
+        try {
+          plivoClientRef.current.login(endpointConfig.username, endpointConfig.password);
+        } catch {}
+      }
+    };
+
+    const interval = setInterval(ensureSipRegistered, 60 * 1000);
+    const onVisibilityOrOnline = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        ensureSipRegistered();
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', onVisibilityOrOnline);
+      document.addEventListener('visibilitychange', onVisibilityOrOnline);
+    }
+
+    return () => {
+      clearInterval(interval);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', onVisibilityOrOnline);
+        document.removeEventListener('visibilitychange', onVisibilityOrOnline);
+      }
+    };
+  }, [bearerToken, endpointConfig?.username, endpointConfig?.password, webPhoneStatus]);
 
   // Call duration counter
   useEffect(() => {

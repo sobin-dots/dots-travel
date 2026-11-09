@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { db } from '@/lib/db';
 import { processIncomingWebhook } from '@/lib/webhook-helper';
 import { PlivoXmlBuilder } from '@/lib/telephony/xml/builder';
 import {
@@ -96,6 +97,27 @@ async function handleFallbackOrDialAction(req: NextRequest) {
 
   if (isAnswered) {
     builder.hangup();
+    const callUuid = params.CallUUID || params.call_uuid || params.DialALegUUID;
+    if (callUuid) {
+      try {
+        const existingCall = await db.call.findUnique({
+          where: { plivoCallUuid: callUuid },
+        });
+        if (existingCall && existingCall.status !== 'completed') {
+          const durationSec = params.DialBLegDuration || params.Duration
+            ? Number(params.DialBLegDuration || params.Duration)
+            : existingCall.durationSeconds;
+          await db.call.update({
+            where: { id: existingCall.id },
+            data: {
+              status: 'completed',
+              endedAt: existingCall.endedAt || new Date(),
+              ...(durationSec !== undefined ? { durationSeconds: durationSec } : {}),
+            },
+          });
+        }
+      } catch {}
+    }
   } else {
     // Agent did not answer, declined, was busy, or disconnected -> connect to AI agent voicemail
     builder

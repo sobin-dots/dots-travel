@@ -192,11 +192,12 @@ export async function handleAnswer(req: NextRequest) {
           redirect: true,
         });
     } else {
-      // Resolve tenant's WebRTC SIP endpoint & registration state from DB-configured Plivo credentials
-      let sipEndpoint: string | null = plivoCreds.sipEndpoint || null;
-      let isUserLoggedIn = false;
+      // Resolve tenant's WebRTC SIP endpoint from DB-configured Plivo credentials (or live Plivo API if not yet cached in DB)
+      let sipEndpoint: string | null =
+        plivoCreds.sipEndpoint ||
+        (plivoCreds.endpointUsername ? `sip:${plivoCreds.endpointUsername}@phone.plivo.com` : null);
 
-      if (plivoCreds.authId && plivoCreds.authToken) {
+      if (!sipEndpoint && plivoCreds.authId && plivoCreds.authToken) {
         try {
           const plivoModule = await import('plivo');
           const client = new (plivoModule as any).Client(plivoCreds.authId, plivoCreds.authToken);
@@ -209,41 +210,19 @@ export async function handleAnswer(req: NextRequest) {
 
             if (matchedEp?.username) {
               sipEndpoint = matchedEp.sipUri || `sip:${matchedEp.username}@phone.plivo.com`;
-              isUserLoggedIn =
-                String(matchedEp.sipRegistered).toLowerCase() === 'true' ||
-                matchedEp.sipRegistered === true;
             }
           }
         } catch (err) {
-          console.warn('[VoiceAnswer] Failed to query tenant Plivo endpoint status:', err);
-          // If live API check failed transiently but DB has sipEndpoint, attempt ringing Web Phone
-          if (sipEndpoint) {
-            isUserLoggedIn = true;
-          }
+          console.warn('[VoiceAnswer] Failed to query tenant Plivo endpoint:', err);
         }
       }
 
-      // Check if all agents for this organization are currently busy in another active call
-      let isAgentBusy = false;
-      if (effectiveOrgId && isUserLoggedIn) {
-        try {
-          const activeCallCount = await db.call.count({
-            where: {
-              organizationId: effectiveOrgId,
-              status: 'in-progress',
-              endedAt: null,
-              startedAt: { gte: new Date(Date.now() - 30 * 60 * 1000) },
-              ...(callUuid ? { plivoCallUuid: { not: callUuid } } : {}),
-            },
-          });
-          if (activeCallCount > 0) {
-            isAgentBusy = true;
-          }
-        } catch {}
-      }
-
-      if (sipEndpoint && isUserLoggedIn && !isAgentBusy) {
-        // Agent is logged into the in-app Web Phone and available -> ring the app!
+      if (sipEndpoint) {
+        // Always attempt to ring the tenant's WebRTC SIP endpoint first.
+        // Plivo's SIP registrar handles real-time availability:
+        // - If the user is logged into the Web Phone, it rings in the app immediately.
+        // - If the user is logged out, busy, or declines/ignores the call, Plivo immediately invokes
+        //   dialActionUrl (/api/v1/webhooks/voice/fallback) which connects the caller to the AI voicemail.
         builder
           .record({
             action: recordActionUrl,
@@ -263,7 +242,7 @@ export async function handleAnswer(req: NextRequest) {
             redirect: true,
           });
       } else {
-        // No user logged into Web Phone or all agents are busy in other calls -> connect to AI agent voicemail
+        // No WebRTC SIP endpoint configured -> connect to AI agent voicemail
         builder
           .speak(
             'Hello! Welcome to 3dots AI Travel Concierge. Our travel specialists are currently assisting other travelers. Please describe your dream vacation, destination, dates, and budget after the beep, and we will prepare a personalized itinerary for you.',

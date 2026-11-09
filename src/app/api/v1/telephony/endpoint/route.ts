@@ -67,11 +67,22 @@ export async function GET(req: NextRequest) {
     }
 
     const sipUri = endpoint.sipUri || `sip:${endpoint.username}@phone.plivo.com`;
+    const endpointId = endpoint.endpointId || endpoint.id;
+
+    // Ensure the endpoint password on Plivo is synchronized with the password we give the browser WebRTC SDK
+    if (endpointId && !plivoInteg.credentials.passwordSynced) {
+      try {
+        await client.endpoints.update(endpointId, { password });
+      } catch (pwErr: any) {
+        console.warn('Plivo endpoint password sync notice:', pwErr?.message || pwErr);
+      }
+    }
 
     // Persist endpoint details into DB if not yet stored on TenantIntegration
     if (
       plivoInteg.credentials.sipEndpoint !== sipUri ||
       plivoInteg.credentials.endpointUsername !== endpoint.username ||
+      !plivoInteg.credentials.passwordSynced ||
       (callerId && !plivoInteg.credentials.callerId)
     ) {
       const proto = req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http');
@@ -86,7 +97,8 @@ export async function GET(req: NextRequest) {
             sipEndpoint: sipUri,
             endpointUsername: endpoint.username,
             endpointPassword: password,
-            endpointId: endpoint.endpointId || endpoint.id,
+            endpointId,
+            passwordSynced: true,
           },
           metadata: plivoInteg.metadata,
           webhookBaseUrl: requestBaseUrl,
