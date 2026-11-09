@@ -1,13 +1,15 @@
 'use client';
 
-import React from 'react';
+import React, { useRef } from 'react';
 import {
   RefreshCw,
+  RotateCcw,
   Mic,
   FileText,
   Sparkles,
   Loader2,
   AlertCircle,
+  Clock,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
@@ -30,10 +32,47 @@ export function CallDetailDrawer() {
     integrationsSummary,
   } = useConsole();
 
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
   const openaiInteg = integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai');
   const configuredTranscriptionModel = openaiInteg?.metadata?.model || 'gpt-4o-transcribe';
 
   if (!selectedCallDetail) return null;
+
+  // Select the single primary recording (preferring non-zero duration / transcribed recording) so only one audio player is shown
+  const primaryRecording = (() => {
+    const recs = Array.isArray(selectedCallDetail.recordings) ? selectedCallDetail.recordings : [];
+    if (recs.length === 0) return null;
+    if (recs.length === 1) return recs[0];
+    const sorted = [...recs].sort((a: any, b: any) => {
+      const aDur = Number(a.durationSeconds || 0);
+      const bDur = Number(b.durationSeconds || 0);
+      if (bDur !== aDur) return bDur - aDur;
+      const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return bTime - aTime;
+    });
+    return sorted[0];
+  })();
+
+  const handleReplayAudio = () => {
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0;
+      audioRef.current.play().catch(() => {});
+    }
+  };
+
+  const formattedCallTimestamp = selectedCallDetail.startedAt
+    ? new Date(selectedCallDetail.startedAt).toLocaleString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+      })
+    : '—';
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex justify-end">
@@ -69,9 +108,18 @@ export function CallDetailDrawer() {
         </div>
 
         <div className="space-y-3 bg-zinc-950 p-4 rounded-xl border border-zinc-800 text-xs">
-          <div>
-            <span className="text-zinc-500 block text-[10px]">Call UUID</span>
-            <span className="font-mono text-zinc-200">{selectedCallDetail.plivoCallUuid}</span>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <span className="text-zinc-500 block text-[10px]">Call UUID</span>
+              <span className="font-mono text-zinc-200">{selectedCallDetail.plivoCallUuid}</span>
+            </div>
+            <div className="text-right">
+              <span className="text-zinc-500 block text-[10px]">Timestamp</span>
+              <span className="font-mono text-zinc-300 flex items-center gap-1 justify-end">
+                <Clock className="w-3 h-3 text-indigo-400" />
+                {formattedCallTimestamp}
+              </span>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -132,42 +180,54 @@ export function CallDetailDrawer() {
           </div>
         )}
 
-        {/* Call Audio Recording */}
+        {/* Call Audio Recording (Strictly Single Player + Replay Button) */}
         <div className="space-y-2 bg-zinc-950 p-4 rounded-xl border border-zinc-800 text-xs">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <span className="font-bold text-zinc-200 flex items-center gap-1.5">
               <Mic className="w-3.5 h-3.5 text-emerald-400" />
               Call Audio Recording
             </span>
-            {selectedCallDetail.recordings?.length > 0 ? (
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/60">
-                MP3 Audio Ready
-              </span>
-            ) : selectedCallDetail.isRecordingProcessing || callDetailSyncing ? (
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 text-amber-400 border border-amber-800/50 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
-                Processing
-              </span>
-            ) : (
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/80 text-rose-400 border border-rose-800/60">
-                No Audio Recording Available
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {primaryRecording && (
+                <button
+                  type="button"
+                  onClick={handleReplayAudio}
+                  className="text-[10px] font-mono px-2.5 py-0.5 rounded bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 flex items-center gap-1 transition cursor-pointer"
+                  title="Replay audio recording from the beginning"
+                >
+                  <RotateCcw className="w-3 h-3 text-indigo-400" />
+                  <span>Replay Audio</span>
+                </button>
+              )}
+              {primaryRecording ? (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/60">
+                  MP3 Audio Ready
+                </span>
+              ) : selectedCallDetail.isRecordingProcessing || callDetailSyncing ? (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 text-amber-400 border border-amber-800/50 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+                  Processing
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/80 text-rose-400 border border-rose-800/60">
+                  No Audio Recording Available
+                </span>
+              )}
+            </div>
           </div>
-          {selectedCallDetail.recordings?.length > 0 ? (
-            selectedCallDetail.recordings.map((rec: any) => (
-              <div key={rec.id} className="pt-2 space-y-2">
-                <audio
-                  controls
-                  className="w-full h-9 rounded bg-zinc-900 border border-zinc-800"
-                  src={`/api/v1/recordings/${rec.id}/stream`}
-                />
-                <div className="flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-                  <span>ID: {rec.plivoRecordingId}</span>
-                  <span>Duration: {rec.durationSeconds || selectedCallDetail.durationSeconds || 0}s</span>
-                </div>
+          {primaryRecording ? (
+            <div key={primaryRecording.id} className="pt-2 space-y-2">
+              <audio
+                ref={audioRef}
+                controls
+                className="w-full h-9 rounded bg-zinc-900 border border-zinc-800"
+                src={`/api/v1/recordings/${primaryRecording.id}/stream`}
+              />
+              <div className="flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+                <span>ID: {primaryRecording.plivoRecordingId}</span>
+                <span>Duration: {primaryRecording.durationSeconds || selectedCallDetail.durationSeconds || 0}s</span>
               </div>
-            ))
+            </div>
           ) : selectedCallDetail.isRecordingProcessing || callDetailSyncing ? (
             <div className="p-4 bg-zinc-900/60 border border-emerald-900/30 rounded-xl space-y-3 mt-2">
               <div className="flex items-center justify-between">
@@ -230,16 +290,16 @@ export function CallDetailDrawer() {
               <button
                 type="button"
                 onClick={() => {
-                  if (selectedCallDetail.recordings?.length > 0) {
-                    handleTriggerTranscription(selectedCallDetail.recordings[0].id, 'openai', configuredTranscriptionModel);
+                  if (primaryRecording) {
+                    handleTriggerTranscription(primaryRecording.id, 'openai', configuredTranscriptionModel);
                   } else {
                     handleTriggerCallTranscription(selectedCallDetail.id, 'openai', configuredTranscriptionModel);
                   }
                 }}
                 disabled={
-                  Boolean(transcribingRecId && selectedCallDetail.recordings?.[0]?.id === transcribingRecId) ||
+                  Boolean(transcribingRecId && primaryRecording?.id === transcribingRecId) ||
                   transcribingProvider === 'openai' ||
-                  (selectedCallDetail.recordings?.length || 0) === 0
+                  !primaryRecording
                 }
                 className="text-[10px] bg-gradient-to-r from-emerald-600/20 to-teal-600/20 hover:from-emerald-600/30 hover:to-teal-600/30 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 flex items-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
                 title={`Transcribe call recording directly with OpenAI (${configuredTranscriptionModel})`}
@@ -289,8 +349,8 @@ export function CallDetailDrawer() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (selectedCallDetail.recordings?.length > 0) {
-                      handleTriggerTranscription(selectedCallDetail.recordings[0].id, 'openai', configuredTranscriptionModel);
+                    if (primaryRecording) {
+                      handleTriggerTranscription(primaryRecording.id, 'openai', configuredTranscriptionModel);
                     } else {
                       refreshCallDetail(selectedCallDetail.id, true);
                     }
@@ -303,7 +363,7 @@ export function CallDetailDrawer() {
                 </button>
               </div>
             </div>
-          ) : (selectedCallDetail.recordings?.length || 0) === 0 ? (
+          ) : !primaryRecording ? (
             <div className="p-3.5 bg-zinc-900/60 border border-zinc-800 rounded-xl text-[11px] text-zinc-400 mt-2">
               No audio recording is available to transcribe for this call. You can still click <strong>Generate Itinerary with AI</strong> below and enter trip details manually.
             </div>
@@ -332,8 +392,8 @@ export function CallDetailDrawer() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (selectedCallDetail.recordings?.length > 0) {
-                      handleTriggerTranscription(selectedCallDetail.recordings[0].id, 'openai', configuredTranscriptionModel);
+                    if (primaryRecording) {
+                      handleTriggerTranscription(primaryRecording.id, 'openai', configuredTranscriptionModel);
                     } else {
                       handleTriggerCallTranscription(selectedCallDetail.id, 'openai', configuredTranscriptionModel);
                     }

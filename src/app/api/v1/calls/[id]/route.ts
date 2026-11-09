@@ -32,6 +32,27 @@ function getHangupExplanation(code?: number | null): string {
   return `Plivo Hangup Code ${code}`;
 }
 
+function selectPrimaryRecording(recordings: any[]): any | null {
+  if (!Array.isArray(recordings) || recordings.length === 0) return null;
+  if (recordings.length === 1) return recordings[0];
+
+  const sorted = [...recordings].sort((a, b) => {
+    const aHasTranscript = Array.isArray(a.transcriptions) && a.transcriptions.some((t: any) => t.text && t.text.trim().length > 0) ? 1 : 0;
+    const bHasTranscript = Array.isArray(b.transcriptions) && b.transcriptions.some((t: any) => t.text && t.text.trim().length > 0) ? 1 : 0;
+    if (bHasTranscript !== aHasTranscript) return bHasTranscript - aHasTranscript;
+
+    const aDur = Number(a.durationSeconds || 0);
+    const bDur = Number(b.durationSeconds || 0);
+    if (bDur !== aDur) return bDur - aDur;
+
+    const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return bTime - aTime;
+  });
+
+  return sorted[0];
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -111,36 +132,60 @@ export async function GET(
       if (plivoAuthId && plivoAuthToken) {
         try {
           const client = new (plivo as any).Client(plivoAuthId, plivoAuthToken);
-          const plivoRecs = await client.recordings.list({ call_uuid: currentCall.plivoCallUuid });
+          const plivoRecs = await client.recordings.list({
+            call_uuid: currentCall.plivoCallUuid,
+            callUuid: currentCall.plivoCallUuid,
+          });
           if (plivoRecs && Array.isArray(plivoRecs) && plivoRecs.length > 0) {
-            for (const rec of plivoRecs) {
-              await db.recording.upsert({
-                where: { plivoRecordingId: rec.recordingId },
-                update: {
-                  recordingUrl: rec.recordingUrl,
-                  durationSeconds: Number(rec.recordingDuration || 0),
-                  status: 'completed',
-                },
-                create: {
-                  organizationId: currentCall.organizationId,
-                  callId: currentCall.id,
-                  plivoRecordingId: rec.recordingId,
-                  recordingUrl: rec.recordingUrl,
-                  durationSeconds: Number(rec.recordingDuration || 0),
-                  status: 'completed',
+            // Strictly filter to recordings belonging only to this specific call's Plivo CallUUID
+            const matchingRecs = plivoRecs.filter((rec: any) => {
+              const recCallUuid = rec.callUuid || rec.call_uuid;
+              return !recCallUuid || recCallUuid === currentCall!.plivoCallUuid;
+            });
+
+            if (matchingRecs.length > 0) {
+              // Pick the single best recording for this call (preferring non-zero duration)
+              const parsedRecs = matchingRecs.map((rec: any) => {
+                const durSec = Number(
+                  rec.roundedRecordingDuration ??
+                    rec.recordingDuration ??
+                    (rec.recordingDurationMs ? Math.round(Number(rec.recordingDurationMs) / 1000) : 0)
+                );
+                return { rec, durSec };
+              });
+              parsedRecs.sort((a, b) => b.durSec - a.durSec);
+              const bestEntry = parsedRecs[0];
+
+              if (bestEntry?.rec?.recordingId && bestEntry?.rec?.recordingUrl) {
+                await db.recording.upsert({
+                  where: { plivoRecordingId: bestEntry.rec.recordingId },
+                  update: {
+                    recordingUrl: bestEntry.rec.recordingUrl,
+                    durationSeconds: bestEntry.durSec,
+                    status: 'completed',
+                  },
+                  create: {
+                    organizationId: currentCall.organizationId,
+                    callId: currentCall.id,
+                    plivoRecordingId: bestEntry.rec.recordingId,
+                    recordingUrl: bestEntry.rec.recordingUrl,
+                    durationSeconds: bestEntry.durSec,
+                    status: 'completed',
+                  },
+                });
+              }
+
+              currentCall = await db.call.findFirst({
+                where: { id: currentCall.id },
+                include: {
+                  phoneNumber: true,
+                  events: { orderBy: { occurredAt: 'asc' } },
+                  recordings: { include: { transcriptions: true } },
+                  transcriptions: true,
                 },
               });
+              state.recordingError = undefined;
             }
-            currentCall = await db.call.findFirst({
-              where: { id: currentCall.id },
-              include: {
-                phoneNumber: true,
-                events: { orderBy: { occurredAt: 'asc' } },
-                recordings: { include: { transcriptions: true } },
-                transcriptions: true,
-              },
-            });
-            state.recordingError = undefined;
           }
           if (currentCall && currentCall.status !== 'in-progress') {
             state.recordingChecked = true;
@@ -167,7 +212,7 @@ export async function GET(
       (retryMode || !state.transcriptionAttempted)
     ) {
       state.transcriptionAttempted = true;
-      const latestRec = currentCall.recordings[0];
+      const latestRec = selectPrimaryRecording(currentCall.recordings) || currentCall.recordings[0];
       if (latestRec?.recordingUrl && latestRec.recordingUrl.startsWith('http')) {
         try {
           const result = await transcribeAudioFromUrl(latestRec.recordingUrl, {
@@ -269,13 +314,24 @@ export async function GET(
 
   const finalSyncState = callSyncStateByCallId.get(call.id);
 
+  // Deduplicate recordings so only the single primary valid recording is returned for this call
+  const primaryRec = selectPrimaryRecording(call.recordings);
+  const singleRecordings = primaryRec
+    ? [
+        {
+          ...primaryRec,
+          streamUrl: `/api/v1/recordings/${primaryRec.id}/stream`,
+        },
+      ]
+    : [];
+
   const isRecordingProcessing =
-    call.recordings.length === 0 &&
+    singleRecordings.length === 0 &&
     call.status === 'in-progress' &&
     !finalSyncState?.recordingError;
 
   const isTranscriptionProcessing =
-    call.recordings.length > 0 &&
+    singleRecordings.length > 0 &&
     call.transcriptions.length === 0 &&
     !finalSyncState?.transcriptionAttempted &&
     !finalSyncState?.transcriptionError;
@@ -284,10 +340,7 @@ export async function GET(
     api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
     call: {
       ...call,
-      recordings: call.recordings.map((rec) => ({
-        ...rec,
-        streamUrl: `/api/v1/recordings/${rec.id}/stream`,
-      })),
+      recordings: singleRecordings,
       isRecordingProcessing,
       isTranscriptionProcessing,
       recordingError: finalSyncState?.recordingError || null,
