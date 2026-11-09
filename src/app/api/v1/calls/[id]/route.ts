@@ -11,6 +11,16 @@ export const runtime = 'nodejs';
 
 const inFlightCallSyncs = new Map<string, Promise<void>>();
 
+interface CallSyncState {
+  recordingChecked: boolean;
+  recordingError?: string;
+  transcriptionAttempted: boolean;
+  transcriptionError?: string;
+  updatedAt: number;
+}
+
+const callSyncStateByCallId = new Map<string, CallSyncState>();
+
 function getHangupExplanation(code?: number | null): string {
   if (!code) return 'Call ended or not yet completed';
   if (code >= 4000 && code < 4100) return 'Normal Call Completion: The call was cleanly terminated by caller or callee.';
@@ -58,12 +68,35 @@ export async function GET(
 
   const url = new URL(req.url);
   const fastMode = url.searchParams.get('fast') === 'true';
+  const retryMode = url.searchParams.get('retry') === 'true';
+
+  if (retryMode) {
+    callSyncStateByCallId.delete(call.id);
+  }
+
+  const getOrInitSyncState = (callId: string): CallSyncState => {
+    const existing = callSyncStateByCallId.get(callId);
+    if (existing) return existing;
+    const init: CallSyncState = {
+      recordingChecked: false,
+      transcriptionAttempted: false,
+      updatedAt: Date.now(),
+    };
+    callSyncStateByCallId.set(callId, init);
+    return init;
+  };
 
   const runCarrierAndOpenAiSync = async (targetCall: NonNullable<typeof call>) => {
     let currentCall: typeof call = targetCall;
+    const state = getOrInitSyncState(currentCall.id);
+    state.updatedAt = Date.now();
 
-    // Carrier Realtime Sync: If call has no recordings yet, query Plivo API for any pending recordings
-    if (currentCall.recordings.length === 0 && currentCall.plivoCallUuid) {
+    // Carrier Realtime Sync: If call has no recordings yet, query Plivo API once (or when in-progress / manual retry)
+    if (
+      currentCall.recordings.length === 0 &&
+      currentCall.plivoCallUuid &&
+      (retryMode || currentCall.status === 'in-progress' || !state.recordingChecked)
+    ) {
       let plivoAuthId = process.env.PLIVO_AUTH_ID;
       let plivoAuthToken = process.env.PLIVO_AUTH_TOKEN;
 
@@ -107,28 +140,40 @@ export async function GET(
                 transcriptions: true,
               },
             });
+            state.recordingError = undefined;
+          }
+          if (currentCall && currentCall.status !== 'in-progress') {
+            state.recordingChecked = true;
           }
         } catch (err: any) {
           console.warn('Live recording sync notice:', err.message);
+          state.recordingChecked = true;
+          state.recordingError = err.message || 'Failed to sync recording from carrier';
         }
+      } else {
+        state.recordingChecked = true;
       }
+    } else if (currentCall.recordings.length === 0 && !currentCall.plivoCallUuid) {
+      state.recordingChecked = true;
     }
 
-    // Direct OpenAI Auto-Transcription: If call has a recording and no OpenAI transcription yet, transcribe directly using OpenAI
+    // Direct OpenAI Auto-Transcription: Attempt once per call (unless manual retry)
     if (
       currentCall &&
       currentCall.recordings.length > 0 &&
       !currentCall.transcriptions.some(
         (t) => t.source === 'openai_whisper' && t.text && t.text.trim().length > 0
-      )
+      ) &&
+      (retryMode || !state.transcriptionAttempted)
     ) {
+      state.transcriptionAttempted = true;
       const latestRec = currentCall.recordings[0];
       if (latestRec?.recordingUrl && latestRec.recordingUrl.startsWith('http')) {
         try {
           const result = await transcribeAudioFromUrl(latestRec.recordingUrl, {
             organizationId: currentCall.organizationId,
           });
-          if (result.text) {
+          if (result.text && result.text.trim().length > 0) {
             const existingTr = await db.transcription.findFirst({
               where: {
                 recordingId: latestRec.id,
@@ -166,20 +211,34 @@ export async function GET(
                 },
               });
             }
+            state.transcriptionError = undefined;
+          } else {
+            state.transcriptionError = 'No speech detected in audio recording.';
           }
         } catch (err: any) {
           console.warn('[Auto OpenAI Transcription] Sync notice:', err.message);
+          state.transcriptionError = err.message || 'OpenAI transcription failed.';
         }
+      } else {
+        state.transcriptionError = 'Audio recording URL is unavailable or invalid.';
       }
     }
   };
 
-  const needsSync =
-    (call.recordings.length === 0 && Boolean(call.plivoCallUuid)) ||
-    (call.recordings.length > 0 &&
-      !call.transcriptions.some(
-        (t) => t.source === 'openai_whisper' && t.text && t.text.trim().length > 0
-      ));
+  const currentSyncState = callSyncStateByCallId.get(call.id);
+  const shouldSyncRecording =
+    call.recordings.length === 0 &&
+    Boolean(call.plivoCallUuid) &&
+    (retryMode || call.status === 'in-progress' || !currentSyncState?.recordingChecked);
+
+  const shouldSyncTranscription =
+    call.recordings.length > 0 &&
+    !call.transcriptions.some(
+      (t) => t.source === 'openai_whisper' && t.text && t.text.trim().length > 0
+    ) &&
+    (retryMode || !currentSyncState?.transcriptionAttempted);
+
+  const needsSync = shouldSyncRecording || shouldSyncTranscription;
 
   if (needsSync) {
     let syncPromise = inFlightCallSyncs.get(call.id);
@@ -208,13 +267,18 @@ export async function GET(
     return NextResponse.json({ api_id: 'not_found', error: 'Call not found' }, { status: 404 });
   }
 
+  const finalSyncState = callSyncStateByCallId.get(call.id);
+
   const isRecordingProcessing =
     call.recordings.length === 0 &&
-    (call.status === 'in-progress' || call.recordingEnabled || call.status === 'completed');
+    call.status === 'in-progress' &&
+    !finalSyncState?.recordingError;
 
   const isTranscriptionProcessing =
+    call.recordings.length > 0 &&
     call.transcriptions.length === 0 &&
-    (call.status === 'in-progress' || call.transcriptionEnabled || call.status === 'completed');
+    !finalSyncState?.transcriptionAttempted &&
+    !finalSyncState?.transcriptionError;
 
   return NextResponse.json({
     api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
@@ -226,6 +290,8 @@ export async function GET(
       })),
       isRecordingProcessing,
       isTranscriptionProcessing,
+      recordingError: finalSyncState?.recordingError || null,
+      transcriptionError: finalSyncState?.transcriptionError || null,
       hangupExplanation: getHangupExplanation(call.hangupCauseCode),
     },
   });

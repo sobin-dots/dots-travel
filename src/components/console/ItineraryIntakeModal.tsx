@@ -35,30 +35,45 @@ export function ItineraryIntakeModal() {
   const [loadingExtraction, setLoadingExtraction] = useState(false);
   const [transcriptSnippet, setTranscriptSnippet] = useState('');
   
-  // Intake form state
+  // Intake form state (all blank until extracted from transcript or entered by user)
   const [destination, setDestination] = useState('');
   const [departureDate, setDepartureDate] = useState('');
   const [returnDate, setReturnDate] = useState('');
-  const [durationDays, setDurationDays] = useState(5);
-  const [headcountAdults, setHeadcountAdults] = useState(2);
-  const [headcountChildren, setHeadcountChildren] = useState(0);
-  const [headcountInfants, setHeadcountInfants] = useState(0);
-  const [hotelTier, setHotelTier] = useState('luxury_5star');
+  const [durationDays, setDurationDays] = useState<string>('');
+  const [headcountAdults, setHeadcountAdults] = useState<string>('');
+  const [headcountChildren, setHeadcountChildren] = useState<string>('');
+  const [headcountInfants, setHeadcountInfants] = useState<string>('');
+  const [hotelTier, setHotelTier] = useState('');
   const [specialRequests, setSpecialRequests] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
 
-  const computeReturnDateStr = (depStr: string, days: number) => {
-    if (!depStr) return '';
+  const computeReturnDateStr = (depStr: string, days: string | number) => {
+    const numDays = Number(days);
+    if (!depStr || !numDays || numDays < 1) return '';
     const d = new Date(depStr);
     if (isNaN(d.getTime())) return '';
-    d.setUTCDate(d.getUTCDate() + Math.max(0, Number(days || 1) - 1));
+    d.setUTCDate(d.getUTCDate() + Math.max(0, numDays - 1));
     return d.toISOString().split('T')[0];
   };
 
   // Extract params when modal opens
   useEffect(() => {
     if (!showItineraryIntakeModal || !intakeCallTarget) return;
+
+    // Reset all fields to blank before fetching transcript extraction
+    setDestination('');
+    setDepartureDate('');
+    setReturnDate('');
+    setDurationDays('');
+    setHeadcountAdults('');
+    setHeadcountChildren('');
+    setHeadcountInfants('');
+    setHotelTier('');
+    setSpecialRequests('');
+    setCustomerName('');
+    setCustomerEmail('');
+    setTranscriptSnippet('');
 
     let isMounted = true;
     const fetchExtraction = async () => {
@@ -74,19 +89,19 @@ export function ItineraryIntakeModal() {
 
         if (res.ok && isMounted) {
           const data = await res.json();
-          const p = data.params;
-          const dep = p.departureDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-          const dur = p.durationDays || 5;
-          setDestination(p.destination || 'Singapore');
+          const p = data.params || {};
+          const dep = p.departureDate || '';
+          const dur = p.durationDays != null ? String(p.durationDays) : '';
+          setDestination(p.destination || '');
           setDepartureDate(dep);
           setDurationDays(dur);
-          setReturnDate(p.returnDate || computeReturnDateStr(dep, dur));
-          setHeadcountAdults(p.headcountAdults ?? 2);
-          setHeadcountChildren(p.headcountChildren ?? 0);
-          setHeadcountInfants(p.headcountInfants ?? 0);
-          setHotelTier(p.hotelTier || 'luxury_5star');
+          setReturnDate(p.returnDate || (dep && dur ? computeReturnDateStr(dep, dur) : ''));
+          setHeadcountAdults(p.headcountAdults != null ? String(p.headcountAdults) : '');
+          setHeadcountChildren(p.headcountChildren != null ? String(p.headcountChildren) : '');
+          setHeadcountInfants(p.headcountInfants != null ? String(p.headcountInfants) : '');
+          setHotelTier(p.hotelTier || '');
           setSpecialRequests(p.specialRequests || '');
-          setCustomerName(p.customerName && p.customerName !== 'Valued Client' ? p.customerName : '');
+          setCustomerName(p.customerName && p.customerName !== 'Valued Client' && p.customerName !== 'Guest' ? p.customerName : '');
           setCustomerEmail(p.customerEmail || '');
           setTranscriptSnippet(data.transcriptSnippet || '');
         }
@@ -102,7 +117,7 @@ export function ItineraryIntakeModal() {
     return () => {
       isMounted = false;
     };
-  }, [showItineraryIntakeModal, intakeCallTarget, bearerToken]);
+  }, [showItineraryIntakeModal, intakeCallTarget?.id, bearerToken]);
 
   if (!showItineraryIntakeModal || !intakeCallTarget) return null;
 
@@ -112,15 +127,15 @@ export function ItineraryIntakeModal() {
     e.preventDefault();
     if (isGenerating) return;
     handleGenerateItineraryWithParams(intakeCallTarget.id, {
-      destination,
-      departureDate,
-      returnDate: returnDate || computeReturnDateStr(departureDate, durationDays),
-      durationDays: Number(durationDays),
-      headcountAdults: Number(headcountAdults),
-      headcountChildren: Number(headcountChildren),
-      headcountInfants: Number(headcountInfants),
-      hotelTier,
-      specialRequests,
+      destination: destination.trim() || undefined,
+      departureDate: departureDate || undefined,
+      returnDate: returnDate || computeReturnDateStr(departureDate, durationDays) || undefined,
+      durationDays: durationDays !== '' ? Number(durationDays) : undefined,
+      headcountAdults: headcountAdults !== '' ? Number(headcountAdults) : undefined,
+      headcountChildren: headcountChildren !== '' ? Number(headcountChildren) : undefined,
+      headcountInfants: headcountInfants !== '' ? Number(headcountInfants) : undefined,
+      hotelTier: hotelTier || undefined,
+      specialRequests: specialRequests.trim() || undefined,
       customerName: customerName.trim() || undefined,
       customerEmail: customerEmail.trim() || undefined,
     });
@@ -205,12 +220,13 @@ export function ItineraryIntakeModal() {
               </label>
               <input
                 type="date"
-                required
                 value={departureDate}
                 onChange={(e) => {
                   const nextDep = e.target.value;
                   setDepartureDate(nextDep);
-                  setReturnDate(computeReturnDateStr(nextDep, durationDays));
+                  if (nextDep && durationDays) {
+                    setReturnDate(computeReturnDateStr(nextDep, durationDays));
+                  }
                 }}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
               />
@@ -228,10 +244,13 @@ export function ItineraryIntakeModal() {
                 min="1"
                 max="60"
                 value={durationDays}
+                placeholder="e.g. 5"
                 onChange={(e) => {
-                  const nextDur = Math.max(1, Number(e.target.value || 1));
-                  setDurationDays(nextDur);
-                  setReturnDate(computeReturnDateStr(departureDate, nextDur));
+                  const val = e.target.value;
+                  setDurationDays(val);
+                  if (departureDate && val) {
+                    setReturnDate(computeReturnDateStr(departureDate, val));
+                  }
                 }}
                 className="w-full bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono"
               />
@@ -245,7 +264,8 @@ export function ItineraryIntakeModal() {
                 min="1"
                 max="50"
                 value={headcountAdults}
-                onChange={(e) => setHeadcountAdults(Number(e.target.value))}
+                placeholder="e.g. 2"
+                onChange={(e) => setHeadcountAdults(e.target.value)}
                 className="w-full bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono"
               />
             </div>
@@ -258,7 +278,8 @@ export function ItineraryIntakeModal() {
                 min="0"
                 max="20"
                 value={headcountChildren}
-                onChange={(e) => setHeadcountChildren(Number(e.target.value))}
+                placeholder="0"
+                onChange={(e) => setHeadcountChildren(e.target.value)}
                 className="w-full bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono"
               />
             </div>
@@ -271,7 +292,8 @@ export function ItineraryIntakeModal() {
                 min="0"
                 max="10"
                 value={headcountInfants}
-                onChange={(e) => setHeadcountInfants(Number(e.target.value))}
+                placeholder="0"
+                onChange={(e) => setHeadcountInfants(e.target.value)}
                 className="w-full bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono"
               />
             </div>
@@ -292,7 +314,7 @@ export function ItineraryIntakeModal() {
                   setReturnDate(nextRet);
                   if (departureDate && nextRet) {
                     const diffDays = Math.round((new Date(nextRet).getTime() - new Date(departureDate).getTime()) / 86400000) + 1;
-                    if (diffDays >= 1 && diffDays <= 60) setDurationDays(diffDays);
+                    if (diffDays >= 1 && diffDays <= 60) setDurationDays(String(diffDays));
                   }
                 }}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
@@ -309,6 +331,7 @@ export function ItineraryIntakeModal() {
                 onChange={(e) => setHotelTier(e.target.value)}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 cursor-pointer"
               >
+                <option value="">-- Select Accommodation Preference --</option>
                 <option value="luxury_5star">🌟 5-Star Luxury Resort & Suites</option>
                 <option value="boutique_4star">💎 4-Star Boutique & Heritage Hotel</option>
                 <option value="chalet_villa">🏡 Private Luxury Chalet / Villa</option>

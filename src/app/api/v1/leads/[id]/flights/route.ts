@@ -59,14 +59,14 @@ export async function POST(
     const body = await req.json();
     const {
       airline,
-      airlineCode = 'XX',
+      airlineCode,
       flightNumber,
       origin,
       destination,
       departureTime,
       arrivalTime,
-      cabinClass = 'economy',
-      baggageAllowance = '1x 23kg check-in + 7kg cabin',
+      cabinClass,
+      baggageAllowance,
       pnr,
       fareRules,
       ticketCost,
@@ -87,35 +87,18 @@ export async function POST(
       return NextResponse.json({ api_id: 'not_found', error: 'Lead not found' }, { status: 404 });
     }
 
-    if (!airline || !flightNumber) {
-      return NextResponse.json(
-        { api_id: 'val_err', error: 'airline and flightNumber are required' },
-        { status: 400 }
-      );
-    }
+    const finalOrigin = String(origin).trim().toUpperCase();
+    const finalDest = String(destination).trim().toUpperCase();
+    const baseDepDate = new Date(departureTime);
+    const baseArrDate = new Date(arrivalTime);
 
-    // Resilient fallback defaults for manual PNR entry
-    const finalOrigin = (origin || 'JFK').toUpperCase();
-    const finalDest = (destination || lead.destination?.slice(0, 3) || 'DXB').toUpperCase();
-
-    // Default dates if not specified
-    const baseDepDate = departureTime
-      ? new Date(departureTime)
-      : lead.departureDate
-      ? new Date(lead.departureDate)
-      : new Date(Date.now() + 14 * 86400000 + 10 * 3600000);
-    const baseArrDate = arrivalTime
-      ? new Date(arrivalTime)
-      : new Date(baseDepDate.getTime() + 12.5 * 3600000);
-
-    // Auto extract 2-letter airline code if default 'XX'
-    let finalAirlineCode = airlineCode;
-    if (finalAirlineCode === 'XX' && flightNumber) {
+    let finalAirlineCode = airlineCode ? String(airlineCode).trim().toUpperCase() : '';
+    if (!finalAirlineCode && flightNumber) {
       const match = flightNumber.trim().match(/^([A-Za-z0-9]{2})/);
       if (match) finalAirlineCode = match[1].toUpperCase();
     }
 
-    const finalPnr = (pnr && pnr.trim()) ? pnr.trim().toUpperCase() : `PNR${Date.now().toString().slice(-6)}`;
+    const finalPnr = pnr && pnr.trim() ? pnr.trim().toUpperCase() : null;
 
     // Deduplicate: If the exact same flight (airline + flightNumber + origin + destination) is already attached to this lead, update/return it instead of creating a duplicate
     const existingFlight = await db.tripFlight.findFirst({
@@ -136,8 +119,9 @@ export async function POST(
             departureTime: baseDepDate,
             arrivalTime: baseArrDate,
             cabinClass: cabinClass || existingFlight.cabinClass,
-            baggageAllowance: baggageAllowance || existingFlight.baggageAllowance,
-            ...(pnr && pnr.trim() ? { pnr: finalPnr } : {}),
+            baggageAllowance: baggageAllowance !== undefined ? (baggageAllowance || '') : existingFlight.baggageAllowance,
+            ...(finalPnr ? { pnr: finalPnr } : {}),
+            ...(fareRules !== undefined ? { fareRules: fareRules || null } : {}),
             ...(ticketCost !== undefined && ticketCost !== null && ticketCost !== ''
               ? { ticketCost: Number(ticketCost) }
               : {}),
@@ -148,16 +132,16 @@ export async function POST(
             organizationId: auth!.organizationId,
             leadId,
             airline,
-            airlineCode: finalAirlineCode,
+            airlineCode: finalAirlineCode || '',
             flightNumber,
             origin: finalOrigin,
             destination: finalDest,
             departureTime: baseDepDate,
             arrivalTime: baseArrDate,
             cabinClass: cabinClass || 'economy',
-            baggageAllowance: baggageAllowance || '1x 23kg check-in + 7kg cabin',
+            baggageAllowance: baggageAllowance || '',
             pnr: finalPnr,
-            fareRules: fareRules || 'Standard fare rules apply. E-ticket issued under PNR ' + finalPnr,
+            fareRules: fareRules || null,
             ticketCost: ticketCost !== undefined && ticketCost !== null && ticketCost !== '' ? Number(ticketCost) : null,
           },
         });

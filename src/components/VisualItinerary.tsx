@@ -36,12 +36,12 @@ interface ParsedDay {
 }
 
 export function parseItinerary(text?: string | null) {
-  if (!text || typeof text !== 'string') {
+  if (!text || typeof text !== 'string' || !text.trim()) {
     return {
-      title: 'Curated Bespoke Itinerary',
-      destination: 'Global Destination',
-      duration: 'Custom Duration',
-      overview: 'No itinerary details available yet.',
+      title: '',
+      destination: '',
+      duration: '',
+      overview: '',
       accommodations: [],
       days: [],
       experiences: [],
@@ -230,10 +230,10 @@ export function parseItinerary(text?: string | null) {
   if (currentDay) days.push(currentDay);
 
   return {
-    title: title || 'Curated Bespoke Itinerary',
-    destination: destination || 'Global Destination',
-    duration: duration || (days.length ? `${days.length} Days / ${Math.max(1, days.length - 1)} Nights` : 'Custom Duration'),
-    overview: overview || 'An impeccably tailored travel itinerary designed around customer preferences and luxury comfort.',
+    title,
+    destination,
+    duration: duration || (days.length ? `${days.length} Days / ${Math.max(1, days.length - 1)} Nights` : ''),
+    overview,
     accommodations,
     days,
     experiences,

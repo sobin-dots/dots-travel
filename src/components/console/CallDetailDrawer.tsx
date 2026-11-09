@@ -7,6 +7,7 @@ import {
   FileText,
   Sparkles,
   Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
@@ -24,7 +25,6 @@ export function CallDetailDrawer() {
     handleTriggerCallTranscription,
     transcribingRecId,
     transcribingProvider,
-    handleGenerateItinerary,
     generatingItineraryCallId,
     openItineraryIntakeModal,
     integrationsSummary,
@@ -32,31 +32,6 @@ export function CallDetailDrawer() {
 
   const openaiInteg = integrationsSummary?.integrations?.find((i: any) => i.provider === 'openai');
   const configuredTranscriptionModel = openaiInteg?.metadata?.model || 'gpt-4o-transcribe';
-  const autoTriggeredCallRef = React.useRef<string | null>(null);
-
-  React.useEffect(() => {
-    if (!selectedCallDetail?.id) return;
-    const hasRecording = (selectedCallDetail.recordings?.length || 0) > 0;
-    const hasOpenAiTranscript = selectedCallDetail.transcriptions?.some(
-      (t: any) => t.source === 'openai_whisper' && t.text && t.text.trim().length > 0
-    );
-    if (
-      hasRecording &&
-      !hasOpenAiTranscript &&
-      transcribingProvider !== 'openai' &&
-      autoTriggeredCallRef.current !== selectedCallDetail.id
-    ) {
-      autoTriggeredCallRef.current = selectedCallDetail.id;
-      handleTriggerCallTranscription(selectedCallDetail.id, 'openai', configuredTranscriptionModel, true);
-    }
-  }, [
-    selectedCallDetail?.id,
-    selectedCallDetail?.recordings?.length,
-    selectedCallDetail?.transcriptions?.length,
-    transcribingProvider,
-    configuredTranscriptionModel,
-    handleTriggerCallTranscription,
-  ]);
 
   if (!selectedCallDetail) return null;
 
@@ -75,13 +50,13 @@ export function CallDetailDrawer() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => refreshCallDetail(selectedCallDetail.id)}
+              onClick={() => refreshCallDetail(selectedCallDetail.id, true)}
               disabled={callDetailSyncing}
               className="text-xs text-zinc-400 hover:text-white p-1.5 rounded hover:bg-zinc-800 transition flex items-center gap-1"
-              title="Sync latest recording and transcript from carrier"
+              title="Retry syncing recording and transcript from carrier"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${callDetailSyncing ? 'animate-spin text-emerald-400' : ''}`} />
-              <span className="text-[10px] font-mono">Sync</span>
+              <span className="text-[10px] font-mono">Retry Sync</span>
             </button>
             <button
               type="button"
@@ -168,10 +143,14 @@ export function CallDetailDrawer() {
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/60">
                 MP3 Audio Ready
               </span>
-            ) : (
+            ) : selectedCallDetail.isRecordingProcessing || callDetailSyncing ? (
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 text-amber-400 border border-amber-800/50 flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
                 Processing
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/80 text-rose-400 border border-rose-800/60">
+                No Audio Recording Available
               </span>
             )}
           </div>
@@ -189,44 +168,43 @@ export function CallDetailDrawer() {
                 </div>
               </div>
             ))
-          ) : (
+          ) : selectedCallDetail.isRecordingProcessing || callDetailSyncing ? (
             <div className="p-4 bg-zinc-900/60 border border-emerald-900/30 rounded-xl space-y-3 mt-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs">
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Processing Call Recording...</span>
+                  <span>Checking Carrier for Call Recording...</span>
                 </div>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800/50 flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                  Carrier Syncing
+                  Syncing
                 </span>
               </div>
-
-              {/* Soundwave animation */}
-              <div className="flex items-center justify-center gap-1.5 py-2">
-                <span className="w-1.5 bg-emerald-500/70 rounded-full animate-bounce h-4" />
-                <span className="w-1.5 bg-emerald-500/80 rounded-full animate-bounce h-7 delay-75" />
-                <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-3 delay-150" />
-                <span className="w-1.5 bg-emerald-500/90 rounded-full animate-bounce h-6 delay-100" />
-                <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-8 delay-200" />
-                <span className="w-1.5 bg-emerald-500/80 rounded-full animate-bounce h-5 delay-75" />
-                <span className="w-1.5 bg-emerald-500/60 rounded-full animate-bounce h-3 delay-150" />
-              </div>
-
               <p className="text-[11px] text-zinc-400 leading-relaxed text-center">
-                Plivo carrier is rendering and encoding the dual-channel call recording. The audio file will appear automatically as soon as carrier encoding completes.
+                Checking Plivo carrier for any active or recently encoded dual-channel call recording.
               </p>
-              
-              <div className="pt-1 flex items-center justify-between border-t border-zinc-800/60 text-[10px] text-zinc-500">
-                <span>Auto-refreshing every 2.5s</span>
+            </div>
+          ) : (
+            <div className="p-3.5 bg-zinc-900/60 border border-rose-900/40 rounded-xl space-y-2.5 mt-2">
+              <div className="flex items-start gap-2 text-rose-300 text-xs">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-semibold">No Audio Recording Available</div>
+                  <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
+                    {selectedCallDetail.recordingError ||
+                      'No recording was found for this call on the carrier. Auto-polling has been stopped.'}
+                  </p>
+                </div>
+              </div>
+              <div className="pt-1 flex justify-end border-t border-zinc-800/60">
                 <button
                   type="button"
-                  onClick={() => refreshCallDetail(selectedCallDetail.id)}
+                  onClick={() => refreshCallDetail(selectedCallDetail.id, true)}
                   disabled={callDetailSyncing}
-                  className="text-emerald-400 hover:text-emerald-300 flex items-center gap-1 hover:underline font-medium"
+                  className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1 rounded border border-zinc-700 flex items-center gap-1.5 transition"
                 >
-                  <RefreshCw className={`w-2.5 h-2.5 ${callDetailSyncing ? 'animate-spin' : ''}`} />
-                  <span>Check Now</span>
+                  <RefreshCw className={`w-3 h-3 ${callDetailSyncing ? 'animate-spin' : ''}`} />
+                  <span>Retry Recording Check</span>
                 </button>
               </div>
             </div>
@@ -259,8 +237,9 @@ export function CallDetailDrawer() {
                   }
                 }}
                 disabled={
-                  (transcribingRecId && selectedCallDetail.recordings?.[0]?.id === transcribingRecId) ||
-                  (transcribingProvider === 'openai')
+                  Boolean(transcribingRecId && selectedCallDetail.recordings?.[0]?.id === transcribingRecId) ||
+                  transcribingProvider === 'openai' ||
+                  (selectedCallDetail.recordings?.length || 0) === 0
                 }
                 className="text-[10px] bg-gradient-to-r from-emerald-600/20 to-teal-600/20 hover:from-emerald-600/30 hover:to-teal-600/30 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 flex items-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
                 title={`Transcribe call recording directly with OpenAI (${configuredTranscriptionModel})`}
@@ -295,11 +274,48 @@ export function CallDetailDrawer() {
                 </div>
               );
             })
+          ) : selectedCallDetail.transcriptionError ? (
+            <div className="p-3.5 bg-zinc-900/60 border border-rose-900/40 rounded-xl space-y-2.5 mt-2">
+              <div className="flex items-start gap-2 text-rose-300 text-xs">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-semibold">Transcription Failed</div>
+                  <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
+                    {selectedCallDetail.transcriptionError}
+                  </p>
+                </div>
+              </div>
+              <div className="pt-1 flex justify-end border-t border-zinc-800/60">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedCallDetail.recordings?.length > 0) {
+                      handleTriggerTranscription(selectedCallDetail.recordings[0].id, 'openai', configuredTranscriptionModel);
+                    } else {
+                      refreshCallDetail(selectedCallDetail.id, true);
+                    }
+                  }}
+                  disabled={transcribingProvider === 'openai' || callDetailSyncing}
+                  className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1 rounded border border-zinc-700 flex items-center gap-1.5 transition"
+                >
+                  <RefreshCw className={`w-3 h-3 ${transcribingProvider === 'openai' || callDetailSyncing ? 'animate-spin' : ''}`} />
+                  <span>Retry Transcription</span>
+                </button>
+              </div>
+            </div>
+          ) : (selectedCallDetail.recordings?.length || 0) === 0 ? (
+            <div className="p-3.5 bg-zinc-900/60 border border-zinc-800 rounded-xl text-[11px] text-zinc-400 mt-2">
+              No audio recording is available to transcribe for this call. You can still click <strong>Generate Itinerary with AI</strong> below and enter trip details manually.
+            </div>
           ) : (
             <div className="p-4 bg-zinc-900/60 border border-indigo-900/30 rounded-xl space-y-3 mt-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-indigo-400 font-semibold text-xs">
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  {transcribingProvider === 'openai' ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3.5 h-3.5" />
+                  )}
                   <span>{transcribingProvider === 'openai' ? 'Transcribing with OpenAI...' : 'Ready for OpenAI Transcription'}</span>
                 </div>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800/50 flex items-center gap-1.5">
@@ -309,7 +325,7 @@ export function CallDetailDrawer() {
               </div>
 
               <p className="text-[11px] text-zinc-400 leading-relaxed text-center">
-                Generate high-accuracy transcription directly using your primary OpenAI model{' '}
+                Generate transcription directly using your primary OpenAI model{' '}
                 <span className="text-emerald-400 font-mono font-semibold">({configuredTranscriptionModel})</span> configured in Settings.
               </p>
               <div className="pt-1 flex justify-center gap-2 flex-wrap">
@@ -331,18 +347,6 @@ export function CallDetailDrawer() {
                       ? `Transcribing with ${configuredTranscriptionModel}...`
                       : `Transcribe with OpenAI (${configuredTranscriptionModel})`}
                   </span>
-                </button>
-              </div>
-              <div className="pt-1 flex items-center justify-between border-t border-zinc-800/60 text-[10px] text-zinc-500">
-                <span>Direct OpenAI Speech-to-Text</span>
-                <button
-                  type="button"
-                  onClick={() => refreshCallDetail(selectedCallDetail.id)}
-                  disabled={callDetailSyncing}
-                  className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1 hover:underline font-medium"
-                >
-                  <RefreshCw className={`w-2.5 h-2.5 ${callDetailSyncing ? 'animate-spin' : ''}`} />
-                  <span>Check Now</span>
                 </button>
               </div>
             </div>

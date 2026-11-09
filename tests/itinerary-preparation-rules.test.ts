@@ -162,7 +162,7 @@ describe('Itinerary Preparation Rules & LLM Context Feeding', () => {
     expect(orgBUpdated.promptText).not.toContain('ARRIVAL DAY REST MANDATE');
   });
 
-  it('incorporates active rules into itinerary generation and offline fallback', async () => {
+  it('preserves user trip parameters and returns empty itinerary without hardcoded fallback when AI provider is unavailable', async () => {
     const result = await generateItineraryFromTranscript(
       'Client inquiry for 5 days in Paris with private tours.',
       { name: 'Arthur Dent', phone: '+14155550999', email: 'arthur@hitchhiker.test' },
@@ -178,10 +178,9 @@ describe('Itinerary Preparation Rules & LLM Context Feeding', () => {
     );
 
     expect(result.itinerary).toBeDefined();
+    expect(result.destination).toBe('Paris, France');
     expect(result.title).toContain('Paris');
-    // Verify applied agency guidelines section exists in the generated itinerary
-    expect(result.itinerary).toContain('Applied Agency Guidelines');
-    expect(result.itinerary).toContain('Arrival Day Rest Mandate');
+    expect(result.durationDays).toBe(5);
   }, 25000);
 
   it('feeds active rules into itinerary revision with DeepSeek', async () => {
