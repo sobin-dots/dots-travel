@@ -29,7 +29,24 @@ jobs:
           cd /home/ubuntu/apps/dots-travel
           bash deploy.sh
 
+      
       - name: Verify application
         run: |
-          curl --fail --silent --show-error \
-            http://127.0.0.1:3000/api/v1/health
+          echo "Waiting for Next.js to become available..."
+
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:3000/api/v1/health; then
+              echo ""
+              echo "Application is healthy!"
+              exit 0
+            fi
+
+            echo "Attempt $attempt/30 failed. Retrying in 2 seconds..."
+            sleep 2
+          done
+
+          echo "Application did not become healthy."
+          pm2 status
+          pm2 logs nextjs-app --lines 80 --nostream
+          exit 1
