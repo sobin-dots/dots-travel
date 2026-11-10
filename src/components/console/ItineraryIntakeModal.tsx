@@ -57,11 +57,52 @@ export function ItineraryIntakeModal() {
     return d.toISOString().split('T')[0];
   };
 
+  const runExtraction = async (callTarget: any, isMountedCheck: () => boolean = () => true) => {
+    if (!callTarget?.id) return;
+    setLoadingExtraction(true);
+    try {
+      const res = await authFetch('/api/v1/leads/extract-params', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ callId: callTarget.id }),
+      });
+
+      if (res.ok && isMountedCheck()) {
+        const data = await res.json();
+        const p = data.params || {};
+        const dep = p.departureDate || '';
+        const dur = p.durationDays != null ? String(p.durationDays) : '';
+        setDestination(p.destination || '');
+        setDepartureDate(dep);
+        setDurationDays(dur);
+        setReturnDate(p.returnDate || (dep && dur ? computeReturnDateStr(dep, dur) : ''));
+        setHeadcountAdults(p.headcountAdults != null ? String(p.headcountAdults) : '');
+        setHeadcountChildren(p.headcountChildren != null ? String(p.headcountChildren) : '');
+        setHeadcountInfants(p.headcountInfants != null ? String(p.headcountInfants) : '');
+        setHotelTier(p.hotelTier || '');
+        setSpecialRequests(p.specialRequests || '');
+        const resolvedName =
+          p.customerName && p.customerName !== 'Valued Client' && p.customerName !== 'Guest'
+            ? p.customerName
+            : callTarget.contactName || '';
+        setCustomerName(resolvedName);
+        setCustomerEmail(p.customerEmail || callTarget.contactEmail || '');
+        setTranscriptSnippet(data.transcriptSnippet || '');
+      }
+    } catch (err) {
+      console.warn('Extraction fetch error:', err);
+    } finally {
+      if (isMountedCheck()) setLoadingExtraction(false);
+    }
+  };
+
   // Extract params when modal opens
   useEffect(() => {
     if (!showItineraryIntakeModal || !intakeCallTarget) return;
 
-    // Reset all fields to blank before fetching transcript extraction
+    // Reset all fields before fetching transcript extraction
     setDestination('');
     setDepartureDate('');
     setReturnDate('');
@@ -71,48 +112,12 @@ export function ItineraryIntakeModal() {
     setHeadcountInfants('');
     setHotelTier('');
     setSpecialRequests('');
-    setCustomerName('');
-    setCustomerEmail('');
+    setCustomerName(intakeCallTarget.contactName || '');
+    setCustomerEmail(intakeCallTarget.contactEmail || '');
     setTranscriptSnippet('');
 
     let isMounted = true;
-    const fetchExtraction = async () => {
-      setLoadingExtraction(true);
-      try {
-        const res = await authFetch('/api/v1/leads/extract-params', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ callId: intakeCallTarget.id }),
-        });
-
-        if (res.ok && isMounted) {
-          const data = await res.json();
-          const p = data.params || {};
-          const dep = p.departureDate || '';
-          const dur = p.durationDays != null ? String(p.durationDays) : '';
-          setDestination(p.destination || '');
-          setDepartureDate(dep);
-          setDurationDays(dur);
-          setReturnDate(p.returnDate || (dep && dur ? computeReturnDateStr(dep, dur) : ''));
-          setHeadcountAdults(p.headcountAdults != null ? String(p.headcountAdults) : '');
-          setHeadcountChildren(p.headcountChildren != null ? String(p.headcountChildren) : '');
-          setHeadcountInfants(p.headcountInfants != null ? String(p.headcountInfants) : '');
-          setHotelTier(p.hotelTier || '');
-          setSpecialRequests(p.specialRequests || '');
-          setCustomerName(p.customerName && p.customerName !== 'Valued Client' && p.customerName !== 'Guest' ? p.customerName : '');
-          setCustomerEmail(p.customerEmail || '');
-          setTranscriptSnippet(data.transcriptSnippet || '');
-        }
-      } catch (err) {
-        console.warn('Extraction fetch error:', err);
-      } finally {
-        if (isMounted) setLoadingExtraction(false);
-      }
-    };
-
-    fetchExtraction();
+    runExtraction(intakeCallTarget, () => isMounted);
 
     return () => {
       isMounted = false;
@@ -186,12 +191,24 @@ export function ItineraryIntakeModal() {
 
         {/* Transcription Snippet Notice */}
         {transcriptSnippet && (
-          <div className="px-5 py-3 bg-zinc-950 border-b border-zinc-800/80 flex items-start gap-2.5">
-            <FileText className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-            <div className="text-xs">
-              <span className="font-semibold text-zinc-300">Extracted from Call Transcript: </span>
-              <span className="text-zinc-400 italic font-mono text-[11px]">"{transcriptSnippet}"</span>
+          <div className="px-5 py-3 bg-zinc-950 border-b border-zinc-800/80 flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <FileText className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              <div className="text-xs min-w-0">
+                <span className="font-semibold text-zinc-300">Extracted from Call Transcript: </span>
+                <span className="text-zinc-400 italic font-mono text-[11px] break-words">"{transcriptSnippet}"</span>
+              </div>
             </div>
+            <button
+              type="button"
+              disabled={loadingExtraction}
+              onClick={() => runExtraction(intakeCallTarget)}
+              className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] font-medium transition disabled:opacity-50 cursor-pointer"
+              title="Re-extract parameters from call transcript"
+            >
+              <RefreshCw className={`w-3 h-3 ${loadingExtraction ? 'animate-spin' : ''}`} />
+              <span>Re-Extract</span>
+            </button>
           </div>
         )}
 
