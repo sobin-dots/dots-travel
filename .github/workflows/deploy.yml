@@ -1,0 +1,35 @@
+
+name: Deploy dots-travel to Lightsail
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Lightsail
+    runs-on: [self-hosted, linux, x64, dots-travel]
+    timeout-minutes: 30
+
+    steps:
+      - name: Verify deployment script
+        run: |
+          cd /home/ubuntu/apps/dots-travel
+          test -f deploy.sh
+          bash -n deploy.sh
+
+      - name: Deploy application
+        run: |
+          cd /home/ubuntu/apps/dots-travel
+          bash deploy.sh
+
+      - name: Verify application
+        run: |
+          curl --fail --silent --show-error \
+            http://127.0.0.1:3000/api/v1/health
