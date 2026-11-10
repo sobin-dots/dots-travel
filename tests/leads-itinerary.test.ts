@@ -260,4 +260,28 @@ Supplier quote requested for 2 guests, luxury accommodations with daily breakfas
     expect(params.hotelTier).toBe('boutique_4star');
     expect(params.customerName).toBe('Prince');
   }, 30000);
+
+  it('correctly extracts New Zealand trip parameters, budget in words, and spoken email address without hallucinating December from decisions', async () => {
+    const userTranscript =
+      "Hello? Hello. Hi, this is LJD Holidays. Yeah, it's LJD Holidays. We are planning for a trip to New Zealand. And we are planning for five flights. And our budget is one lakh. Can you share any itinerary or more places where we are, the famous places in New Zealand to visit? Sure, ma'am. We will share your email and details to send these details. Can I share here or any other forms I have to fill? I can share it through this call. What? Come again? You can share it through this call. Okay. And you have to note it like gokilakarnan2003 at gmail.com. And all the letters are not in uppercase, just a small case. Any other details you want? I want an itinerary for my plan. Then only I have to take decisions like how it affords my budget. Within two hours, the itinerary details will be shared via email. Okay. Thank you. Please come again.";
+
+    const params = await extractTripParametersFromTranscript(userTranscript, {
+      name: 'Suhitha',
+      email: 'suhitha@3dots.co',
+      phone: '+916381387260',
+      referenceDate: '2026-11-10T18:00:00Z',
+    });
+
+    expect(params.destination).toBe('New Zealand');
+    // Critical: The word "decisions" in "take decisions" must NOT hallucinate December!
+    expect(params.departureDate).toBe('');
+    expect(params.returnDate).toBe('');
+    expect(params.durationDays).toBe(5);
+    expect(params.targetBudget).toBe(100000);
+    expect(params.customerEmail).toBe('gokilakarnan2003@gmail.com');
+    expect(params.customerName).toContain('Gokila');
+    expect(params.specialRequests).toBeDefined();
+    expect(params.specialRequests!).toContain('New Zealand');
+    expect(params.specialRequests!.toLowerCase()).toContain('budget');
+  }, 30000);
 });

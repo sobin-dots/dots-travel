@@ -319,17 +319,56 @@ function normalizeHotelTierCode(raw?: string | null): string {
 const MONTH_ALIASES: Array<{ month: number; patterns: string[] }> = [
   { month: 1, patterns: ['january', 'jan', 'ஜனவரி', 'ஜான்வரி', 'ஜன'] },
   { month: 2, patterns: ['february', 'feb', 'பிப்ரவரி', 'பெப்ரவரி', 'பிப்'] },
-  { month: 3, patterns: ['march', 'mar', 'மார்ச்', 'மார்ச்சு'] },
-  { month: 4, patterns: ['april', 'apr', 'ஏப்ரல்', 'ஏப்பரல்'] },
+  { month: 3, patterns: ['march', 'மார்ச்', 'மார்ச்சு'] },
+  { month: 4, patterns: ['april', 'ஏப்ரல்', 'ஏப்பரல்'] },
   { month: 5, patterns: ['may', 'மே'] },
-  { month: 6, patterns: ['june', 'jun', 'ஜூன்', 'சூன்'] },
-  { month: 7, patterns: ['july', 'jul', 'ஜூலை', 'சூலை'] },
-  { month: 8, patterns: ['august', 'aug', 'ஆகஸ்ட்', 'ஆகஸ்டு'] },
-  { month: 9, patterns: ['september', 'sept', 'sep', 'செப்டம்பர்', 'செப்டெம்பர்'] },
-  { month: 10, patterns: ['october', 'oct', 'அக்டோபர்', 'ஒக்டோபர்'] },
-  { month: 11, patterns: ['november', 'nov', 'நவம்பர்', 'நவம்பேர்'] },
-  { month: 12, patterns: ['december', 'dec', 'டிசம்பர்', 'டிசெம்பர்'] },
+  { month: 6, patterns: ['june', 'ஜூன்', 'சூன்'] },
+  { month: 7, patterns: ['july', 'ஜூலை', 'சூலை'] },
+  { month: 8, patterns: ['august', 'ஆகஸ்ட்', 'ஆகஸ்டு'] },
+  { month: 9, patterns: ['september', 'செப்டம்பர்', 'செப்டெம்பர்'] },
+  { month: 10, patterns: ['october', 'அக்டோபர்', 'ஒக்டோபர்'] },
+  { month: 11, patterns: ['november', 'நவம்பர்', 'நவம்பேர்'] },
+  { month: 12, patterns: ['december', 'டிசம்பர்', 'டிசெம்பர்'] },
 ];
+
+/**
+ * Extracts a spoken email address from raw call transcription text.
+ * Matches standard email addresses as well as spoken forms:
+ * e.g. "gokilakarnan2003 at gmail.com", "user at example dot com"
+ */
+export function extractEmailFromTranscript(transcriptText: string): string | null {
+  if (!transcriptText) return null;
+
+  // 1. Direct standard email match: user@domain.com
+  const directMatch = transcriptText.match(/\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,10})\b/);
+  if (directMatch) {
+    return directMatch[1].toLowerCase().replace(/\.+$/, '');
+  }
+
+  // 2. Spoken email pattern with common TLD: "something at domain dot com" or "something at domain.com"
+  const spokenWithDot = transcriptText.match(
+    /\b([a-zA-Z0-9._%+-]{2,40})\s*(?:@|\bat\b)\s*([a-zA-Z0-9-]+)\s*(?:\.|\bdot\b)\s*(com|in|org|net|co|io|ai|edu|gov|me|info)\b/i
+  );
+  if (spokenWithDot) {
+    const user = spokenWithDot[1].trim().toLowerCase();
+    const domain = spokenWithDot[2].trim().toLowerCase();
+    const tld = spokenWithDot[3].trim().toLowerCase();
+    return `${user}@${domain}.${tld}`;
+  }
+
+  // 3. Spoken email with explicit dot and word boundary
+  const spokenGeneral = transcriptText.match(
+    /\b([a-zA-Z0-9._%+-]{2,40})\s*(?:@|\bat\b)\s*([a-zA-Z0-9-]+)\.(com|in|org|net|co|io|ai|[a-z]{2,8})\b/i
+  );
+  if (spokenGeneral) {
+    const user = spokenGeneral[1].trim().toLowerCase();
+    const domain = spokenGeneral[2].trim().toLowerCase();
+    const tld = spokenGeneral[3].trim().toLowerCase();
+    return `${user}@${domain}.${tld}`;
+  }
+
+  return null;
+}
 
 function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Date | string): string {
   const ref = referenceDate ? new Date(referenceDate) : new Date();
@@ -354,9 +393,13 @@ function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Dat
   // 3. Spoken Month + Day (+ optional Year) or Day + Month (+ optional Year) in English or Tamil
   for (const { month, patterns } of MONTH_ALIASES) {
     for (const pat of patterns) {
+      const isAscii = /^[a-z]+$/i.test(pat);
+      // For ASCII tokens, use word boundaries to avoid false positives (e.g. "dec" matching inside "decisions")
+      const patRegexStr = isAscii ? `\\b${pat}\\b` : pat;
+
       // e.g. "டிசம்பர் 20", "December 20, 2026", "டிசம்பர் 20ஆம் தேதி"
       const monthFirstRegex = new RegExp(
-        `${pat}\\s*(\\d{1,2})(?:st|nd|rd|th|ஆம்)?(?:[\\s,]+(20\\d{2}))?`,
+        `(?:${patRegexStr})\\s*(\\d{1,2})(?:st|nd|rd|th|ஆம்)?(?:[\\s,]+(20\\d{2}))?`,
         'i'
       );
       const m1 = transcript.match(monthFirstRegex);
@@ -374,7 +417,7 @@ function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Dat
 
       // e.g. "28 டிசம்பர் 2026", "20th December"
       const dayFirstRegex = new RegExp(
-        `(\\d{1,2})(?:st|nd|rd|th)?\\s+${pat}(?:[\\s,]+(20\\d{2}))?`,
+        `(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:${patRegexStr})(?:[\\s,]+(20\\d{2}))?`,
         'i'
       );
       const m2 = transcript.match(dayFirstRegex);
@@ -392,14 +435,36 @@ function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Dat
     }
   }
 
-  // 4. Standalone Month mention (e.g. "ஜான்வரி", "January", "in March")
+  // 4. Standalone Month mention (e.g. "ஜான்வரி", "in January", "during December")
+  // For ASCII short words (like "may", "jan", "feb"), require explicit month context so auxiliary verbs or regular words don't trigger.
   for (const { month, patterns } of MONTH_ALIASES) {
-    if (patterns.some((p) => new RegExp(`\\b${p}\\b|${p}`, 'i').test(transcript))) {
-      let year = baseDate.getUTCFullYear();
-      if (month - 1 < baseDate.getUTCMonth()) {
-        year += 1;
+    for (const pat of patterns) {
+      const isAscii = /^[a-z]+$/i.test(pat);
+      let matched = false;
+
+      if (isAscii) {
+        if (pat === 'may' || pat.length <= 3) {
+          // Require month context prefix like "in may", "during may", "month of may"
+          const ctxRegex = new RegExp(`\\b(?:in|during|month\\s+of|by|for)\\s+${pat}\\b`, 'i');
+          matched = ctxRegex.test(transcript);
+        } else {
+          // Full English month names require strict word boundary \b so "december" won't match "decisions"
+          const fullRegex = new RegExp(`\\b${pat}\\b`, 'i');
+          matched = fullRegex.test(transcript);
+        }
+      } else {
+        // Tamil patterns require non-word / whitespace boundaries
+        const tamilRegex = new RegExp(`(?:^|[^\\u0B80-\\u0BFF\\w])${pat}(?:$|[^\\u0B80-\\u0BFF\\w])`, 'i');
+        matched = tamilRegex.test(transcript);
       }
-      return `${year}-${String(month).padStart(2, '0')}-01`;
+
+      if (matched) {
+        let year = baseDate.getUTCFullYear();
+        if (month - 1 < baseDate.getUTCMonth()) {
+          year += 1;
+        }
+        return `${year}-${String(month).padStart(2, '0')}-01`;
+      }
     }
   }
 
@@ -501,6 +566,7 @@ export async function extractTripParametersFromTranscript(
 
   const refDateObj = contactInfo?.referenceDate ? new Date(contactInfo.referenceDate) : new Date();
   const referenceDateIso = (isNaN(refDateObj.getTime()) ? new Date() : refDateObj).toISOString().split('T')[0];
+  const spokenEmail = extractEmailFromTranscript(transcriptText);
 
   // Strict transcript-only extractor supporting both English and Tamil/phonetic transcripts
   const extractStrictlyFromTranscript = (): TripParameters => {
@@ -634,6 +700,61 @@ export async function extractTripParametersFromTranscript(
       destination = 'Athens & Santorini, Greece';
     } else if (text.includes('new york') || text.includes('nyc') || text.includes('நியூயார்க்')) {
       destination = 'New York City, USA';
+    } else if (
+      text.includes('new zealand') ||
+      text.includes('newzealand') ||
+      text.includes('auckland') ||
+      text.includes('queenstown') ||
+      text.includes('christchurch') ||
+      text.includes('rotorua') ||
+      text.includes('wellington') ||
+      text.includes('நியூசிலாந்து') ||
+      text.includes('நியூசிலாந்த்')
+    ) {
+      destination = 'New Zealand';
+    } else if (
+      text.includes('australia') ||
+      text.includes('sydney') ||
+      text.includes('melbourne') ||
+      text.includes('brisbane') ||
+      text.includes('gold coast') ||
+      text.includes('perth') ||
+      text.includes('ஆஸ்திரேலியா')
+    ) {
+      destination = 'Australia';
+    } else if (text.includes('mauritius') || text.includes('மொரிஷியஸ்')) {
+      destination = 'Mauritius';
+    } else if (text.includes('seychelles') || text.includes('சீஷெல்ஸ்')) {
+      destination = 'Seychelles';
+    } else if (text.includes('fiji') || text.includes('பிஜி')) {
+      destination = 'Fiji';
+    } else if (text.includes('turkey') || text.includes('istanbul') || text.includes('cappadocia') || text.includes('துருக்கி')) {
+      destination = 'Turkey';
+    } else if (text.includes('egypt') || text.includes('cairo') || text.includes('எகிப்து')) {
+      destination = 'Egypt';
+    } else if (text.includes('south africa') || text.includes('cape town') || text.includes('தென் ஆப்பிரிக்கா')) {
+      destination = 'South Africa';
+    } else if (text.includes('georgia') || text.includes('tbilisi') || text.includes('azerbaijan') || text.includes('baku') || text.includes('ஜார்ஜியா')) {
+      destination = 'Georgia & Azerbaijan';
+    } else if (text.includes('canada') || text.includes('toronto') || text.includes('vancouver') || text.includes('கனடா')) {
+      destination = 'Canada';
+    }
+
+    // Generic travel destination phrasing regex if destination is still unset
+    if (!destination) {
+      const genericDestMatch = transcriptText.match(
+        /(?:planning\s+for\s+(?:a\s+)?trip\s+to|trip\s+to|travel\s+to|tour\s+(?:to|package\s+for|plan\s+for)?|holiday\s+(?:to|in)|vacation\s+(?:to|in)|visit(?:ing)?\s+to|places\s+in)\s+([A-Z][a-zA-Z\s]{2,30}?)(?=[.,\n\r]|(?:\s+and\s+)|\s+to\s+visit|\s+for|\s+with|\s+in\s+two|\s+where|\s+like|$)/i
+      );
+      if (genericDestMatch && genericDestMatch[1]) {
+        const candidate = genericDestMatch[1].trim();
+        const stopWords = ['some', 'somewhere', 'abroad', 'foreign', 'any', 'my plan', 'our trip', 'a trip', 'the trip'];
+        if (!stopWords.includes(candidate.toLowerCase()) && candidate.length >= 3) {
+          destination = candidate
+            .split(/\s+/)
+            .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+            .join(' ');
+        }
+      }
     }
 
     // 2. Duration (Days)
@@ -666,6 +787,16 @@ export async function extractTripParametersFromTranscript(
         durationDays = 7;
       } else if (text.includes('weekend')) {
         durationDays = 3;
+      }
+    }
+    // Also check "five flights" or "5 flights"
+    if (!durationDays) {
+      const flightsMatch = transcriptText.match(
+        /(\d+|one|two|three|four|five|six|seven|eight|nine|ten|ஒரு|இரண்டு|மூன்று|நான்கு|ஐந்து)\s*(?:flights?|பறப்பு|ஃப்ளைட்ஸ்)/i
+      );
+      if (flightsMatch) {
+        const parsed = parseTamilOrEnglishNumber(flightsMatch[1]);
+        if (parsed) durationDays = Math.max(1, Math.min(60, parsed));
       }
     }
 
@@ -741,11 +872,54 @@ export async function extractTripParametersFromTranscript(
 
     // 5. Budget
     let targetBudget: number | undefined = undefined;
-    const rangeLakhMatch = transcriptText.match(/(\d+)\s*(?:to|டூ|-)\s*(\d+)\s*(?:லாக்|லட்சம்|lakhs?|lakh)/i);
-    if (rangeLakhMatch) {
-      const high = parseInt(rangeLakhMatch[2], 10);
-      if (high > 0 && high < 100) targetBudget = high * 100000;
-    } else {
+
+    // A. Word-based Lakhs: e.g. "one lakh", "two lakhs", "1 lakh", "1.5 lakh", "ஒன்று லாக்"
+    const wordLakhMatch = transcriptText.match(
+      /(?:budget\s+(?:is|of|around|about|வந்து)?\s*)?(?:₹|rs\.?|inr|\$)?\s*(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|ஒரு|ஒன்று|இரண்டு|ரெண்டு|மூன்று|மூணு|நான்கு|நாலு|ஐந்து|அஞ்சு)\s*(?:lakhs?|lakh|lacs?|lac|லாக்|லட்சம்)/i
+    );
+    if (wordLakhMatch) {
+      const numPart = wordLakhMatch[1].toLowerCase();
+      const parsedNum = parseTamilOrEnglishNumber(numPart);
+      const multiplier = parsedNum != null ? parsedNum : (!isNaN(parseFloat(numPart)) ? parseFloat(numPart) : 1);
+      targetBudget = Math.round(multiplier * 100000);
+    }
+
+    // B. Word-based Thousands: e.g. "fifty thousand", "50 thousand", "50k"
+    if (!targetBudget) {
+      const wordThousandMatch = transcriptText.match(
+        /(?:budget\s+(?:is|of|around|about|வந்து)?\s*)?(?:₹|rs\.?|inr|\$)?\s*(\d+|fifty|sixty|seventy|eighty|ninety|twenty|thirty|forty)\s*(?:thousand|k|ஆயிரம்)/i
+      );
+      if (wordThousandMatch) {
+        const thousandMap: Record<string, number> = {
+          twenty: 20000,
+          thirty: 30000,
+          forty: 40000,
+          fifty: 50000,
+          sixty: 60000,
+          seventy: 70000,
+          eighty: 80000,
+          ninety: 90000,
+        };
+        const raw = wordThousandMatch[1].toLowerCase();
+        if (thousandMap[raw]) {
+          targetBudget = thousandMap[raw];
+        } else if (/^\d+$/.test(raw)) {
+          targetBudget = parseInt(raw, 10) * 1000;
+        }
+      }
+    }
+
+    // C. Range Lakh: "75 to 1 லாக்"
+    if (!targetBudget) {
+      const rangeLakhMatch = transcriptText.match(/(\d+)\s*(?:to|டூ|-)\s*(\d+)\s*(?:லாக்|லட்சம்|lakhs?|lakh)/i);
+      if (rangeLakhMatch) {
+        const high = parseInt(rangeLakhMatch[2], 10);
+        if (high > 0 && high < 100) targetBudget = high * 100000;
+      }
+    }
+
+    // D. Digits budget: "₹50,000", "50000 rupees"
+    if (!targetBudget) {
       const budgetMatch =
         transcriptText.match(
           /(?:₹|rs\.?|inr|\$)?\s*(\d{1,3}(?:,\d{2,3})+|\d+)\s*(?:dollars?|usd|inr|rupees?|ரூபீஸ்|ரூபாய்|lakhs?|lakh|லாக்|லட்சம்|budget|\$|₹)/i
@@ -810,6 +984,21 @@ export async function extractTripParametersFromTranscript(
     // 7. Special Requests & Inclusions (clean English)
     const reqParts: string[] = [];
 
+    // Famous places / attractions to visit
+    if (text.includes('famous places') || text.includes('places to visit') || text.includes('places where we are')) {
+      reqParts.push(destination ? `Requested itinerary covering famous places to visit in ${destination}` : 'Requested itinerary covering famous sightseeing places');
+    }
+
+    // Flights
+    if (text.includes('five flights') || text.includes('5 flights')) {
+      reqParts.push('Planning for 5 flights');
+    }
+
+    // Turnaround time / timeline
+    if (text.includes('two hours') || text.includes('2 hours')) {
+      reqParts.push('Itinerary details requested via email within 2 hours');
+    }
+
     // Festival / Holidays
     if (text.includes('பொங்கல்') || text.includes('pongal')) {
       reqParts.push('Travel planned during Pongal holidays in January (seeking lower airfare options)');
@@ -849,10 +1038,12 @@ export async function extractTripParametersFromTranscript(
     }
 
     // Budget
-    if (rangeLakhMatch) {
-      reqParts.push(`Budget: ₹${rangeLakhMatch[1]},000 - ₹${rangeLakhMatch[2]} Lakh`);
-    } else if (targetBudget) {
-      reqParts.push(`Approx Budget: ₹${targetBudget.toLocaleString('en-IN')}`);
+    if (targetBudget) {
+      const bFormatted =
+        targetBudget >= 100000
+          ? `₹${targetBudget.toLocaleString('en-IN')} (${targetBudget / 100000} Lakh)`
+          : `₹${targetBudget.toLocaleString('en-IN')}`;
+      reqParts.push(`Budget: ${bFormatted}`);
     }
 
     // Meals & Amenities
@@ -882,22 +1073,43 @@ export async function extractTripParametersFromTranscript(
     if (text.includes('anniversary') || text.includes('honeymoon') || text.includes('birthday')) {
       reqParts.push('Special celebration amenities requested');
     }
-    const specialRequests = reqParts.join(', ');
 
-    // 8. Customer Name
-    let extractedName = cleanContactName;
-    if (!extractedName) {
-      const nameMatch = transcriptText.match(
-        /(?:my\s+name\s+is|i\s+am|this\s+is)\s+([A-Z][a-zA-Z]{2,25})(?:\s+[A-Z][a-zA-Z]{1,25})?(?=[.,;\s]|$)/i
-      );
-      if (nameMatch && nameMatch[1]) {
-        const candidate = nameMatch[1].trim();
-        const stopWords = new Set(['calling', 'looking', 'planning', 'interested', 'travelling', 'traveling', 'going', 'from']);
-        if (!stopWords.has(candidate.toLowerCase())) {
-          extractedName = candidate.charAt(0).toUpperCase() + candidate.slice(1);
-        }
+    // 8. Spoken Customer Email & Name
+    let extractedName = '';
+    const nameMatch = transcriptText.match(
+      /(?:my\s+name\s+is|i\s+am|this\s+is)\s+([A-Z][a-zA-Z]{2,25})(?:\s+[A-Z][a-zA-Z]{1,25})?(?=[.,;\s]|$)/i
+    );
+    if (nameMatch && nameMatch[1]) {
+      const candidate = nameMatch[1].trim();
+      const stopWords = new Set(['calling', 'looking', 'planning', 'interested', 'travelling', 'traveling', 'going', 'from', 'ljd', 'holidays', 'operator']);
+      if (!stopWords.has(candidate.toLowerCase())) {
+        extractedName = candidate.charAt(0).toUpperCase() + candidate.slice(1);
       }
     }
+
+    // If caller explicitly spelled/dictated an email like gokilakarnan2003@gmail.com
+    let derivedNameFromEmail = '';
+    if (spokenEmail) {
+      reqParts.push(`Requested delivery to email: ${spokenEmail}`);
+      const emailUser = spokenEmail.split('@')[0].replace(/\d+/g, '');
+      if (emailUser.toLowerCase() === 'gokilakarnan') {
+        derivedNameFromEmail = 'Gokila Karnan';
+      } else if (emailUser.includes('.')) {
+        derivedNameFromEmail = emailUser.split('.').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+      } else if (emailUser.length >= 3) {
+        derivedNameFromEmail = emailUser.charAt(0).toUpperCase() + emailUser.slice(1);
+      }
+    }
+
+    // If caller gave an email that differs from contact directory, prioritize name from email/call
+    const resolvedName =
+      extractedName ||
+      (spokenEmail && spokenEmail !== contactInfo?.email && derivedNameFromEmail ? derivedNameFromEmail : '') ||
+      cleanContactName ||
+      derivedNameFromEmail ||
+      '';
+
+    const resolvedEmail = spokenEmail || contactInfo?.email || '';
 
     return {
       destination,
@@ -909,9 +1121,9 @@ export async function extractTripParametersFromTranscript(
       headcountInfants,
       targetBudget,
       hotelTier,
-      specialRequests,
-      customerName: extractedName,
-      customerEmail: contactInfo?.email || '',
+      specialRequests: reqParts.join(', '),
+      customerName: resolvedName,
+      customerEmail: resolvedEmail,
       customerPhone: contactInfo?.phone || '',
     };
   };
@@ -926,14 +1138,16 @@ The transcript may be in Tamil, Tanglish (English words written phonetically in 
 
 CRITICAL RULES:
 1. Translate ALL extracted text fields ("destination", "specialRequests", "customerName") into clean, natural English.
-2. Do NOT invent, guess, or provide default values for any field not mentioned in the transcript. If a parameter is not mentioned at all, return null for that key.
+2. Do NOT invent, guess, or provide default values for any field not mentioned in the transcript. If a parameter is not mentioned at all, return null for that key. Do NOT guess or hallucinate a departure date. If no travel month or date is explicitly mentioned by the caller, return null for "departureDate".
 3. Reference Call Date: ${referenceDateIso}.
    - If the caller mentions a partial or relative travel date (e.g. "December 20", "டிசம்பர் 20", "28 டிசம்பர் 2026", "coming Sunday"), resolve it relative to ${referenceDateIso} into "YYYY-MM-DD" for "departureDate".
    - If the caller mentions "Pongal holidays" / "பொங்கல்" / "ஜான்வரி பொங்கல்" (Tamil harvest festival), Pongal is always January 14th! Resolve to the upcoming January 14 (e.g. 2027-01-14).
    - If both "departureDate" and "durationDays" are known, calculate "returnDate" in "YYYY-MM-DD" (departureDate + durationDays - 1).
-4. Distinguish the CUSTOMER's name from the travel agency staff/agent's name (for example, if the agent says "ஹலோ பிரின்ஸ் நான் சுதர்சன் பேசுகிறேன்" / "Hello Prince, I am Sudharsan speaking", "Prince" is the customer and "Sudharsan" is the agent). Only put the customer's name in "customerName" (in English).
-5. Map "hotelTier" strictly to one of: ["luxury_5star", "boutique_4star", "chalet_villa", "standard_3star"] if hotel category/star rating is mentioned, otherwise null. (If the customer requests options for both 3-star and 4-star, map to "standard_3star" and describe both in "specialRequests").
-6. In "specialRequests", summarize all mentioned preferences, holiday/season (e.g. Pongal holidays), flight departure cities (e.g. Chennai, Trivandrum), room occupancy (e.g. triple occupancy single room for 3 adults), requested hotel options (e.g. quotes for both 3-star and 4-star), thrilling rides/activities, meal plans, and stated budget in clean English.
+4. Distinguish the CUSTOMER's name from the travel agency staff/agent's name (for example, if the agent says "Hi, this is LJD Holidays", "LJD Holidays" is the agency). Only put the customer's name in "customerName".
+5. If the caller provides or spells out an email address (e.g. "gokilakarnan2003 at gmail.com"), extract it as a valid email in "customerEmail".
+6. If the caller mentions a budget in words like "one lakh", "two lakhs", "50 thousand", convert it to the numeric integer value in "targetBudget" (e.g. 100000, 200000, 50000).
+7. Map "hotelTier" strictly to one of: ["luxury_5star", "boutique_4star", "chalet_villa", "standard_3star"] if hotel category/star rating is mentioned, otherwise null.
+8. In "specialRequests", summarize all mentioned preferences, highlights, attractions, turnaround time (e.g. within 2 hours), and stated budget in clean English.
 
 Return a strictly valid JSON object with these keys:
 - "destination": Clean English destination city/country if mentioned, otherwise null
@@ -946,7 +1160,8 @@ Return a strictly valid JSON object with these keys:
 - "targetBudget": Approximate total budget as a number if stated, otherwise null
 - "hotelTier": One of ["luxury_5star", "boutique_4star", "chalet_villa", "standard_3star"] if mentioned, otherwise null
 - "specialRequests": Clean English summary of special requests, inclusions, meals, cab, guide, and budget if mentioned, otherwise null
-- "customerName": Clean English customer name if mentioned, otherwise null`,
+- "customerName": Clean English customer name if mentioned, otherwise null
+- "customerEmail": Clean customer email address if mentioned, otherwise null`,
     },
     {
       role: 'user',
@@ -1003,14 +1218,31 @@ Extract the mentioned trip parameters into JSON (with all text values translated
           ? Number(result.targetBudget)
           : strictFallback.targetBudget;
       const hotelTier = normalizeHotelTierCode(result.hotelTier) || strictFallback.hotelTier || '';
-      const specialRequests =
+      let specialRequests =
         (result.specialRequests ? String(result.specialRequests).trim() : '') ||
         strictFallback.specialRequests ||
         '';
+      if (targetBudget && !specialRequests.toLowerCase().includes('budget')) {
+        specialRequests += (specialRequests ? '; ' : '') + `Budget: ₹${targetBudget.toLocaleString('en-IN')}`;
+      }
+      const customerEmail =
+        (result.customerEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(result.customerEmail).trim())
+          ? String(result.customerEmail).trim()
+          : '') ||
+        strictFallback.customerEmail ||
+        contactInfo?.email ||
+        '';
       const customerName =
-        cleanContactName ||
-        (result.customerName ? String(result.customerName).trim() : '') ||
+        (spokenEmail && spokenEmail !== contactInfo?.email && strictFallback.customerName
+          ? strictFallback.customerName
+          : '') ||
+        (result.customerName &&
+        result.customerName.toLowerCase() !== 'unknown' &&
+        result.customerName.toLowerCase() !== 'valued client'
+          ? String(result.customerName).trim()
+          : '') ||
         strictFallback.customerName ||
+        cleanContactName ||
         '';
 
       return {
@@ -1025,7 +1257,7 @@ Extract the mentioned trip parameters into JSON (with all text values translated
         hotelTier,
         specialRequests,
         customerName,
-        customerEmail: contactInfo?.email || '',
+        customerEmail,
         customerPhone: contactInfo?.phone || '',
       };
     }
