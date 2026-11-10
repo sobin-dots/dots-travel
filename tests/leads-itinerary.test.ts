@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '../src/lib/db';
-import { generateItineraryFromTranscript, reviseItineraryWithDeepSeek } from '../src/lib/deepseek';
+import {
+  extractTripParametersFromTranscript,
+  generateItineraryFromTranscript,
+  reviseItineraryWithDeepSeek,
+} from '../src/lib/deepseek';
 import { generateItineraryPDF } from '../src/lib/pdf-generator';
 
 describe('DeepSeek Concierge Itinerary & Leads Workflow', () => {
@@ -236,4 +240,24 @@ Supplier quote requested for 2 guests, luxury accommodations with daily breakfas
     });
     expect(convertedLead.status).toBe('converted');
   });
+
+  it('extracts and translates Tamil/Tanglish call transcript parameters into English with calculated returnDate', async () => {
+    const tamilSingaporeTranscript =
+      'சிங்கப்பூர் மட்டும் தான் பாக்குறேன். 28 டிசம்பர் 2026 கிளம்புறோம். நான், வைஃப்பும், அப்புறம் ரெண்டு கிட்ஸ் வாரங்க ஐயா. 4 ஸ்டார்னா பெட்டரா இருக்கும். 3 நைட்ஸ் 4 டேஸ் நாங்க பிளான் பண்டுரோம். பர்சனுக்கு அரோண்டு ஒரு 75 to 1 லாக் வைச்சிருக்கிறோம். தமிழ் டிரைவர் கொடுத்தீங்கன்னா நல்லா இருக்கும்.';
+
+    const params = await extractTripParametersFromTranscript(tamilSingaporeTranscript, {
+      name: 'Prince',
+      email: 'prince@lgtholidays.com',
+      referenceDate: '2026-10-31T17:09:00Z',
+    });
+
+    expect(params.destination).toContain('Singapore');
+    expect(params.departureDate).toBe('2026-12-28');
+    expect(params.durationDays).toBe(4);
+    expect(params.returnDate).toBe('2026-12-31');
+    expect(params.headcountAdults).toBe(2);
+    expect(params.headcountChildren).toBe(2);
+    expect(params.hotelTier).toBe('boutique_4star');
+    expect(params.customerName).toBe('Prince');
+  }, 30000);
 });
