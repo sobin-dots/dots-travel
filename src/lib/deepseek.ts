@@ -117,6 +117,11 @@ async function callLlmJson<T>({
   const config = await resolveTenantAiConfig(organizationId);
 
   const effectiveTimeout = process.env.NODE_ENV === 'test' ? Math.min(timeoutMs, 4000) : timeoutMs;
+  // Use a per-provider timeout so that if DeepSeek is slow/unresponsive (> 8s), OpenAI fallback runs immediately
+  const perProviderTimeout =
+    process.env.NODE_ENV === 'test'
+      ? Math.min(effectiveTimeout, 4000)
+      : Math.min(effectiveTimeout, 10000);
 
   // 1. Primary for itinerary intelligence: DeepSeek API
   if (config.deepseekKey) {
@@ -128,7 +133,7 @@ async function callLlmJson<T>({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${config.deepseekKey}`,
         },
-        signal: AbortSignal.timeout(effectiveTimeout),
+        signal: AbortSignal.timeout(perProviderTimeout),
         body: JSON.stringify({
           model: config.deepseekModel,
           response_format: { type: 'json_object' },
@@ -165,7 +170,7 @@ async function callLlmJson<T>({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${config.openaiKey}`,
         },
-        signal: AbortSignal.timeout(effectiveTimeout),
+        signal: AbortSignal.timeout(perProviderTimeout),
         body: JSON.stringify({
           model: config.openaiModel,
           response_format: { type: 'json_object' },
@@ -312,18 +317,18 @@ function normalizeHotelTierCode(raw?: string | null): string {
 }
 
 const MONTH_ALIASES: Array<{ month: number; patterns: string[] }> = [
-  { month: 1, patterns: ['january', 'jan', 'ஜனவரி'] },
-  { month: 2, patterns: ['february', 'feb', 'பிப்ரவரி', 'பெப்ரவரி'] },
-  { month: 3, patterns: ['march', 'mar', 'மார்ச்'] },
-  { month: 4, patterns: ['april', 'apr', 'ஏப்ரல்'] },
+  { month: 1, patterns: ['january', 'jan', 'ஜனவரி', 'ஜான்வரி', 'ஜன'] },
+  { month: 2, patterns: ['february', 'feb', 'பிப்ரவரி', 'பெப்ரவரி', 'பிப்'] },
+  { month: 3, patterns: ['march', 'mar', 'மார்ச்', 'மார்ச்சு'] },
+  { month: 4, patterns: ['april', 'apr', 'ஏப்ரல்', 'ஏப்பரல்'] },
   { month: 5, patterns: ['may', 'மே'] },
-  { month: 6, patterns: ['june', 'jun', 'ஜூன்'] },
-  { month: 7, patterns: ['july', 'jul', 'ஜூலை'] },
-  { month: 8, patterns: ['august', 'aug', 'ஆகஸ்ட்'] },
-  { month: 9, patterns: ['september', 'sept', 'sep', 'செப்டம்பர்'] },
-  { month: 10, patterns: ['october', 'oct', 'அக்டோபர்'] },
-  { month: 11, patterns: ['november', 'nov', 'நவம்பர்'] },
-  { month: 12, patterns: ['december', 'dec', 'டிசம்பர்'] },
+  { month: 6, patterns: ['june', 'jun', 'ஜூன்', 'சூன்'] },
+  { month: 7, patterns: ['july', 'jul', 'ஜூலை', 'சூலை'] },
+  { month: 8, patterns: ['august', 'aug', 'ஆகஸ்ட்', 'ஆகஸ்டு'] },
+  { month: 9, patterns: ['september', 'sept', 'sep', 'செப்டம்பர்', 'செப்டெம்பர்'] },
+  { month: 10, patterns: ['october', 'oct', 'அக்டோபர்', 'ஒக்டோபர்'] },
+  { month: 11, patterns: ['november', 'nov', 'நவம்பர்', 'நவம்பேர்'] },
+  { month: 12, patterns: ['december', 'dec', 'டிசம்பர்', 'டிசெம்பர்'] },
 ];
 
 function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Date | string): string {
@@ -334,7 +339,19 @@ function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Dat
   const isoMatch = transcript.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
   if (isoMatch) return isoMatch[1];
 
-  // 2. Spoken Month + Day (+ optional Year) or Day + Month (+ optional Year) in English or Tamil
+  const lower = transcript.toLowerCase();
+
+  // 2. Pongal festival (Tamil Nadu harvest festival celebrated on January 14th)
+  if (lower.includes('பொங்கல்') || lower.includes('pongal') || lower.includes('சங்கராந்தி') || lower.includes('sankranti')) {
+    let year = baseDate.getUTCFullYear();
+    // If the reference date is after mid-January (e.g. October/November/December), Pongal is in the upcoming January
+    if (baseDate.getUTCMonth() > 0 || (baseDate.getUTCMonth() === 0 && baseDate.getUTCDate() > 14)) {
+      year += 1;
+    }
+    return `${year}-01-14`;
+  }
+
+  // 3. Spoken Month + Day (+ optional Year) or Day + Month (+ optional Year) in English or Tamil
   for (const { month, patterns } of MONTH_ALIASES) {
     for (const pat of patterns) {
       // e.g. "டிசம்பர் 20", "December 20, 2026", "டிசம்பர் 20ஆம் தேதி"
@@ -375,7 +392,18 @@ function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Dat
     }
   }
 
-  // 3. Relative weekday (e.g. "coming Sunday", "next Sunday", "சண்டே", "ஞாயிற்றுக்கிழமை")
+  // 4. Standalone Month mention (e.g. "ஜான்வரி", "January", "in March")
+  for (const { month, patterns } of MONTH_ALIASES) {
+    if (patterns.some((p) => new RegExp(`\\b${p}\\b|${p}`, 'i').test(transcript))) {
+      let year = baseDate.getUTCFullYear();
+      if (month - 1 < baseDate.getUTCMonth()) {
+        year += 1;
+      }
+      return `${year}-${String(month).padStart(2, '0')}-01`;
+    }
+  }
+
+  // 5. Relative weekday (e.g. "coming Sunday", "next Sunday", "சண்டே", "ஞாயிற்றுக்கிழமை")
   const weekdayMap: Array<{ dayOfWeek: number; tokens: string[] }> = [
     { dayOfWeek: 0, tokens: ['sunday', 'சண்டே', 'ஞாயிறு', 'ஞாயிற்றுக்கிழமை'] },
     { dayOfWeek: 1, tokens: ['monday', 'மண்டே', 'திங்கள்', 'திங்கட்கிழமை'] },
@@ -385,7 +413,6 @@ function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Dat
     { dayOfWeek: 5, tokens: ['friday', 'ஃபிரைடே', 'வெள்ளி'] },
     { dayOfWeek: 6, tokens: ['saturday', 'சாட்டர்டே', 'சனி', 'சனிக்கிழமை'] },
   ];
-  const lower = transcript.toLowerCase();
   for (const { dayOfWeek, tokens } of weekdayMap) {
     if (tokens.some((tok) => lower.includes(tok))) {
       const currentDow = baseDate.getUTCDay();
@@ -481,9 +508,23 @@ export async function extractTripParametersFromTranscript(
 
     // 1. Destination (clean English)
     let destination = '';
-    if (text.includes('singapore') || text.includes('sentosa') || text.includes('சிங்கப்பூர்') || text.includes('சென்டோசா')) {
+    if (text.includes('singapore') || text.includes('sentosa') || text.includes('சிங்கப்பூர்') || text.includes('சிங்கபூர்') || text.includes('சென்டோசா')) {
       destination = 'Singapore';
-    } else if (text.includes('maldives') || text.includes('மால்தீவ்ஸ்') || text.includes('மாலத்தீவு')) {
+    } else if (
+      text.includes('malaysia') ||
+      text.includes('kuala lumpur') ||
+      text.includes('langkawi') ||
+      text.includes('genting') ||
+      text.includes('மலேசியா') ||
+      text.includes('மலேஷியா') ||
+      text.includes('மலேசிய') ||
+      text.includes('கோலாலம்பூர்') ||
+      text.includes('லங்காவி') ||
+      text.includes('ஜெண்டிங்') ||
+      text.includes('மலேயா')
+    ) {
+      destination = 'Malaysia';
+    } else if (text.includes('maldives') || text.includes('மால்தீவ்ஸ்') || text.includes('மாலத்தீவு') || text.includes('மாலத்தீவுகள்')) {
       destination = 'Maldives';
     } else if (
       text.includes('dubai') ||
@@ -503,7 +544,7 @@ export async function extractTripParametersFromTranscript(
       text.includes('ரோம்') ||
       text.includes('இத்தாலி')
     ) {
-      destination = text.includes('யூரோப்') || text.includes('europe') ? 'Rome, Europe' : 'Rome & Amalfi Coast, Italy';
+      destination = text.includes('யூரோப்') || text.includes('europe') || text.includes('ஐரோப்பா') ? 'Rome, Europe' : 'Rome & Amalfi Coast, Italy';
     } else if (text.includes('europe') || text.includes('யூரோப்') || text.includes('ஐரோப்பா')) {
       destination = 'Europe';
     } else if (text.includes('paris') || text.includes('france') || text.includes('பாரிஸ்') || text.includes('பிரான்ஸ்')) {
@@ -515,30 +556,25 @@ export async function extractTripParametersFromTranscript(
       text.includes('zurich') ||
       text.includes('zermatt') ||
       text.includes('சுவிட்சர்லாந்து') ||
+      text.includes('சுவிஸர்லாந்து') ||
       text.includes('சுவிஸ்')
     ) {
       destination = 'Swiss Alps, Switzerland';
-    } else if (text.includes('bali') || text.includes('indonesia') || text.includes('ubud') || text.includes('பாலி')) {
+    } else if (text.includes('bali') || text.includes('indonesia') || text.includes('ubud') || text.includes('பாலி') || text.includes('இந்தோனேஷியா')) {
       destination = 'Bali, Indonesia';
     } else if (
       text.includes('thailand') ||
       text.includes('phuket') ||
       text.includes('bangkok') ||
       text.includes('krabi') ||
+      text.includes('pattaya') ||
       text.includes('தாய்லாந்து') ||
+      text.includes('தாய்லாண்டு') ||
       text.includes('பூகெட்') ||
       text.includes('பாங்காக்') ||
       text.includes('பட்டாயா')
     ) {
       destination = 'Phuket & Krabi, Thailand';
-    } else if (
-      text.includes('malaysia') ||
-      text.includes('kuala lumpur') ||
-      text.includes('langkawi') ||
-      text.includes('மலேசியா') ||
-      text.includes('லங்காவி')
-    ) {
-      destination = 'Kuala Lumpur & Langkawi, Malaysia';
     } else if (
       text.includes('sri lanka') ||
       text.includes('colombo') ||
@@ -732,6 +768,11 @@ export async function extractTripParametersFromTranscript(
 
     // 6. Hotel Tier
     let hotelTier = '';
+    const hasBoth3And4Star =
+      (text.includes('3 star') || text.includes('3 ஸ்டார்')) &&
+      (text.includes('4 star') || text.includes('4 ஸ்டார்')) &&
+      (text.includes('இரண்டு') || text.includes('ரெண்டு') || text.includes('both') || text.includes('ஆப்சன்'));
+
     if (text.includes('chalet') || text.includes('villa') || text.includes('வில்லா')) {
       hotelTier = 'chalet_villa';
     } else if (
@@ -744,6 +785,8 @@ export async function extractTripParametersFromTranscript(
       text.includes('லக்ஸரி')
     ) {
       hotelTier = 'luxury_5star';
+    } else if (hasBoth3And4Star) {
+      hotelTier = 'standard_3star'; // Default to standard 3-star when comparing 3-star & 4-star options
     } else if (
       text.includes('boutique') ||
       text.includes('4 star') ||
@@ -766,11 +809,53 @@ export async function extractTripParametersFromTranscript(
 
     // 7. Special Requests & Inclusions (clean English)
     const reqParts: string[] = [];
+
+    // Festival / Holidays
+    if (text.includes('பொங்கல்') || text.includes('pongal')) {
+      reqParts.push('Travel planned during Pongal holidays in January (seeking lower airfare options)');
+    } else if (text.includes('தீபாவளி') || text.includes('diwali')) {
+      reqParts.push('Travel planned during Diwali holidays');
+    }
+
+    // Departure flight cities
+    const depCities: string[] = [];
+    if (text.includes('சென்னை') || text.includes('chennai') || text.includes('மெட்ராஸ்')) depCities.push('Chennai');
+    if (text.includes('ரவாண்டரம்') || text.includes('திரிவேந்திரம்') || text.includes('trivandrum') || text.includes('திருவனந்தபுரம்')) depCities.push('Trivandrum');
+    if (text.includes('மதுரை') || text.includes('madurai')) depCities.push('Madurai');
+    if (text.includes('கொச்சி') || text.includes('cochin') || text.includes('kochi')) depCities.push('Kochi');
+    if (text.includes('பெங்களூர்') || text.includes('bangalore') || text.includes('bengaluru')) depCities.push('Bangalore');
+    if (depCities.length > 0) {
+      reqParts.push(`Flight options requested from ${depCities.join(' & ')}`);
+    }
+
+    // Room sharing / occupancy
+    if (text.includes('ட்ரிபில்') || text.includes('triple') || (text.includes('ஒரு ரூம்') && text.includes('மூன்று')) || (text.includes('ஒரே ரூம்') && text.includes('மூன்று'))) {
+      reqParts.push('Triple occupancy room requested (single room for 3 adults)');
+    }
+
+    // Both 3-star and 4-star options
+    if (hasBoth3And4Star) {
+      reqParts.push('Provide quotes for both 3-Star and 4-Star hotel options to discuss with family');
+    }
+
+    // Thrilling rides / theme parks / resort
+    if (text.includes('திரில்லிங்') || text.includes('ரைட்ஸ்') || text.includes('rides') || text.includes('resort') || text.includes('ரஸாட்')) {
+      reqParts.push('Exciting attractions, resort stay & thrilling rides requested');
+    }
+
+    // Land package & pricing breakdown
+    if (text.includes('லான்ட் பாக்கேஜ்') || text.includes('land package')) {
+      reqParts.push('Land package pricing requested (airline tickets separate)');
+    }
+
+    // Budget
     if (rangeLakhMatch) {
       reqParts.push(`Budget: ₹${rangeLakhMatch[1]},000 - ₹${rangeLakhMatch[2]} Lakh`);
     } else if (targetBudget) {
-      reqParts.push(`Budget: ₹${targetBudget.toLocaleString('en-IN')}`);
+      reqParts.push(`Approx Budget: ₹${targetBudget.toLocaleString('en-IN')}`);
     }
+
+    // Meals & Amenities
     if (text.includes('பிரேக்ஃபாஸ்ட்') || text.includes('breakfast')) {
       if (text.includes('டின்னர்') || text.includes('dinner')) {
         reqParts.push('Breakfast and dinner included');
@@ -780,6 +865,8 @@ export async function extractTripParametersFromTranscript(
     } else if (text.includes('ஃபுட்') || text.includes('சாப்பாடு') || text.includes('food')) {
       reqParts.push('All meals / food package requested');
     }
+
+    // Transfers & Driver
     if (text.includes('தனியா கேப்') || text.includes('private cab') || (text.includes('சைட்சீயிங்') && text.includes('கேப்'))) {
       reqParts.push('Private sightseeing cab');
     }
@@ -840,10 +927,13 @@ The transcript may be in Tamil, Tanglish (English words written phonetically in 
 CRITICAL RULES:
 1. Translate ALL extracted text fields ("destination", "specialRequests", "customerName") into clean, natural English.
 2. Do NOT invent, guess, or provide default values for any field not mentioned in the transcript. If a parameter is not mentioned at all, return null for that key.
-3. Reference Call Date: ${referenceDateIso}. If the caller mentions a partial or relative travel date (e.g. "December 20", "டிசம்பர் 20", "28 டிசம்பர் 2026", "coming Sunday"), resolve it relative to ${referenceDateIso} into "YYYY-MM-DD" for "departureDate". If both "departureDate" and "durationDays" are known, calculate "returnDate" in "YYYY-MM-DD".
+3. Reference Call Date: ${referenceDateIso}.
+   - If the caller mentions a partial or relative travel date (e.g. "December 20", "டிசம்பர் 20", "28 டிசம்பர் 2026", "coming Sunday"), resolve it relative to ${referenceDateIso} into "YYYY-MM-DD" for "departureDate".
+   - If the caller mentions "Pongal holidays" / "பொங்கல்" / "ஜான்வரி பொங்கல்" (Tamil harvest festival), Pongal is always January 14th! Resolve to the upcoming January 14 (e.g. 2027-01-14).
+   - If both "departureDate" and "durationDays" are known, calculate "returnDate" in "YYYY-MM-DD" (departureDate + durationDays - 1).
 4. Distinguish the CUSTOMER's name from the travel agency staff/agent's name (for example, if the agent says "ஹலோ பிரின்ஸ் நான் சுதர்சன் பேசுகிறேன்" / "Hello Prince, I am Sudharsan speaking", "Prince" is the customer and "Sudharsan" is the agent). Only put the customer's name in "customerName" (in English).
-5. Map "hotelTier" strictly to one of: ["luxury_5star", "boutique_4star", "chalet_villa", "standard_3star"] if hotel category/star rating is mentioned, otherwise null.
-6. In "specialRequests", summarize all mentioned preferences, meal plans (e.g. breakfast & dinner, free food), transport (e.g. private sightseeing cab), driver/guide language (e.g. Tamil-speaking driver), and stated budget in clean English.
+5. Map "hotelTier" strictly to one of: ["luxury_5star", "boutique_4star", "chalet_villa", "standard_3star"] if hotel category/star rating is mentioned, otherwise null. (If the customer requests options for both 3-star and 4-star, map to "standard_3star" and describe both in "specialRequests").
+6. In "specialRequests", summarize all mentioned preferences, holiday/season (e.g. Pongal holidays), flight departure cities (e.g. Chennai, Trivandrum), room occupancy (e.g. triple occupancy single room for 3 adults), requested hotel options (e.g. quotes for both 3-star and 4-star), thrilling rides/activities, meal plans, and stated budget in clean English.
 
 Return a strictly valid JSON object with these keys:
 - "destination": Clean English destination city/country if mentioned, otherwise null
@@ -873,7 +963,7 @@ Extract the mentioned trip parameters into JSON (with all text values translated
     const result = await callLlmJson<TripParameters>({
       messages,
       temperature: 0.1,
-      timeoutMs: 12000,
+      timeoutMs: 20000,
       organizationId,
     });
 
