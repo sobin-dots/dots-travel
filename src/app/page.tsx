@@ -107,10 +107,7 @@ export default function LandingPage() {
           <a href="#features" className="hover:text-zinc-200 transition">Telephony & AI</a>
           <a href="#workflow" className="hover:text-zinc-200 transition">Workflow</a>
           <a href="#security" className="hover:text-zinc-200 transition">Compliance</a>
-          <Link href="/docs" className="hover:text-indigo-400 flex items-center gap-1 transition">
-            <span>API Docs</span>
-            <ExternalLink className="w-3 h-3" />
-          </Link>
+
         </nav>
 
         {/* Right Auth Buttons */}

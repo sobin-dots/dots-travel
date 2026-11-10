@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { ItineraryIntakeModal } from './ItineraryIntakeModal';
+import { BulkContactsModal } from './BulkContactsModal';
 
 export function GlobalModals() {
   const {
@@ -486,6 +487,8 @@ export function GlobalModals() {
       )}
       {/* Itinerary Intake & Customization Modal */}
       <ItineraryIntakeModal />
+      {/* Bulk Contacts CSV Upload Modal */}
+      <BulkContactsModal />
     </>
   );
 }

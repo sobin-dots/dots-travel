@@ -333,13 +333,20 @@ export async function POST(req: NextRequest) {
       const baseAnswerUrl = dbWebhookUrls.voiceAnswer || `${effectiveBase}/api/v1/webhooks/voice/answer?orgId=${auth!.organizationId}`;
       const sep = baseAnswerUrl.includes('?') ? '&' : '?';
       answerUrl = `${baseAnswerUrl}${sep}mode=${mode}`;
-      if ((mode === 'forward' || mode === 'bridge') && forwardTo) {
+      if (mode === 'bridge' && forwardTo) {
+        // In bridge mode: provider dials the staff member first, then on answer connects to customer 'to'
+        answerUrl += `&connectTo=${encodeURIComponent(to)}&forwardTo=${encodeURIComponent(forwardTo)}`;
+      } else if (mode === 'forward' && forwardTo) {
         answerUrl += `&forwardTo=${encodeURIComponent(forwardTo)}`;
       }
     }
 
     const ringUrl = dbWebhookUrls.voiceStatus || `${effectiveBase}/api/v1/webhooks/voice/status?orgId=${auth!.organizationId}`;
     const hangupUrl = dbWebhookUrls.voiceHangup || `${effectiveBase}/api/v1/webhooks/voice/hangup?orgId=${auth!.organizationId}`;
+
+    // For Mobile Phone Bridge: first dial the staff/agent's mobile phone (forwardTo),
+    // and once they pick up, Plivo executes answerUrl to bridge them to the customer recipient (to).
+    const outboundDialTarget = (mode === 'bridge' && forwardTo) ? forwardTo : to;
 
     // Initialize Call record with temporary UUID
     const tempUuid = `temp_${crypto.randomBytes(12).toString('hex')}`;
@@ -351,13 +358,15 @@ export async function POST(req: NextRequest) {
         direction: 'outbound',
         status: 'queued',
         from: phoneNumber.e164,
-        to,
+        to, // Preserves the customer destination on the call record
         recordingEnabled: record,
         transcriptionEnabled: resolvedTranscription,
         transcriptionLanguage: resolvedLanguage,
         requestedMode: mode,
         requestedParams: {
           forwardTo,
+          staffPhone: (mode === 'bridge' && forwardTo) ? forwardTo : undefined,
+          customerPhone: to,
           customXml: xml,
           customUrl: url,
           actorUserId: auth!.userId,
@@ -371,7 +380,7 @@ export async function POST(req: NextRequest) {
     const provider = await getTenantTelephonyProvider(auth!.organizationId);
     const result = await provider.createCall({
       from: phoneNumber.e164,
-      to,
+      to: outboundDialTarget,
       answerUrl,
       ringUrl,
       hangupUrl,

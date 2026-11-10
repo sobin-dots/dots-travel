@@ -22,6 +22,7 @@ export async function handleAnswer(req: NextRequest) {
   const urlObj = new URL(req.url);
   const mode = urlObj.searchParams.get('mode') || params.mode || 'default';
   const forwardTo = urlObj.searchParams.get('forwardTo') || params.forwardTo;
+  const connectTo = urlObj.searchParams.get('connectTo') || params.connectTo;
 
   const requestBase = `${req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http')}://${
     req.headers.get('x-forwarded-host') || req.headers.get('host') || urlObj.host
@@ -137,7 +138,29 @@ export async function handleAnswer(req: NextRequest) {
       .dial(destinationNumber, {
         ...(resolvedCallerId ? { callerId: resolvedCallerId } : {}),
       });
-  } else if ((mode === 'forward' || mode === 'bridge') && forwardTo) {
+  } else if (mode === 'bridge' && (connectTo || forwardTo)) {
+    // Mobile Phone Bridge mode: Plivo called the Staff / Agent's mobile phone first.
+    // Now that the agent answered, play a brief whisper and dial the recipient customer (connectTo).
+    const targetCustomer = connectTo || forwardTo;
+    const callerId = resolvedCallerId || params.From || params.from || '';
+    builder
+      .speak('Connecting you to the customer now. This call is recorded.', {
+        voice: 'WOMAN',
+        language: 'en-US',
+      })
+      .record({
+        action: recordActionUrl,
+        startOnDialAnswer: true,
+        redirect: false,
+        maxLength: 3600,
+        recordSession: true,
+        recordChannelType: 'mono',
+        playBeep: false,
+      })
+      .dial(targetCustomer, {
+        ...(callerId ? { callerId } : {}),
+      });
+  } else if (mode === 'forward' && forwardTo) {
     const callerId = params.From || params.from || resolvedCallerId;
     builder
       .speak('Connecting you to your live conversation. This call is recorded.', {
