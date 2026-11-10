@@ -175,6 +175,8 @@ interface ConsoleContextType {
   // Contact modal
   showContactModal: boolean;
   setShowContactModal: (show: boolean) => void;
+  showBulkContactsModal: boolean;
+  setShowBulkContactsModal: (show: boolean) => void;
   contactName: string;
   setContactName: (name: string) => void;
   contactPhone: string;
@@ -343,6 +345,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   // Contact creation state
   const [showContactModal, setShowContactModal] = useState(false);
+  const [showBulkContactsModal, setShowBulkContactsModal] = useState(false);
   const [contactName, setContactName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [contactEmail, setContactEmail] = useState('');
@@ -2008,6 +2011,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         handleCreateStaff,
         showContactModal,
         setShowContactModal,
+        showBulkContactsModal,
+        setShowBulkContactsModal,
         contactName,
         setContactName,
         contactPhone,

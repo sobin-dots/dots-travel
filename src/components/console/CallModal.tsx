@@ -304,7 +304,7 @@ export function CallModal() {
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200 text-xs font-mono focus:border-indigo-500"
                 />
                 <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  Plivo calls the customer's phone and calls your mobile phone, bridging both phones over cellular lines.
+                  Plivo calls your staff mobile phone first. As soon as you answer, it dials the recipient contact and bridges both parties together into a recorded call.
                 </p>
               </div>
             )}

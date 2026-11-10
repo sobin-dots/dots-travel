@@ -169,20 +169,7 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <div className="flex items-center space-x-3">
-          <Link
-            href="/docs"
-            className="flex items-center space-x-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors px-3 py-1.5 rounded-lg border border-slate-800 hover:border-slate-700 bg-slate-900/60"
-          >
-            <BookOpen className="w-3.5 h-3.5 text-emerald-400" />
-            <span>API Docs (/docs)</span>
-          </Link>
-          {/* Live Carrier Badge */}
-          <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full border text-[11px] font-mono bg-emerald-950/80 border-emerald-700/80 text-emerald-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400 animate-pulse" />
-            <span>Live Carrier (Plivo)</span>
-          </div>
-        </div>
+
       </header>
 
       {/* Main Container */}
@@ -200,8 +187,8 @@ export default function LoginPage() {
                   setSuccessMsg(null);
                 }}
                 className={`flex-1 pb-3 text-sm font-semibold transition-all relative ${mode === 'signin'
-                    ? 'text-emerald-400 border-b-2 border-emerald-500'
-                    : 'text-slate-400 hover:text-slate-200'
+                  ? 'text-emerald-400 border-b-2 border-emerald-500'
+                  : 'text-slate-400 hover:text-slate-200'
                   }`}
               >
                 Sign In
@@ -214,8 +201,8 @@ export default function LoginPage() {
                   setSuccessMsg(null);
                 }}
                 className={`flex-1 pb-3 text-sm font-semibold transition-all relative ${mode === 'signup'
-                    ? 'text-emerald-400 border-b-2 border-emerald-500'
-                    : 'text-slate-400 hover:text-slate-200'
+                  ? 'text-emerald-400 border-b-2 border-emerald-500'
+                  : 'text-slate-400 hover:text-slate-200'
                   }`}
               >
                 Create Account
@@ -278,30 +265,7 @@ export default function LoginPage() {
                   </div>
                 </div>
 
-                {/* Demo Quick-Fill Buttons */}
-                <div className="pt-1 space-y-1.5">
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={setDemo3dotsCredentials}
-                      className="flex-1 flex items-center justify-center space-x-1 py-1.5 px-2 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-800/60 text-xs transition-colors"
-                    >
-                      <KeyRound className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span className="truncate">3dots (sobin@3dots.co)</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={setDemoAdminCredentials}
-                      className="flex-1 flex items-center justify-center space-x-1 py-1.5 px-2 rounded-lg bg-slate-800/60 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/60 text-xs transition-colors"
-                    >
-                      <KeyRound className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <span className="truncate">Admin (admin@example.com)</span>
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-slate-500 text-center">
-                    Default password: <code className="text-slate-300 font-mono">AdminSecurePassword2026!</code>
-                  </p>
-                </div>
+
 
                 <div className="pt-2">
                   <button
@@ -419,21 +383,14 @@ export default function LoginPage() {
               </form>
             )}
 
-            {/* Footer security badges */}
-            <div className="mt-6 pt-5 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
-              <span className="flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                Multi-Tenant Isolated
-              </span>
-              <span>Bearer JWT + Rotation</span>
-            </div>
+
           </div>
         </div>
       </main>
 
       {/* Page Footer */}
       <footer className="border-t border-slate-900 px-6 py-4 text-center text-xs text-slate-500 z-10">
-        Plivo Communications Platform — Built with Next.js, PostgreSQL & Plivo SDK. All rights reserved.
+        Wizi Digital Communications Platform. All rights reserved.
       </footer>
     </div>
   );

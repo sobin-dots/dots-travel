@@ -1,13 +1,14 @@
 'use client';
 
 import React from 'react';
-import { BookUser, Loader2, Plus, PhoneCall, Trash2 } from 'lucide-react';
+import { BookUser, Loader2, Plus, PhoneCall, Trash2, Upload } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
 export default function ContactsPage() {
   const {
     contactsList,
     setShowContactModal,
+    setShowBulkContactsModal,
     setCallDestination,
     setCallMode,
     setShowCallModal,
@@ -27,13 +28,22 @@ export default function ContactsPage() {
             Manage recipient contacts. Staff can only place calls to saved contacts in this directory.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowContactModal(true)}
-          className="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 shadow-md transition self-start sm:self-auto"
-        >
-          <Plus className="w-3.5 h-3.5" /> Add Contact
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => setShowBulkContactsModal(true)}
+            className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 border border-zinc-700/80 shadow-sm transition"
+          >
+            <Upload className="w-3.5 h-3.5 text-emerald-400" /> Import CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowContactModal(true)}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 shadow-md transition"
+          >
+            <Plus className="w-3.5 h-3.5" /> Add Contact
+          </button>
+        </div>
       </div>
 
       <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl overflow-hidden">
@@ -54,7 +64,7 @@ export default function ContactsPage() {
                 <tr>
                   <td colSpan={6} className="py-10 text-center text-zinc-500">
                     <BookUser className="w-8 h-8 mx-auto mb-2 text-zinc-600 opacity-50" />
-                    No contacts registered yet. Click &quot;Add Contact&quot; to allow staff to place calls.
+                    No contacts registered yet. Click &quot;Add Contact&quot; or &quot;Import CSV&quot; to allow staff to place calls.
                   </td>
                 </tr>
               ) : (
