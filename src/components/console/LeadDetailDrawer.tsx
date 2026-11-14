@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { leadItineraryIssue } from '@/lib/itinerary-content';
 import {
   Compass,
   ChevronDown,
@@ -245,6 +246,7 @@ export function LeadDetailDrawer() {
           headcountChildren: editChildren !== '' ? Number(editChildren) : null,
           hotelTier: editHotelTier || null,
           currency: 'INR',
+          regenerateItinerary: true,
         };
         if (supplierQuotes.length > 0 && editBudget !== '') {
           payload.targetBudget = Number(editBudget);
@@ -259,8 +261,8 @@ export function LeadDetailDrawer() {
         });
         const data = await res.json();
         if (res.ok && data.lead) {
-          setSelectedLead(data.lead);
-          setParamsSuccessMsg('✓ Trip parameters updated! Proposal PDF synchronized.');
+          setSelectedLead((current: any) => current?.id === data.lead.id ? data.lead : current);
+          setParamsSuccessMsg('✓ Itinerary regenerated. Dashboard and PDF use the saved programme.');
           if (fetchData) fetchData();
           setTimeout(() => setParamsSuccessMsg(''), 4000);
         } else {
@@ -1084,7 +1086,8 @@ export function LeadDetailDrawer() {
           {/* Quick PDF Downloads & Close */}
           <div className="flex items-center gap-2 flex-wrap self-end md:self-auto">
             <a
-              href={`/api/v1/leads/${selectedLead.id}/pdf?token=${bearerToken}`}
+              href={leadItineraryIssue(selectedLead) || savingParams ? undefined : `/api/v1/leads/${selectedLead.id}/pdf?token=${bearerToken}`}
+              aria-disabled={!!leadItineraryIssue(selectedLead) || savingParams}
               target="_blank"
               rel="noreferrer"
               className="text-xs bg-red-950/60 hover:bg-red-900/80 text-red-200 px-3 py-1.5 rounded-lg border border-red-700/60 flex items-center gap-1.5 transition font-semibold shadow-sm shadow-red-900/20"
@@ -1427,11 +1430,11 @@ export function LeadDetailDrawer() {
                     <button
                       type="button"
                       onClick={handleSaveTripParams}
-                      disabled={savingParams}
+                      disabled={savingParams || leadRevising}
                       className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 px-3 rounded-lg text-xs flex items-center justify-center gap-2 transition disabled:opacity-50 cursor-pointer shadow-md shadow-emerald-600/20"
                     >
                       {savingParams ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                      <span>{savingParams ? 'Saving Parameters...' : 'Save Parameters & Update Proposal'}</span>
+                      <span>{savingParams ? 'Generating Itinerary...' : 'Save Parameters & Generate Itinerary'}</span>
                     </button>
                   </div>
                 </div>
@@ -1466,6 +1469,11 @@ export function LeadDetailDrawer() {
               {/* Right Column: Visual Itinerary & AI Revision */}
               <div className="lg:col-span-7 space-y-5">
                 <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800">
+                  {selectedLead.metadata?.itineraryNeedsRegeneration && (
+                    <div role="alert" className="mb-3 rounded-lg border border-amber-500/40 p-3 text-xs text-amber-200">
+                      Trip parameters have changed. Save parameters and regenerate before sending or downloading.
+                    </div>
+                  )}
                   <VisualItinerary
                     itineraryText={selectedLead.itinerary}
                     destination={selectedLead.destination}
@@ -1494,7 +1502,7 @@ export function LeadDetailDrawer() {
                     <button
                       type="button"
                       onClick={handleReviseItinerary}
-                      disabled={leadRevising || !leadRevisionNotes.trim()}
+                      disabled={leadRevising || savingParams || !!leadItineraryIssue(selectedLead) || !leadRevisionNotes.trim()}
                       className="bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition disabled:opacity-50 cursor-pointer"
                     >
                       {leadRevising ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3 text-amber-300" />}

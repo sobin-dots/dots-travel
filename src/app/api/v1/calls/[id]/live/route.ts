@@ -26,8 +26,13 @@ export async function DELETE(
   }
 
   try {
-    const provider = await getTenantTelephonyProvider(auth!.organizationId);
-    await provider.hangupCall(call.plivoCallUuid);
+    try {
+      const provider = await getTenantTelephonyProvider(auth!.organizationId);
+      await provider.hangupCall(call.plivoCallUuid);
+    } catch (hangupErr: any) {
+      // If the call is already terminated or does not exist on carrier (e.g. simulated or already cleared), continue to mark completed locally
+      console.warn(`[CallHangup] Carrier hangup notice for ${call.plivoCallUuid}:`, hangupErr.message);
+    }
 
     const now = new Date();
     const duration = Math.max(1, Math.round((now.getTime() - new Date(call.startedAt).getTime()) / 1000));

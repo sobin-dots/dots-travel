@@ -1,3 +1,4 @@
+import { itineraryFixture } from './fixtures/itinerary';
 import { describe, it, expect } from 'vitest';
 import { sendCustomerItineraryEmail, sendSupplierRfqEmail } from '../src/lib/email';
 import { generateItineraryPDF } from '../src/lib/pdf-generator';
@@ -9,7 +10,7 @@ describe('Resend Email Integration Service', () => {
       recipientName: 'Elena Rostova',
       recipientEmail: 'elena@voyages.test',
       recipientType: 'customer',
-      itineraryText: 'Day 1: Arrival in Geneva.\nDay 2: Scenic Glacier Express.',
+      itineraryText: itineraryFixture(2, 'Switzerland'),
     });
 
     const result = await sendCustomerItineraryEmail({
@@ -32,7 +33,7 @@ describe('Resend Email Integration Service', () => {
       recipientName: 'Alpine Grand Hotel',
       recipientEmail: 'rfq@alpinegrand.test',
       recipientType: 'supplier',
-      itineraryText: 'Day 1: Chalet Suite with Matterhorn views.\nDay 2: Private fondue dinner.',
+      itineraryText: itineraryFixture(2, 'Switzerland'),
     });
 
     const result = await sendSupplierRfqEmail({

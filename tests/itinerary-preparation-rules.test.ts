@@ -162,36 +162,13 @@ describe('Itinerary Preparation Rules & LLM Context Feeding', () => {
     expect(orgBUpdated.promptText).not.toContain('ARRIVAL DAY REST MANDATE');
   });
 
-  it('preserves user trip parameters and returns empty itinerary without hardcoded fallback when AI provider is unavailable', async () => {
-    const result = await generateItineraryFromTranscript(
-      'Client inquiry for 5 days in Paris with private tours.',
-      { name: 'Arthur Dent', phone: '+14155550999', email: 'arthur@hitchhiker.test' },
-      orgA.id,
-      {
-        destination: 'Paris, France',
-        durationDays: 5,
-        hotelTier: 'luxury_5star',
-        headcountAdults: 2,
-        headcountChildren: 0,
-        targetBudget: 12000,
-      }
-    );
+  it('reports generation failure without saving a blank itinerary when the provider is unavailable', async () => {
+    await expect(generateItineraryFromTranscript('', undefined, orgA.id, {
+      destination: 'Paris, France', durationDays: 5, hotelTier: 'luxury_5star',
+    })).rejects.toThrow('No itinerary AI provider');
+  });
 
-    expect(result.itinerary).toBeDefined();
-    expect(result.destination).toBe('Paris, France');
-    expect(result.title).toContain('Paris');
-    expect(result.durationDays).toBe(5);
-  }, 25000);
-
-  it('feeds active rules into itinerary revision with DeepSeek', async () => {
-    const initialItinerary = `# Luxury Paris Journey\n## 1. Executive Summary\nParis trip summary.\n## 2. Day-by-Day Journey Itinerary\n### Day 1: Arrival`;
-    const revised = await reviseItineraryWithDeepSeek(
-      initialItinerary,
-      'Add reservation at Le Jules Verne on Day 2 evening',
-      orgA.id
-    );
-
-    expect(revised).toBeDefined();
-    expect(typeof revised).toBe('string');
-  }, 25000);
+  it('reports unavailable revision rather than returning unchanged content', async () => {
+    await expect(reviseItineraryWithDeepSeek('Day 1: Arrival', 'Add dinner', orgA.id)).rejects.toThrow('No itinerary AI provider');
+  });
 });

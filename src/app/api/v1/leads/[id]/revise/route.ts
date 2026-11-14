@@ -4,7 +4,10 @@ import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { reviseItineraryWithDeepSeek } from '@/lib/deepseek';
 
+import { ItineraryError, parseItineraryDays, assertItineraryReady } from '@/lib/itinerary-content';
+
 export const runtime = 'nodejs';
+export const maxDuration = 300;
 
 export async function POST(
   req: NextRequest,
@@ -35,27 +38,19 @@ export async function POST(
     const body = await req.json();
     const notes = body.correctionNotes || body.revisionNotes;
 
-    if (!notes) {
+    if (typeof notes !== 'string' || !notes.trim()) {
       return NextResponse.json(
         { api_id: 'val_err', error: 'Please enter revision or correction notes' },
         { status: 400 }
       );
     }
 
+    if ((lead.metadata as any)?.itineraryNeedsRegeneration) throw new ItineraryError('Regenerate the itinerary using the updated trip parameters before revising it.');
     const revisedItinerary = await reviseItineraryWithDeepSeek(lead.itinerary, notes, auth!.organizationId);
 
-    // Detect if the revised itinerary changed the trip duration (days)
-    const dayHeadings = Array.from(revisedItinerary.matchAll(/(?:^|\n)#{2,3}\s*Day\s+(\d+)\b/gi));
-    const maxDayFromHeadings = dayHeadings.reduce((max, m) => Math.max(max, parseInt(m[1], 10)), 0);
-    const durationMatch =
-      revisedItinerary.match(/Duration\s*[|:]\s*(\d+)\s*days?/i) ||
-      revisedItinerary.match(/\b(\d+)\s*days?\s*(?:\/|and)\s*\d+\s*nights?\b/i);
-    const detectedDays =
-      maxDayFromHeadings >= 2
-        ? maxDayFromHeadings
-        : durationMatch
-        ? parseInt(durationMatch[1], 10)
-        : null;
+    // Use the shared day parser, including plain/bold headings and single-day revisions.
+    const detectedDays = parseItineraryDays(revisedItinerary).length;
+    assertItineraryReady(revisedItinerary, detectedDays);
 
     const reviseData: any = {
       itinerary: revisedItinerary,
@@ -77,7 +72,7 @@ export async function POST(
     }
 
     const updated = await db.lead.update({
-      where: { id: lead.id },
+      where: { id: lead.id, updatedAt: lead.updatedAt },
       data: reviseData,
       include: {
         contact: true,
@@ -115,10 +110,11 @@ export async function POST(
       message: 'Itinerary revised successfully',
     });
   } catch (err: any) {
+    if (err?.code === 'P2025') return NextResponse.json({ error: 'This lead changed while the itinerary was being revised. Reload it and retry.' }, { status: 409 });
     console.error('Error revising itinerary:', err);
     return NextResponse.json(
-      { api_id: 'server_err', error: err.message || 'Internal error revising itinerary' },
-      { status: 500 }
+      { api_id: err instanceof ItineraryError ? err.code : 'server_err', error: err.message || 'Internal error revising itinerary' },
+      { status: err instanceof ItineraryError ? err.status : 500 }
     );
   }
 }

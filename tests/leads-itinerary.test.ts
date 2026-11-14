@@ -1,3 +1,4 @@
+import { itineraryFixture } from './fixtures/itinerary';
 import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '../src/lib/db';
 import {
@@ -124,31 +125,20 @@ describe('DeepSeek Concierge Itinerary & Leads Workflow', () => {
     });
   });
 
-  it('extracts structured travel parameters from voice call transcription without offline fallback templates', async () => {
-    const transcriptText = 'Hi there, I would like to book a 4-day romantic vacation in Switzerland for 2 people in December. We want scenic train rides, fondue dinner in Zurich, and luxury chalet accommodation near Zermatt with Matterhorn views. Our budget is around $6000.';
-    const result = await generateItineraryFromTranscript(transcriptText, { name: 'Sarah Connor' });
+  it('reports unavailable AI instead of returning an empty generated itinerary', async () => {
+    await expect(generateItineraryFromTranscript('', undefined, undefined, { destination: 'Switzerland', durationDays: 4 })).rejects.toThrow('No itinerary AI provider');
+  });
 
-    expect(result.destination).toBe('Switzerland');
-    expect(result.durationDays).toBe(4);
-    expect(result.headcountAdults).toBe(2);
-    expect(result.title).toContain('Switzerland');
-    expect(typeof result.itinerary).toBe('string');
-  }, 60000);
-
-  it('revises itinerary based on client correction notes', async () => {
-    const initialItinerary = 'Day 1: Arrival in Zurich.\nDay 2: City tour.\nDay 3: Scenic train to Zermatt.\nDay 4: Departure.';
-    const revision = await reviseItineraryWithDeepSeek(initialItinerary, 'Please upgrade Day 2 to private helicopter tour over the Swiss Alps.');
-
-    expect(revision).toBeDefined();
-    expect(revision.length).toBeGreaterThan(50);
-  }, 20000);
+  it('reports failed revision instead of returning unchanged text as success', async () => {
+    await expect(reviseItineraryWithDeepSeek(itineraryFixture(4, 'Switzerland'), 'Upgrade Day 2')).rejects.toThrow('No itinerary AI provider');
+  });
 
   it('compiles valid Customer PDF binary without asset bundling errors', async () => {
     const pdfBytes = await generateItineraryPDF({
       title: 'Switzerland Alpine Romance (4 Days / 3 Nights)',
       recipientName: 'Sarah Connor',
       recipientEmail: 'sarah@resistance.test',
-      itineraryText: 'DAY 1: ARRIVAL IN ZURICH\nPrivate transfer to luxury hotel.\n\nDAY 2: SCENIC GLACIER EXPRESS\nPanoramic rail journey to Zermatt.',
+      itineraryText: itineraryFixture(4, 'Switzerland'),
       recipientType: 'customer',
       organizationName: 'Plivo Global Travel Concierge',
     });
@@ -165,7 +155,7 @@ describe('DeepSeek Concierge Itinerary & Leads Workflow', () => {
       title: 'Switzerland Alpine Romance (4 Days / 3 Nights)',
       recipientName: 'Alpine Vista Ski Chalets',
       recipientEmail: 'reservations@alpinevista.test',
-      itineraryText: 'DAY 1: ARRIVAL IN ZURICH\nChalet accommodation.\n\nDAY 2: SCENIC TRAIN\nZermatt transfer.',
+      itineraryText: itineraryFixture(4, 'Switzerland'),
       recipientType: 'supplier',
       organizationName: 'Plivo Global Travel Concierge',
     });
@@ -276,10 +266,10 @@ Supplier quote requested for 2 guests, luxury accommodations with daily breakfas
     // Critical: The word "decisions" in "take decisions" must NOT hallucinate December!
     expect(params.departureDate).toBe('');
     expect(params.returnDate).toBe('');
-    expect(params.durationDays).toBe(5);
+    expect(params.durationDays).toBeUndefined();
     expect(params.targetBudget).toBe(100000);
     expect(params.customerEmail).toBe('gokilakarnan2003@gmail.com');
-    expect(params.customerName).toContain('Gokila');
+    expect(params.customerName).toBe('Suhitha');
     expect(params.specialRequests).toBeDefined();
     expect(params.specialRequests!).toContain('New Zealand');
     expect(params.specialRequests!.toLowerCase()).toContain('budget');

@@ -174,11 +174,11 @@ describe('Organization Details, Letterhead & Itinerary PDF Settings', () => {
 
   it('generateItineraryPDF seamlessly embeds organization details, logo, and letterhead', async () => {
     const pdfBytes = await generateItineraryPDF({
-      title: '6-Day Luxury Singapore Tour',
+      title: '2-Day Luxury Singapore Tour',
       recipientName: 'Elena Rostova',
       recipientEmail: 'elena@voyages.test',
       recipientType: 'customer',
-      itineraryText: `# 6-Day Luxury Singapore Tour
+      itineraryText: `# 2-Day Luxury Singapore Tour
 ## Day 1: Arrival & Night Safari
 Arrive at Changi Airport. Private transfer to Marina Bay Sands.
 ## Day 2: Gardens by the Bay

@@ -2,6 +2,7 @@ import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import fs from 'node:fs';
 import path from 'node:path';
+import { assertItineraryReady, parseItineraryDays, declaredItineraryDuration } from './itinerary-content';
 
 export interface PDFHeaderThemeOptions {
   organizationName?: string;
@@ -156,16 +157,8 @@ async function tryEmbedImage(pdfDoc: PDFDocument, imageInput?: string | null): P
 async function getGeistFont(pdfDoc: PDFDocument) {
   try {
     pdfDoc.registerFontkit(fontkit);
-    const fontPaths = [
-      path.join(process.cwd(), 'public', 'fonts', 'Geist-Regular.ttf'),
-      path.join(process.cwd(), 'node_modules', 'next', 'dist', 'compiled', '@vercel', 'og', 'Geist-Regular.ttf'),
-    ];
-    for (const fp of fontPaths) {
-      if (fs.existsSync(fp)) {
-        const bytes = fs.readFileSync(fp);
-        return await pdfDoc.embedFont(bytes);
-      }
-    }
+    const bytes = fs.readFileSync(path.join(process.cwd(), 'public', 'fonts', 'Geist-Regular.ttf'));
+    return await pdfDoc.embedFont(bytes);
   } catch (e) {
     console.warn('[PDF] Geist font embedding warning:', e);
   }
@@ -271,7 +264,7 @@ function drawSettingsConfiguredHeader(params: {
   }
 
   // 2. Left side: Logo or Brand Initials Badge
-  const orgName = options.organizationName || 'LGT Holidays';
+  const orgName = options.organizationName || '';
   const logoBoxSize = 32;
   const logoTopY = y;
 
@@ -584,12 +577,12 @@ function parseStartDateFromTravelDates(
 
 function humanizeHotelTier(hotelTier?: string, destination?: string): string {
   const destLabel = destination || 'the destination';
-  if (!hotelTier) return `4-star hotel in a central ${destLabel} location`;
+  if (!hotelTier) return '';
   const lower = hotelTier.toLowerCase();
-  if (lower === 'luxury_5star') return `5-star luxury hotel in a central ${destLabel} location`;
-  if (lower === 'boutique_4star') return `4-star hotel in a central ${destLabel} location`;
+  if (lower === 'luxury_5star') return '5-star luxury hotel';
+  if (lower === 'boutique_4star') return '4-star hotel';
   if (lower === 'chalet_villa') return `Private chalet or luxury villa in ${destLabel}`;
-  if (lower === 'standard_3star') return `3-star hotel in a convenient ${destLabel} location`;
+  if (lower === 'standard_3star') return '3-star hotel';
   return hotelTier.replace(/_/g, ' ');
 }
 
@@ -610,226 +603,6 @@ function numberToWords(n: number): string {
     14: 'Fourteen',
   };
   return words[n] || String(n);
-}
-
-function buildDynamicDaysForDestination(
-  destination: string,
-  durationDays: number,
-  startDate: Date | null
-): ParsedItineraryDay[] {
-  const lower = destination.toLowerCase();
-  const days: ParsedItineraryDay[] = [];
-
-  type DayTemplate = {
-    title: string;
-    paragraphs: string[];
-    transfers: string;
-    experience: string;
-    notes: string;
-  };
-
-  let middleTemplates: DayTemplate[] = [];
-
-  if (lower.includes('singapore')) {
-    middleTemplates = [
-      {
-        title: 'Singapore city highlights',
-        paragraphs: [
-          'After breakfast, meet the driver and guide for a half-day city tour. Visit selected city landmarks, with photo stops at Merlion Park and Marina Bay. Continue through key civic and cultural districts, subject to traffic and operating conditions.',
-          'Return to the hotel. Afternoon at leisure.',
-        ],
-        transfers: 'Hotel pick-up and drop-off for the city tour',
-        experience: 'Half-day guided city tour',
-        notes: '',
-      },
-      {
-        title: 'Gardens by the Bay',
-        paragraphs: [
-          'After breakfast, travel to Gardens by the Bay. Visit the Flower Dome and Cloud Forest. Allow time to explore the outdoor gardens independently.',
-          'Return to the hotel at a pre-arranged time or make your own way back.',
-        ],
-        transfers: 'Private transfer to and from Gardens by the Bay',
-        experience: 'Flower Dome and Cloud Forest admission',
-        notes: '',
-      },
-      {
-        title: 'Universal Studios Singapore',
-        paragraphs: [
-          'After breakfast, travel to Resorts World Sentosa for a full day at Universal Studios Singapore. Explore the park at your own pace and return to the hotel by private transfer in the evening.',
-        ],
-        transfers: 'Private hotel-to-Sentosa and return transfer',
-        experience: 'One-day standard admission ticket',
-        notes: 'Ride access and operating hours are determined by the attraction.',
-      },
-      {
-        title: 'Leisure day',
-        paragraphs: [
-          'Enjoy breakfast at the hotel. The day is free for shopping, dining or independent sightseeing.',
-          'Optional experiences can be arranged on request, subject to availability and additional cost.',
-        ],
-        transfers: 'Not included',
-        experience: '',
-        notes: '',
-      },
-    ];
-  } else if (lower.includes('dubai') || lower.includes('uae')) {
-    middleTemplates = [
-      {
-        title: 'Dubai city highlights & Burj Khalifa',
-        paragraphs: [
-          'After breakfast, meet the driver and guide for a half-day city tour covering historic Dubai Creek, Jumeirah landmarks, and Downtown Dubai.',
-          'Proceed to Burj Khalifa for observation deck views before returning to the hotel.',
-        ],
-        transfers: 'Hotel pick-up and drop-off for the city tour',
-        experience: 'Half-day guided Dubai city tour and Burj Khalifa admission',
-        notes: '',
-      },
-      {
-        title: 'Desert Safari & Arabian Dune Experience',
-        paragraphs: [
-          'Enjoy breakfast and a relaxed morning at the hotel. In the afternoon, depart by 4x4 vehicle into the desert conservation dunes.',
-          'Experience sunset views, cultural performances, and a barbecue dinner at the desert camp before returning to the hotel.',
-        ],
-        transfers: '4x4 desert safari pick-up and drop-off',
-        experience: 'Evening desert safari with camp dinner',
-        notes: 'Dune drive participation is subject to guest comfort and safety guidelines.',
-      },
-      {
-        title: 'Palm Jumeirah & Marina Dhow Cruise',
-        paragraphs: [
-          'After breakfast, explore the Palm Jumeirah boardwalk and Marina district. In the evening, board a traditional wooden dhow for a scenic dinner cruise along Dubai Marina.',
-        ],
-        transfers: 'Private round-trip transfer to Dubai Marina',
-        experience: 'Dubai Marina evening cruise with dinner',
-        notes: '',
-      },
-    ];
-  } else if (lower.includes('paris') || lower.includes('france')) {
-    middleTemplates = [
-      {
-        title: 'Paris city landmarks & Seine cruise',
-        paragraphs: [
-          'After breakfast, meet your driver and guide for a half-day panoramic tour of Paris, including the Champs-Elysees, Arc de Triomphe, and Eiffel Tower quarter.',
-          'Enjoy a scenic river cruise along the Seine before returning to the hotel.',
-        ],
-        transfers: 'Private vehicle for the city tour and river pier transfer',
-        experience: 'Half-day guided Paris tour and Seine river cruise',
-        notes: '',
-      },
-      {
-        title: 'Louvre Museum & Montmartre',
-        paragraphs: [
-          'After breakfast, transfer to the Louvre Museum to view celebrated art collections with reserved timed-entry admission.',
-          'Continue to Montmartre and Sacre-Coeur Basilica before returning to the hotel.',
-        ],
-        transfers: 'Private transfers to the Louvre and Montmartre',
-        experience: 'Louvre Museum timed-entry admission',
-        notes: '',
-      },
-      {
-        title: 'Palace of Versailles excursion',
-        paragraphs: [
-          'After breakfast, travel by private vehicle to the Palace of Versailles. Explore the Hall of Mirrors, Royal Apartments, and landscaped gardens.',
-        ],
-        transfers: 'Private round-trip transfer to Versailles',
-        experience: 'Palace and Gardens of Versailles admission',
-        notes: '',
-      },
-    ];
-  } else {
-    middleTemplates = [
-      {
-        title: `${destination} city & cultural highlights`,
-        paragraphs: [
-          `After breakfast, meet the driver and guide for a half-day discovery tour of ${destination}. Visit signature landmarks, cultural districts, and scenic viewpoints, subject to traffic and operating conditions.`,
-          'Return to the hotel. Afternoon at leisure.',
-        ],
-        transfers: `Hotel pick-up and drop-off for the ${destination} city tour`,
-        experience: `Half-day guided ${destination} tour`,
-        notes: '',
-      },
-      {
-        title: `Signature ${destination} attractions`,
-        paragraphs: [
-          `After breakfast, proceed by private transfer to visit ${destination}'s celebrated heritage sites, botanical gardens, or scenic observation points.`,
-          'Return to the hotel at a pre-arranged time.',
-        ],
-        transfers: `Private transfer to and from ${destination} attractions`,
-        experience: `Featured ${destination} attraction admission`,
-        notes: '',
-      },
-      {
-        title: `Full-day ${destination} excursion`,
-        paragraphs: [
-          `After breakfast, embark on a full-day curated excursion exploring the premier scenic and leisure highlights of ${destination}, returning to the hotel by private vehicle in the evening.`,
-        ],
-        transfers: 'Private round-trip excursion transfer',
-        experience: `Full-day ${destination} experience admission`,
-        notes: 'Attraction operating hours are subject to local schedules.',
-      },
-      {
-        title: 'Leisure day',
-        paragraphs: [
-          `Enjoy breakfast at the hotel. The day is free for shopping, dining or independent sightseeing in ${destination}.`,
-          'Optional experiences can be arranged on request, subject to availability and additional cost.',
-        ],
-        transfers: 'Not included',
-        experience: '',
-        notes: '',
-      },
-    ];
-  }
-
-  const airportName = lower.includes('singapore') ? 'Singapore Changi Airport' : `${destination} Airport`;
-
-  for (let d = 1; d <= durationDays; d++) {
-    const dateLabel = formatDayDateLabel(startDate, d - 1);
-    if (d === 1) {
-      days.push({
-        dayNumber: 1,
-        dateLabel,
-        title: `Arrive in ${destination}`,
-        paragraphs: [
-          `Arrive at ${airportName}. Meet the transfer representative at the designated arrival point and proceed by private vehicle to the hotel.`,
-          'After check-in, the remainder of the day is at leisure.',
-        ],
-        overnight: destination,
-        meals: 'None',
-        transfers: 'Private airport-to-hotel transfer',
-        experience: '',
-        notes: "Hotel check-in is subject to the property's standard check-in time.",
-      });
-    } else if (d === durationDays) {
-      days.push({
-        dayNumber: d,
-        dateLabel,
-        title: 'Departure',
-        paragraphs: [
-          `After breakfast, check out and meet the driver for a private transfer to ${airportName} for your onward flight.`,
-        ],
-        overnight: '',
-        meals: 'Breakfast',
-        transfers: 'Private hotel-to-airport transfer',
-        experience: '',
-        notes: 'Departure transfer timing will be confirmed against the flight schedule.',
-      });
-    } else {
-      const tpl = middleTemplates[(d - 2) % middleTemplates.length];
-      days.push({
-        dayNumber: d,
-        dateLabel,
-        title: tpl.title,
-        paragraphs: [...tpl.paragraphs],
-        overnight: destination,
-        meals: 'Breakfast',
-        transfers: tpl.transfers,
-        experience: tpl.experience,
-        notes: tpl.notes,
-      });
-    }
-  }
-
-  return days;
 }
 
 const GENERIC_GUEST_PLACEHOLDERS = new Set([
@@ -1134,12 +907,9 @@ export function parseItineraryContent(text: string, options: PDFOptions): Parsed
         dateLabel: startDate ? formatDayDateLabel(startDate, dNum - 1) : extractedDateLabel || `Day ${dNum}`,
         title: cleanTitle,
         paragraphs: [],
-        overnight: destination,
-        meals: dNum === 1 ? 'None' : 'Breakfast',
-        transfers:
-          dNum === 1
-            ? 'Private airport-to-hotel transfer'
-            : 'Private sightseeing transfers as specified',
+        overnight: '',
+        meals: '',
+        transfers: '',
         experience: '',
         notes: '',
       };
@@ -1361,234 +1131,45 @@ export function parseItineraryContent(text: string, options: PDFOptions): Parsed
 
   if (currentDay) days.push(currentDay);
 
-  // Resolve final durationDays based on options or parsed days
-  const finalDurationDays = durationDays || (days.length > 0 ? days.length : 6);
-  const finalDurationNights = Math.max(1, finalDurationDays - 1);
-
-  // If no days were parsed from text, dynamically generate days for the actual destination
-  if (days.length === 0) {
-    const generatedDays = buildDynamicDaysForDestination(destination, finalDurationDays, startDate);
-    days.push(...generatedDays);
-  } else {
-    const lastDay = days[days.length - 1];
-    if (lastDay && lastDay.dayNumber === finalDurationDays && lastDay.title.toLowerCase().includes('departure')) {
-      lastDay.overnight = '';
-      if (!lastDay.notes) {
-        lastDay.notes = 'Departure transfer timing will be confirmed against the flight schedule.';
-      }
-    }
-  }
-
-  const adults = options.headcountAdults || 2;
-  const children = options.headcountChildren || 0;
-  const hotelCategoryDesc = humanizeHotelTier(options.hotelTier, destination);
-  const mealPlanDesc =
-    options.mealPlan ||
-    overviewKeyVal['meal plan'] ||
-    overviewKeyVal['meals'] ||
-    accommodationKeyVal['meal plan'] ||
-    'Daily breakfast';
-
-  // Dynamic Overview Paragraph
-  let overviewParagraph = overviewParagraphs.join(' ');
-  if (!overviewParagraph) {
-    const highlightTitles = days
-      .slice(1, Math.max(2, days.length - 1))
-      .map((d) => d.title)
-      .filter((t) => !t.toLowerCase().includes('leisure') && !t.toLowerCase().includes('departure'));
-    const highlightsSummary =
-      highlightTitles.length > 0
-        ? highlightTitles.slice(0, 3).join(', ')
-        : `curated sightseeing and local cultural experiences`;
-    overviewParagraph = `A ${numberToWords(finalDurationDays).toLowerCase()}-day ${destination} holiday combining ${highlightsSummary}. The plan includes private airport transfers and time for independent exploration.`;
-  }
-
-  // Dynamic Overview Table Rows
-  const roomDesc =
-    children > 0
-      ? `${finalDurationNights} nights in a Family / Double Room (${adults} adults, ${children} children)`
-      : adults === 1
-      ? `${finalDurationNights} nights in a Luxury Room / Villa (Single Occupancy)`
-      : `${finalDurationNights} nights in a Standard Double Room`;
-
+  // Daily content comes from the same parser used by the dashboard. Missing content stays missing.
+  days.splice(0, days.length, ...parseItineraryDays(content).map(day => ({
+    ...day,
+    title: sanitizePdfText(day.title),
+    paragraphs: day.paragraphs.map(sanitizePdfText),
+    dateLabel: startDate ? formatDayDateLabel(startDate, day.dayNumber - 1) : undefined,
+  })));
+  const finalDurationDays = durationDays ?? days.length;
+  const finalDurationNights = Math.max(0, finalDurationDays - 1);
+  const hotelCategoryDesc = options.hotelTier ? humanizeHotelTier(options.hotelTier, destination) : '';
+  const overviewParagraph = overviewParagraphs.join(' ');
   const overviewTableRows: Array<[string, string]> = [
     ['Destination', overviewKeyVal['destination'] || destination],
-    ['Duration', overviewKeyVal['duration'] || `${finalDurationDays} days / ${finalDurationNights} nights`],
-    [
-      'Hotel plan',
-      overviewKeyVal['hotel plan'] ||
-        overviewKeyVal['accommodation'] ||
-        overviewKeyVal['hotel'] ||
-        accommodationKeyVal['room category'] ||
-        roomDesc,
-    ],
-    ['Meal plan', mealPlanDesc],
-    [
-      'Transfers',
-      overviewKeyVal['transfers'] ||
-        overviewKeyVal['transport'] ||
-        overviewKeyVal['ground transport'] ||
-        'Private airport transfers; sightseeing transfers as specified',
-    ],
-    [
-      'Flights',
-      overviewKeyVal['flights'] ||
-        overviewKeyVal['flight scope'] ||
-        overviewKeyVal['airfare'] ||
-        'Not included in this proposal',
-    ],
-    ['Pace', overviewKeyVal['pace'] || 'Moderate, with one leisure period'],
+    ['Duration', finalDurationDays ? `${finalDurationDays} days / ${finalDurationNights} nights` : ''],
+    ['Hotel plan', overviewKeyVal['hotel plan'] || overviewKeyVal['accommodation'] || overviewKeyVal['hotel'] || hotelCategoryDesc],
+    ['Meal plan', options.mealPlan || overviewKeyVal['meal plan'] || overviewKeyVal['meals'] || accommodationKeyVal['meal plan'] || ''],
+    ['Transfers', overviewKeyVal['transfers'] || overviewKeyVal['transport'] || overviewKeyVal['ground transport'] || ''],
+    ['Flights', overviewKeyVal['flights'] || overviewKeyVal['flight scope'] || overviewKeyVal['airfare'] || ''],
+    ['Pace', overviewKeyVal['pace'] || ''],
   ];
-
-  // Dynamic Recorded Requirements
-  if (recordedRequirements.length === 0) {
-    const partyLine =
-      children > 0
-        ? `${numberToWords(adults)} adults and ${numberToWords(children).toLowerCase()} child${children > 1 ? 'ren' : ''} travelling together.`
-        : adults === 1
-        ? 'One adult (solo traveller).'
-        : `${numberToWords(adults)} adults travelling together.`;
-    recordedRequirements.push(
-      partyLine,
-      options.specialRequests
-        ? `Requested experiences and preferences: ${sanitizePdfText(options.specialRequests)}.`
-        : `Interest in city sightseeing, gardens and family-friendly attractions in ${destination}.`,
-      `Preference for a centrally located hotel (${hotelCategoryDesc}) and private airport transfers.`,
-      `${mealPlanDesc} requested.`,
-      'No dietary, accessibility or special occasion requirements recorded.'
-    );
-  }
-
-  // Dynamic To Confirm Before Booking
-  if (toConfirmItems.length === 0) {
-    toConfirmItems.push(
-      'Preferred airline and baggage allowance',
-      'Hotel room and bed preference',
-      'Dietary or accessibility needs',
-      'Attraction preferences',
-      'Passport details and final travel dates'
-    );
-  }
-
-  // Dynamic Accommodation Rows
-  const stayRangeFromTable =
-    accommodationKeyVal['check-in'] && accommodationKeyVal['check-out']
-      ? `${accommodationKeyVal['check-in']} – ${accommodationKeyVal['check-out']}`
-      : undefined;
-
   const accommodationRows: Array<[string, string]> = [
-    [
-      'Hotel category',
-      accommodationKeyVal['hotel category'] ||
-        accommodationKeyVal['sample hotel category'] ||
-        accommodationKeyVal['category'] ||
-        hotelCategoryDesc,
-    ],
-    ['Stay', accommodationKeyVal['stay'] || stayRangeFromTable || travelDates],
-    [
-      'Room',
-      accommodationKeyVal['room'] ||
-        accommodationKeyVal['room category'] ||
-        overviewKeyVal['accommodation'] ||
-        `Standard Double Room for ${adults} adult${adults > 1 ? 's' : ''}${children > 0 ? ` and ${children} child${children > 1 ? 'ren' : ''}` : ''}`,
-    ],
-    ['Meal plan', accommodationKeyVal['meal plan'] || overviewKeyVal['meal plan'] || 'Breakfast daily'],
-    [
-      'Hotel name',
-      accommodationKeyVal['hotel name'] ||
-        accommodationKeyVal['proposed hotel'] ||
-        accommodationKeyVal['hotel'] ||
-        'To be confirmed at booking',
-    ],
+    ['Hotel category', accommodationKeyVal['hotel category'] || accommodationKeyVal['category'] || hotelCategoryDesc],
+    ['Stay', accommodationKeyVal['stay'] || travelDates],
+    ['Room', accommodationKeyVal['room'] || accommodationKeyVal['room category'] || ''],
+    ['Meal plan', accommodationKeyVal['meal plan'] || overviewKeyVal['meal plan'] || ''],
+    ['Hotel name', accommodationKeyVal['hotel name'] || accommodationKeyVal['proposed hotel'] || accommodationKeyVal['hotel'] || ''],
   ];
-
-  const alternativeAccommodationText = accommodationKeyVal['alternative options']
-    ? `Alternative options: ${accommodationKeyVal['alternative options']}. A hotel of similar category and location may be offered if the selected property is unavailable. Any change will be shared for approval before confirmation.`
-    : 'A hotel of similar category and location may be offered if the selected property is unavailable. Any change will be shared for approval before confirmation.';
-
-  // Dynamic Inclusions derived from actual itinerary days if not explicitly provided
-  if (inclusions.length === 0) {
-    const orgLabel = options.organizationName || 'LGT Holidays';
-    inclusions.push(
-      `${numberToWords(finalDurationNights)} nights' accommodation in the stated room category.`,
-      'Daily breakfast at the hotel.',
-      'Private arrival and departure airport transfers.'
-    );
-
-    for (const d of days) {
-      if (d.experience && !inclusions.some((inc) => inc.toLowerCase().includes(d.experience.toLowerCase()))) {
-        inclusions.push(`${d.experience} (${d.title}).`);
-      } else if (
-        d.transfers &&
-        !d.transfers.toLowerCase().includes('not included') &&
-        !d.transfers.toLowerCase().includes('airport') &&
-        !inclusions.some((inc) => inc.toLowerCase().includes(d.transfers.toLowerCase()))
-      ) {
-        inclusions.push(`${d.transfers}.`);
-      }
-    }
-
-    inclusions.push(
-      `Local assistance from the ${orgLabel} team during the trip, using the contact details provided in the final travel documents.`
-    );
-  }
-
-  // Dynamic Exclusions tailored to destination
-  if (exclusions.length === 0) {
-    exclusions.push(
-      'International airfare and airline-related charges.',
-      `${destination} entry visa or other travel authorisations, if required.`,
-      'Meals and beverages not listed under inclusions.',
-      'Optional tours, activities and personal expenses.',
-      'Early check-in, late check-out and room upgrades.',
-      'Travel insurance.',
-      'Tips, porterage and other discretionary payments.',
-      'Any service not expressly listed under "Package Includes."'
-    );
-  }
-
-  // Dynamic Important Travel Information
-  if (importantInfo.length === 0) {
-    importantInfo.push(
-      "Passports must meet the entry requirements applicable to the traveller's nationality and travel dates.",
-      'Entry permission is determined by the relevant authorities. Travellers are responsible for carrying required travel documents.',
-      'Attraction visits, transport arrangements and operating hours may change due to weather, traffic, maintenance or supplier operations.',
-      'Guests should share any mobility, medical, dietary or other assistance requirements before booking.',
-      'Final hotel, transfer, flight and attraction details will be stated in the confirmed travel documents.'
-    );
-  }
-
-  // Dynamic Before Travel Checklist
-  if (beforeTravelItems.length === 0) {
-    beforeTravelItems.push(
-      'Full names as shown on passports.',
-      'Passport nationality and expiry details.',
-      'Final flight itinerary and baggage requirements.',
-      'Room and bed preference.',
-      'Dietary, accessibility or medical requirements.',
-      'Emergency contact details.',
-      'Acceptance of the final quotation and applicable booking terms.'
-    );
-  }
+  const alternativeAccommodationText = accommodationKeyVal['alternative options'] || '';
 
   // Dynamic Prepared & Valid Until Dates
   const prepDateObj = options.preparedDate ? new Date(options.preparedDate) : new Date();
   const safePrepDate = isNaN(prepDateObj.getTime()) ? new Date() : prepDateObj;
   const preparedDateStr = formatCalendarDate(safePrepDate);
 
-  let validUntilDateStr: string;
-  if (options.validUntilDate) {
-    const vd = new Date(options.validUntilDate);
-    validUntilDateStr = !isNaN(vd.getTime()) ? formatCalendarDate(vd) : formatCalendarDate(new Date(safePrepDate.getTime() + 5 * 86400000));
-  } else {
-    const validDt = new Date(safePrepDate.getTime() + 5 * 86400000);
-    validUntilDateStr = formatCalendarDate(validDt);
-  }
-
-  const orgName = options.organizationName || 'LGT Holidays';
-  const paymentScheduleText = `To be provided in the final quotation in line with ${orgName}'s approved payment terms.`;
-  const cancellationTermsText = `Supplier-specific charges and ${orgName}'s approved terms will be provided before booking confirmation.`;
-  const quoteValidityText = `This illustrative quote is valid until ${validUntilDateStr}. Rates and availability must be reconfirmed after this date.`;
+  const validUntil = options.validUntilDate ? new Date(options.validUntilDate) : null;
+  const validUntilDateStr = validUntil && !isNaN(validUntil.getTime()) ? formatCalendarDate(validUntil) : 'Not specified';
+  const paymentScheduleText = 'Payment terms have not been provided.';
+  const cancellationTermsText = 'Cancellation terms have not been provided.';
+  const quoteValidityText = validUntil ? `Valid until ${validUntilDateStr}.` : 'Proposal validity has not been specified.';
 
   return {
     destination,
@@ -1615,1173 +1196,108 @@ export function parseItineraryContent(text: string, options: PDFOptions): Parsed
 }
 
 /**
- * Generates an executive FIT travel proposal & itinerary PDF
- * matching the minimal design of LGT_Holidays_Singapore_Minimal_Design.pdf,
- * applying the exact PDF Header & Theme configured in Settings across every page,
- * with 100% dynamic content and zero overlapping elements.
+ * Renders the saved proposal with the configured agency header and theme.
+ * Programme text and supplied sections flow onto continuation pages without truncation.
  */
 export async function generateItineraryPDF(options: PDFOptions): Promise<Uint8Array> {
+  assertItineraryReady(options.itineraryText, options.durationDays ?? declaredItineraryDuration(`# ${options.title}`));
   const pdfDoc = await PDFDocument.create();
   const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const fontGeist = await getGeistFont(pdfDoc);
-
   const brand = hexToRgb(options.brandColor);
   const brandColor = rgb(brand.r, brand.g, brand.b);
-  const brandTintHeader = rgb(
-    Math.min(1, brand.r * 0.08 + 0.92),
-    Math.min(1, brand.g * 0.08 + 0.92),
-    Math.min(1, brand.b * 0.08 + 0.92)
-  );
-  const charcoal = rgb(0.118, 0.125, 0.133); // #1e2022
-  const muted = rgb(0.36, 0.38, 0.41); // #5c6169
-  const tableOuterBorder = rgb(0.87, 0.885, 0.905); // #dee2e7
-  const tableDividerDark = rgb(0.18, 0.2, 0.22); // #2e3338
-  const white = rgb(1, 1, 1);
-
+  const charcoal = rgb(0.118, 0.125, 0.133);
+  const muted = rgb(0.36, 0.38, 0.41);
   const pageWidth = 595.28;
   const pageHeight = 841.89;
   const margin = 42;
-  const contentWidth = pageWidth - margin * 2; // 511.28
-
+  const contentWidth = pageWidth - margin * 2;
   const parsed = parseItineraryContent(options.itineraryText, options);
   const [logoImg, letterheadImg] = await Promise.all([
     tryEmbedImage(pdfDoc, options.organizationLogo),
     tryEmbedImage(pdfDoc, options.organizationLetterhead),
   ]);
-
-  const orgName = options.organizationName || 'LGT Holidays';
-  const orgSubCaption = options.organizationLetterheadText || `A brand of ${orgName}`;
-  const footerOrgLabel = orgSubCaption.includes('LGT Global Hospitality Limited')
-    ? 'LGT Global Hospitality Limited'
-    : orgName;
-
-  const adults = options.headcountAdults || 2;
-  const children = options.headcountChildren || 0;
-  const totalTravellers = adults + children;
-
-  const hasBudget =
-    options.targetBudget !== undefined &&
-    options.targetBudget !== null &&
-    options.targetBudget !== '' &&
-    Number(options.targetBudget) > 0;
-  const rawBudget = hasBudget ? Number(options.targetBudget) : null;
-  const totalBudgetFormatted = rawBudget ? `₹${rawBudget.toLocaleString('en-IN')}` : 'Package price: To be confirmed';
-  const perAdultBudget = rawBudget ? Math.round(rawBudget / Math.max(1, totalTravellers)) : null;
-  const perAdultFormatted = perAdultBudget ? `₹${perAdultBudget.toLocaleString('en-IN')}` : 'To be confirmed';
-
-  const bookingRef = options.bookingReference || `FIT/${new Date().getFullYear()}/1042`;
-  const headerBadgeText =
-    options.recipientType === 'supplier' ? 'SUPPLIER RFQ' : 'CONFIDENTIAL ITINERARY';
-
-  // Inner page header (Settings PDF Header & Theme + Section Title) & Bottom Footer
-  const drawInnerPageChrome = (page: any, pageTitle: string, currentPageNum: number): number => {
-    const afterHeaderY = drawSettingsConfiguredHeader({
-      page,
-      pageWidth,
-      pageHeight,
-      margin,
-      options,
-      logoImg,
-      letterheadImg,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      badgeText: headerBadgeText,
-      subRightText: `Page ${String(currentPageNum).padStart(2, '0')} • ${parsed.preparedDateStr}`,
-    });
-
-    const titleLines = wrapText(pageTitle, contentWidth, fontBold, 24);
-    let titleY = afterHeaderY - 4;
-    for (const tLine of titleLines) {
-      drawSafeText(page, tLine, {
-        x: margin,
-        y: titleY,
-        size: 24,
-        fontRegular,
-        fontBold,
-        fontGeist,
-        color: charcoal,
-        isBold: true,
-      });
-      titleY -= 29;
-    }
-
+  let page: any;
+  let y = 0;
+  let pageNum = 0;
+  let section = '';
+  const newPage = (heading: string, continued = false) => {
+    page = pdfDoc.addPage([pageWidth, pageHeight]);
+    pageNum++;
+    section = heading;
+    y = drawSettingsConfiguredHeader({
+      page, pageWidth, pageHeight, margin, options, logoImg, letterheadImg,
+      fontRegular, fontBold, fontGeist,
+      badgeText: options.recipientType === 'supplier' ? 'SUPPLIER RFQ' : 'ITINERARY PROPOSAL',
+      subRightText: `Page ${pageNum}`,
+    }) - 8;
     drawSettingsConfiguredFooter({
-      page,
-      pageWidth,
-      margin,
-      footerLeftText: footerOrgLabel,
-      pageNum: currentPageNum,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      brandColor,
-      muted,
+      page, pageWidth, margin, footerLeftText: options.organizationName || '', pageNum,
+      fontRegular, fontBold, fontGeist, brandColor, muted,
     });
-
-    return titleY - 14;
+    write(continued ? `${heading} (continued)` : heading, 21, true, brandColor);
+    y -= 10;
   };
-
-  // Dynamic non-overlapping 2-column table with Brand Theme accent
-  const drawDynamicTable = (
-    page: any,
-    startY: number,
-    col1Header: string,
-    col2Header: string,
-    col1Width: number,
-    rows: Array<[string, string]>,
-    boldCol1 = false
-  ): number => {
-    let curY = startY;
-    const col2Width = contentWidth - col1Width;
-    const cellPadX = 12;
-    const fontSize = 11;
-    const lineHeight = 15.5;
-
-    // Header row tinted with Settings brandColor
-    const headerH = 28;
-    page.drawRectangle({
-      x: margin,
-      y: curY - headerH,
-      width: contentWidth,
-      height: headerH,
-      color: brandTintHeader,
-      borderColor: brandColor,
-      borderWidth: 0.8,
-    });
-    page.drawLine({
-      start: { x: margin + col1Width, y: curY },
-      end: { x: margin + col1Width, y: curY - headerH },
-      thickness: 0.8,
-      color: brandColor,
-    });
-    page.drawLine({
-      start: { x: margin, y: curY - headerH },
-      end: { x: margin + contentWidth, y: curY - headerH },
-      thickness: 1,
-      color: brandColor,
-    });
-
-    drawSafeText(page, col1Header, {
-      x: margin + cellPadX,
-      y: curY - 18,
-      size: 10,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: brandColor,
-      isBold: true,
-    });
-    drawSafeText(page, col2Header, {
-      x: margin + col1Width + cellPadX,
-      y: curY - 18,
-      size: 10,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: brandColor,
-      isBold: true,
-    });
-
-    curY -= headerH;
-
-    for (let rIdx = 0; rIdx < rows.length; rIdx++) {
-      const [c1Text, c2Text] = rows[rIdx];
-      const c1Lines = wrapText(c1Text, col1Width - cellPadX * 2, boldCol1 ? fontBold : fontRegular, fontSize);
-      const c2Lines = wrapText(c2Text, col2Width - cellPadX * 2, fontRegular, fontSize);
-      const maxLines = Math.max(1, c1Lines.length, c2Lines.length);
-      const rowH = Math.max(33, maxLines * lineHeight + 16);
-
-      page.drawRectangle({
-        x: margin,
-        y: curY - rowH,
-        width: contentWidth,
-        height: rowH,
-        color: white,
-        borderColor: tableOuterBorder,
-        borderWidth: 0.75,
-      });
-
-      page.drawLine({
-        start: { x: margin + col1Width, y: curY },
-        end: { x: margin + col1Width, y: curY - rowH },
-        thickness: 0.8,
-        color: tableDividerDark,
-      });
-
-      if (rIdx < rows.length - 1) {
-        page.drawLine({
-          start: { x: margin, y: curY - rowH },
-          end: { x: margin + contentWidth, y: curY - rowH },
-          thickness: 0.8,
-          color: tableDividerDark,
-        });
-      }
-
-      const c1BlockH = c1Lines.length * lineHeight;
-      let c1Y = curY - (rowH - c1BlockH) / 2 - fontSize + 2;
-      for (const line of c1Lines) {
-        drawSafeText(page, line, {
-          x: margin + cellPadX,
-          y: c1Y,
-          size: fontSize,
-          fontRegular,
-          fontBold,
-          fontGeist,
-          color: charcoal,
-          isBold: boldCol1,
-        });
-        c1Y -= lineHeight;
-      }
-
-      const c2BlockH = c2Lines.length * lineHeight;
-      let c2Y = curY - (rowH - c2BlockH) / 2 - fontSize + 2;
-      for (const line of c2Lines) {
-        drawSafeText(page, line, {
-          x: margin + col1Width + cellPadX,
-          y: c2Y,
-          size: fontSize,
-          fontRegular,
-          fontBold,
-          fontGeist,
-          color: charcoal,
-        });
-        c2Y -= lineHeight;
-      }
-
-      curY -= rowH;
+  const write = (text: string, size = 12, bold = false, color = charcoal) => {
+    if (!text?.trim()) return;
+    // Each line is retained, even if one programme, note or list item spans multiple pages.
+    for (const line of wrapText(text, contentWidth, bold ? fontBold : fontRegular, size)) {
+      if (y < 65) newPage(section, true);
+      drawSafeText(page, line, { x: margin, y, size, fontRegular, fontBold, fontGeist, color, isBold: bold });
+      y -= size * 1.5;
     }
-
-    return curY;
+    y -= 10;
   };
-
-  // Dynamic non-overlapping numbered list renderer themed with brandColor
-  const drawNumberedList = (
-    page: any,
-    startY: number,
-    items: string[],
-    fontSize = 12,
-    lineHeight = 17.5,
-    itemGap = 15
-  ): number => {
-    let curY = startY;
-    const textIndent = 38;
-    const maxTextWidth = contentWidth - textIndent;
-
-    for (let idx = 0; idx < items.length; idx++) {
-      const numStr = String(idx + 1).padStart(2, '0');
-      const wrapped = wrapText(items[idx], maxTextWidth, fontRegular, fontSize);
-      const blockH = Math.max(1, wrapped.length) * lineHeight;
-
-      if (curY - blockH < 50) {
-        break;
-      }
-
-      drawSafeText(page, numStr, {
-        x: margin,
-        y: curY,
-        size: 10.5,
-        fontRegular,
-        fontBold,
-        fontGeist,
-        color: brandColor,
-        isBold: true,
-      });
-
-      let lineY = curY;
-      for (const wLine of wrapped) {
-        drawSafeText(page, wLine, {
-          x: margin + textIndent,
-          y: lineY,
-          size: fontSize,
-          fontRegular,
-          fontBold,
-          fontGeist,
-          color: charcoal,
-        });
-        lineY -= lineHeight;
-      }
-
-      curY = lineY - itemGap + (lineHeight - fontSize);
-    }
-
-    return curY;
+  const rows = (values: Array<[string, string]>) => {
+    for (const [label, value] of values) if (value?.trim()) write(`${label}: ${value}`);
   };
-
-  let pageNum = 1;
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE 1: COVER PAGE (Uses Configured Settings PDF Header & Theme)
-  // ─────────────────────────────────────────────────────────────
-  const pCover = pdfDoc.addPage([pageWidth, pageHeight]);
-  let coverY = drawSettingsConfiguredHeader({
-    page: pCover,
-    pageWidth,
-    pageHeight,
-    margin,
-    options,
-    logoImg,
-    letterheadImg,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    badgeText: headerBadgeText,
-    subRightText: `Date: ${parsed.preparedDateStr}`,
-  });
-
-  coverY -= 55;
-  const proposalTag =
-    options.recipientType === 'supplier'
-      ? 'SUPPLIER QUOTATION REQUEST & ITINERARY'
-      : 'FIT TRAVEL PROPOSAL & ITINERARY';
-
-  drawSafeText(pCover, proposalTag, {
-    x: margin,
-    y: coverY,
-    size: 11,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: brandColor,
-    isBold: true,
-  });
-
-  coverY -= 54;
-  const destSize = parsed.destination.length > 24 ? 30 : 38;
-  const destLines = wrapText(parsed.destination, contentWidth, fontBold, destSize);
-  for (const dLine of destLines) {
-    drawSafeText(pCover, dLine, {
-      x: margin,
-      y: coverY,
-      size: destSize,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: charcoal,
-      isBold: true,
-    });
-    coverY -= destSize + 10;
+  const list = (heading: string, items: string[]) => {
+    if (!items.length) return;
+    newPage(heading);
+    items.forEach((item, index) => write(`${index + 1}. ${item}`));
+  };
+  newPage(options.title);
+  rows([
+    ['Prepared for', resolveCustomerNameForPdf(options, options.itineraryText)],
+    ['Destination', parsed.destination], ['Duration', `${parsed.durationDays} days / ${parsed.durationNights} nights`],
+    ['Travel dates', parsed.travelDates],
+    ['Adults', options.headcountAdults != null ? String(options.headcountAdults) : ''],
+    ['Children', options.headcountChildren != null ? String(options.headcountChildren) : ''],
+    ['Prepared', parsed.preparedDateStr], ['Reference', options.bookingReference || ''],
+  ]);
+  if (parsed.overviewParagraph) write(parsed.overviewParagraph);
+  rows(parsed.overviewTableRows.filter(([label]) => !['Destination', 'Duration'].includes(label)));
+  list('Recorded requirements', parsed.recordedRequirements);
+  list('To confirm before booking', parsed.toConfirmItems);
+  for (const day of parsed.days) {
+    newPage(`Day ${day.dayNumber}: ${day.title}`);
+    if (day.dateLabel) write(day.dateLabel, 11, false, muted);
+    day.paragraphs.forEach(paragraph => write(paragraph, 12.5));
+    rows([['Overnight', day.overnight], ['Meals', day.meals], ['Transfers', day.transfers],
+      ['Included experience', day.experience], ['Notes', day.notes]]);
   }
-
-  coverY -= 12;
-  drawSafeText(pCover, `${parsed.durationDays} Days / ${parsed.durationNights} Nights`, {
-    x: margin,
-    y: coverY,
-    size: 19,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-  });
-
-  coverY -= 36;
-  const dateLines = wrapText(parsed.travelDates, contentWidth, fontRegular, 14);
-  for (const dtLine of dateLines) {
-    drawSafeText(pCover, dtLine, {
-      x: margin,
-      y: coverY,
-      size: 14,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: muted,
-    });
-    coverY -= 20;
+  if (parsed.accommodationRows.some(([, value]) => value)) {
+    newPage('Curated accommodations');
+    rows(parsed.accommodationRows);
+    write(parsed.alternativeAccommodationText);
   }
-
-  coverY -= 50;
-  drawSafeText(pCover, 'Prepared for', {
-    x: margin,
-    y: coverY,
-    size: 14,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-  });
-
-  coverY -= 26;
-  const guestName = resolveCustomerNameForPdf(options, options.itineraryText);
-  const guestLines = wrapText(guestName, contentWidth, fontBold, 16);
-  for (const gLine of guestLines) {
-    drawSafeText(pCover, gLine, {
-      x: margin,
-      y: coverY,
-      size: 16,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: charcoal,
-      isBold: true,
-    });
-    coverY -= 22;
+  list('Package includes', parsed.inclusions);
+  list('Package excludes', parsed.exclusions);
+  list('Important travel information', parsed.importantInfo);
+  list('Before travel', parsed.beforeTravelItems);
+  // Render configured contact details only; never infer addresses, registration IDs or service hours.
+  if (options.consultantName || options.organizationPhone || options.consultantEmail || options.organizationAddress) {
+    newPage('Contact details');
+    rows([
+      ['Agency', options.organizationName || ''], ['Address', options.organizationAddress || ''],
+      ['Phone', options.organizationPhone || options.consultantPhone || ''],
+      ['Website', options.organizationWebsite || ''], ['Consultant', options.consultantName || ''],
+      ['Email', options.consultantEmail || ''], ['CIN', options.companyCin || ''],
+      ['GSTIN', options.companyGstin || ''], ['PAN', options.companyPan || ''],
+    ]);
   }
-
-  // Bottom-left company note
-  drawSafeText(pCover, orgName, {
-    x: margin,
-    y: 165,
-    size: 10,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: muted,
-  });
-
-  const subCapLines = wrapText(orgSubCaption, contentWidth, fontRegular, 10);
-  let subCapY = 149;
-  for (const scLine of subCapLines.slice(0, 2)) {
-    drawSafeText(pCover, scLine, {
-      x: margin,
-      y: subCapY,
-      size: 10,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: muted,
-    });
-    subCapY -= 15;
-  }
-
-  drawSettingsConfiguredFooter({
-    page: pCover,
-    pageWidth,
-    margin,
-    footerLeftText: footerOrgLabel,
-    pageNum: pageNum++,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    brandColor,
-    muted,
-  });
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE 2: TRIP OVERVIEW
-  // ─────────────────────────────────────────────────────────────
-  const pOverview = pdfDoc.addPage([pageWidth, pageHeight]);
-  let ovY = drawInnerPageChrome(pOverview, 'Trip overview', pageNum++);
-
-  const introLines = wrapText(parsed.overviewParagraph, contentWidth, fontRegular, 12.5);
-  for (const line of introLines) {
-    drawSafeText(pOverview, line, {
-      x: margin,
-      y: ovY,
-      size: 12.5,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: charcoal,
-    });
-    ovY -= 18.5;
-  }
-
-  ovY -= 14;
-  const afterOvTableY = drawDynamicTable(
-    pOverview,
-    ovY,
-    'Item',
-    'Details',
-    165,
-    parsed.overviewTableRows,
-    false
-  );
-
-  const metaStartY = Math.min(afterOvTableY - 28, 125);
-  drawSafeText(pOverview, `Proposal: ${bookingRef}`, {
-    x: margin,
-    y: metaStartY,
-    size: 10,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: muted,
-  });
-  drawSafeText(pOverview, `Prepared: ${parsed.preparedDateStr}`, {
-    x: margin,
-    y: metaStartY - 16,
-    size: 10,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: muted,
-  });
-  drawSafeText(pOverview, `Valid until: ${parsed.validUntilDateStr}`, {
-    x: margin,
-    y: metaStartY - 32,
-    size: 10,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: muted,
-  });
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE 3: GUEST PREFERENCES
-  // ─────────────────────────────────────────────────────────────
-  const pPref = pdfDoc.addPage([pageWidth, pageHeight]);
-  let prefY = drawInnerPageChrome(pPref, 'Guest preferences', pageNum++);
-
-  drawSafeText(pPref, 'Recorded requirements', {
-    x: margin,
-    y: prefY,
-    size: 14.5,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: brandColor,
-    isBold: true,
-  });
-
-  prefY -= 28;
-  prefY = drawNumberedList(pPref, prefY, parsed.recordedRequirements.slice(0, 6), 12, 17.5, 14);
-
-  prefY -= 14;
-  drawSafeText(pPref, 'To confirm before booking', {
-    x: margin,
-    y: prefY,
-    size: 14.5,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: brandColor,
-    isBold: true,
-  });
-
-  prefY -= 26;
-  for (const item of parsed.toConfirmItems) {
-    const itemLines = wrapText(item, contentWidth, fontRegular, 12);
-    for (const iLine of itemLines) {
-      if (prefY < 50) break;
-      drawSafeText(pPref, iLine, {
-        x: margin,
-        y: prefY,
-        size: 12,
-        fontRegular,
-        fontBold,
-        fontGeist,
-        color: charcoal,
-      });
-      prefY -= 17;
-    }
-    prefY -= 8;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGES 4 to (3 + N): DAILY ITINERARY (1 Page Per Day, Zero Overlap)
-  // ─────────────────────────────────────────────────────────────
-  for (let i = 0; i < parsed.days.length; i++) {
-    const day = parsed.days[i];
-    const pD = pdfDoc.addPage([pageWidth, pageHeight]);
-    const dayStartY = drawInnerPageChrome(pD, `Day ${day.dayNumber}`, pageNum++);
-
-    const dStr = String(day.dayNumber).padStart(2, '0');
-
-    // Giant Numeral colored with Settings brandColor (matches Settings "Day 01 Format" preview)
-    const numeralY = dayStartY - 34;
-    drawSafeText(pD, dStr, {
-      x: margin,
-      y: numeralY,
-      size: 48,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: brandColor,
-      isBold: true,
-    });
-
-    // Dynamic Date beside numeral
-    const dateText = day.dateLabel || `Day ${day.dayNumber}`;
-    drawSafeText(pD, dateText, {
-      x: margin + 98,
-      y: numeralY + 26,
-      size: 12.5,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: muted,
-    });
-
-    // Day Title (wrapped cleanly so long titles never overflow or collide)
-    let dy = numeralY - 52;
-    const dayTitleLines = wrapText(day.title, contentWidth, fontBold, 20);
-    for (const dtLine of dayTitleLines) {
-      drawSafeText(pD, dtLine, {
-        x: margin,
-        y: dy,
-        size: 20,
-        fontRegular,
-        fontBold,
-        fontGeist,
-        color: charcoal,
-        isBold: true,
-      });
-      dy -= 26;
-    }
-
-    dy -= 14;
-
-    // Main Programme Paragraphs (bounded above y = 250 so they never collide with notes or metadata)
-    for (const para of day.paragraphs) {
-      const plines = wrapText(para, contentWidth, fontRegular, 13);
-      for (const pl of plines) {
-        if (dy < 250) break;
-        drawSafeText(pD, pl, {
-          x: margin,
-          y: dy,
-          size: 13,
-          fontRegular,
-          fontBold,
-          fontGeist,
-          color: charcoal,
-        });
-        dy -= 19;
-      }
-      dy -= 11;
-    }
-
-    // Bottom section: Operational Note + 2-Column Metadata Grid
-    let gridTopY = 185;
-    if (day.notes) {
-      const noteLines = wrapText(day.notes, contentWidth, fontRegular, 10.5);
-      let noteY = Math.min(dy - 8, 235);
-      for (const nLine of noteLines) {
-        drawSafeText(pD, nLine, {
-          x: margin,
-          y: noteY,
-          size: 10.5,
-          fontRegular,
-          fontBold,
-          fontGeist,
-          color: muted,
-        });
-        noteY -= 14.5;
-      }
-      gridTopY = Math.min(gridTopY, noteY - 16);
-    }
-
-    // Build active metadata cells (omitting empty fields so Departure Day has MEALS left, TRANSFERS right)
-    const metaCells: Array<{ label: string; value: string }> = [];
-    if (day.overnight && day.overnight.trim()) {
-      metaCells.push({ label: 'OVERNIGHT', value: day.overnight.trim() });
-    }
-    if (day.meals && day.meals.trim()) {
-      metaCells.push({ label: 'MEALS', value: day.meals.trim() });
-    }
-    if (day.transfers && day.transfers.trim()) {
-      metaCells.push({ label: 'TRANSFERS', value: day.transfers.trim() });
-    }
-    if (day.experience && day.experience.trim()) {
-      metaCells.push({ label: 'INCLUDED EXPERIENCE', value: day.experience.trim() });
-    }
-
-    const col1X = margin;
-    const col2X = margin + 260;
-    const colMaxWidth = 235;
-
-    let rowY = gridTopY;
-    for (let r = 0; r < metaCells.length; r += 2) {
-      const leftCell = metaCells[r];
-      const rightCell = metaCells[r + 1];
-
-      let leftLines: string[] = [];
-      let rightLines: string[] = [];
-
-      if (leftCell) {
-        drawSafeText(pD, leftCell.label, {
-          x: col1X,
-          y: rowY,
-          size: 8.5,
-          fontRegular,
-          fontBold,
-          fontGeist,
-          color: brandColor,
-          isBold: true,
-        });
-        leftLines = wrapText(leftCell.value, colMaxWidth, fontRegular, 12);
-        let ly = rowY - 18;
-        for (const lLine of leftLines) {
-          drawSafeText(pD, lLine, {
-            x: col1X,
-            y: ly,
-            size: 12,
-            fontRegular,
-            fontBold,
-            fontGeist,
-            color: charcoal,
-          });
-          ly -= 16;
-        }
-      }
-
-      if (rightCell) {
-        drawSafeText(pD, rightCell.label, {
-          x: col2X,
-          y: rowY,
-          size: 8.5,
-          fontRegular,
-          fontBold,
-          fontGeist,
-          color: brandColor,
-          isBold: true,
-        });
-        rightLines = wrapText(rightCell.value, colMaxWidth, fontRegular, 12);
-        let ry = rowY - 18;
-        for (const rLine of rightLines) {
-          drawSafeText(pD, rLine, {
-            x: col2X,
-            y: ry,
-            size: 12,
-            fontRegular,
-            fontBold,
-            fontGeist,
-            color: charcoal,
-          });
-          ry -= 16;
-        }
-      }
-
-      const maxRowLines = Math.max(1, leftLines.length, rightLines.length);
-      rowY -= 18 + maxRowLines * 16 + 16;
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE (4 + N): ACCOMMODATION
-  // ─────────────────────────────────────────────────────────────
-  const pAcc = pdfDoc.addPage([pageWidth, pageHeight]);
-  let accY = drawInnerPageChrome(pAcc, 'Accommodation', pageNum++);
-
-  drawSafeText(pAcc, `${parsed.durationNights} nights in ${parsed.destination}`, {
-    x: margin,
-    y: accY,
-    size: 17,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: brandColor,
-    isBold: true,
-  });
-
-  accY -= 28;
-  accY = drawDynamicTable(
-    pAcc,
-    accY,
-    'Stay details',
-    'Proposed arrangement',
-    165,
-    parsed.accommodationRows,
-    false
-  );
-
-  accY -= 36;
-  drawSafeText(pAcc, 'Alternative accommodation', {
-    x: margin,
-    y: accY,
-    size: 14,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-    isBold: true,
-  });
-
-  const altLines = wrapText(parsed.alternativeAccommodationText, contentWidth, fontRegular, 12);
-  accY -= 22;
-  for (const line of altLines) {
-    drawSafeText(pAcc, line, {
-      x: margin,
-      y: accY,
-      size: 12,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: muted,
-    });
-    accY -= 17;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE (5 + N): PACKAGE INCLUDES (Sample quotation sheet removed from Itinerary PDF)
-  // ─────────────────────────────────────────────────────────────
-  const pInc = pdfDoc.addPage([pageWidth, pageHeight]);
-  const incStartY = drawInnerPageChrome(pInc, 'Package includes', pageNum++);
-  drawNumberedList(pInc, incStartY - 4, parsed.inclusions, 12, 17.5, 16);
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE (7 + N): PACKAGE EXCLUDES
-  // ─────────────────────────────────────────────────────────────
-  const pExc = pdfDoc.addPage([pageWidth, pageHeight]);
-  const excStartY = drawInnerPageChrome(pExc, 'Package excludes', pageNum++);
-  drawNumberedList(pExc, excStartY - 4, parsed.exclusions, 12, 17.5, 16);
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE (8 + N): IMPORTANT TRAVEL INFORMATION
-  // ─────────────────────────────────────────────────────────────
-  const pInfo = pdfDoc.addPage([pageWidth, pageHeight]);
-  const infoStartY = drawInnerPageChrome(pInfo, 'Important travel information', pageNum++);
-  drawNumberedList(pInfo, infoStartY - 4, parsed.importantInfo, 12, 17.5, 18);
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE (9 + N): BOOKING AND PAYMENT
-  // ─────────────────────────────────────────────────────────────
-  const pBook = pdfDoc.addPage([pageWidth, pageHeight]);
-  let bY = drawInnerPageChrome(pBook, 'Booking and payment', pageNum++);
-
-  const bookIntro =
-    'Services are subject to availability until confirmed by the relevant suppliers and payment is received.';
-  const bookIntroLines = wrapText(bookIntro, contentWidth, fontRegular, 13.5);
-  for (const bLine of bookIntroLines) {
-    drawSafeText(pBook, bLine, {
-      x: margin,
-      y: bY,
-      size: 13.5,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: charcoal,
-    });
-    bY -= 20;
-  }
-  bY -= 28;
-
-  const bookSections: Array<[string, string]> = [
-    ['PAYMENT SCHEDULE', parsed.paymentScheduleText],
-    ['CANCELLATION AND AMENDMENT TERMS', parsed.cancellationTermsText],
-    ['QUOTE VALIDITY', parsed.quoteValidityText],
-  ];
-
-  for (const [title, desc] of bookSections) {
-    drawSafeText(pBook, title, {
-      x: margin,
-      y: bY,
-      size: 9,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: brandColor,
-      isBold: true,
-    });
-    bY -= 22;
-    const lines = wrapText(desc, contentWidth, fontRegular, 12.5);
-    for (const line of lines) {
-      drawSafeText(pBook, line, {
-        x: margin,
-        y: bY,
-        size: 12.5,
-        fontRegular,
-        fontBold,
-        fontGeist,
-        color: charcoal,
-      });
-      bY -= 18;
-    }
-    bY -= 28;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE (10 + N): BEFORE TRAVEL
-  // ─────────────────────────────────────────────────────────────
-  const pBefore = pdfDoc.addPage([pageWidth, pageHeight]);
-  let bfY = drawInnerPageChrome(pBefore, 'Before travel', pageNum++);
-
-  drawSafeText(pBefore, 'Please provide or confirm', {
-    x: margin,
-    y: bfY,
-    size: 15,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: brandColor,
-  });
-
-  bfY -= 32;
-  drawNumberedList(pBefore, bfY, parsed.beforeTravelItems, 12, 17.5, 16);
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE (11 + N): ASSISTANCE DURING TRAVEL
-  // ─────────────────────────────────────────────────────────────
-  const pAssist = pdfDoc.addPage([pageWidth, pageHeight]);
-  let asY = drawInnerPageChrome(pAssist, 'Assistance during travel', pageNum++);
-
-  drawSafeText(pAssist, `${orgName} customer support`, {
-    x: margin,
-    y: asY,
-    size: 15,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-    isBold: true,
-  });
-  asY -= 42;
-
-  const supportPhone = options.organizationPhone || '1800 202 0095';
-  drawSafeText(pAssist, supportPhone, {
-    x: margin,
-    y: asY,
-    size: 26,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: brandColor,
-    isBold: true,
-  });
-  asY -= 42;
-
-  const supportEmail =
-    options.consultantEmail ||
-    (options.organizationWebsite
-      ? `contact@${options.organizationWebsite.replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0]}`
-      : 'contact@lgtholidays.com');
-  const supportWeb = options.organizationWebsite || 'www.lgtholidays.com';
-
-  drawSafeText(pAssist, supportEmail, {
-    x: margin,
-    y: asY,
-    size: 13.5,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-  });
-  asY -= 20;
-  drawSafeText(pAssist, supportWeb, {
-    x: margin,
-    y: asY,
-    size: 13.5,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-  });
-  asY -= 55;
-
-  drawSafeText(pAssist, 'OPERATING HOURS', {
-    x: margin,
-    y: asY,
-    size: 9,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: brandColor,
-    isBold: true,
-  });
-  asY -= 22;
-  drawSafeText(pAssist, 'Monday to Saturday, 9:00 a.m. to 6:00 p.m.', {
-    x: margin,
-    y: asY,
-    size: 13,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-  });
-  asY -= 48;
-
-  drawSafeText(pAssist, 'AFTER-HOURS ASSISTANCE', {
-    x: margin,
-    y: asY,
-    size: 9,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: brandColor,
-    isBold: true,
-  });
-  asY -= 22;
-  drawSafeText(pAssist, 'To be confirmed before departure.', {
-    x: margin,
-    y: asY,
-    size: 13,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-  });
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE (12 + N): COMPANY DETAILS
-  // ─────────────────────────────────────────────────────────────
-  const pComp = pdfDoc.addPage([pageWidth, pageHeight]);
-  let cY = drawInnerPageChrome(pComp, 'Company details', pageNum++);
-
-  drawSafeText(pComp, orgName.toUpperCase(), {
-    x: margin,
-    y: cY,
-    size: 20,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: brandColor,
-    isBold: true,
-  });
-  cY -= 25;
-
-  const subCaptionWrapped = wrapText(orgSubCaption, contentWidth, fontRegular, 13);
-  for (const scLine of subCaptionWrapped) {
-    drawSafeText(pComp, scLine, {
-      x: margin,
-      y: cY,
-      size: 13,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: charcoal,
-    });
-    cY -= 19;
-  }
-  cY -= 26;
-
-  const compDetails: Array<[string, string]> = [
-    ['CIN', options.companyCin || 'L74999TN2016PLC112289'],
-    ['GSTIN - TAMIL NADU', options.companyGstin || '33AADCL1457C1Z0'],
-    ['PAN', options.companyPan || 'AADCL1457C'],
-    ['CUSTOMER SUPPORT', supportPhone],
-    [
-      'REGISTERED & CORPORATE OFFICE',
-      options.organizationAddress ||
-        'No. 18/1 & 18/2 (18), First Cross Street, Brindavan Street Extension, West Mambalam, Chennai, Tamil Nadu 600033, India',
-    ],
-  ];
-
-  for (const [lbl, val] of compDetails) {
-    drawSafeText(pComp, lbl, {
-      x: margin,
-      y: cY,
-      size: 8.5,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: brandColor,
-      isBold: true,
-    });
-    cY -= 20;
-    const valLines = wrapText(val, contentWidth, fontRegular, 13);
-    for (const vLine of valLines) {
-      drawSafeText(pComp, vLine, {
-        x: margin,
-        y: cY,
-        size: 13,
-        fontRegular,
-        fontBold,
-        fontGeist,
-        color: charcoal,
-      });
-      cY -= 18;
-    }
-    cY -= 18;
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // PAGE (13 + N): PROPOSAL ACCEPTANCE
-  // ─────────────────────────────────────────────────────────────
-  const pAccept = pdfDoc.addPage([pageWidth, pageHeight]);
-  let acY = drawInnerPageChrome(pAccept, 'Proposal acceptance', pageNum++);
-
-  const acceptIntro =
-    options.recipientType === 'supplier'
-      ? 'To proceed with this quotation request, please confirm service availability, net contracted rates, and cancellation policies.'
-      : 'To proceed, please confirm the travel dates, traveller details, selected hotel and acceptance of the final quotation and booking terms.';
-  const acLines = wrapText(acceptIntro, contentWidth, fontRegular, 13.5);
-  for (const l of acLines) {
-    drawSafeText(pAccept, l, {
-      x: margin,
-      y: acY,
-      size: 13.5,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: charcoal,
-    });
-    acY -= 20;
-  }
-  acY -= 42;
-
-  drawSafeText(pAccept, 'Guest name: _________________________', {
-    x: margin,
-    y: acY,
-    size: 13,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-  });
-  acY -= 38;
-  drawSafeText(pAccept, 'Signature: ___________________________', {
-    x: margin,
-    y: acY,
-    size: 13,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-  });
-  acY -= 38;
-  drawSafeText(pAccept, 'Date: ________________________________', {
-    x: margin,
-    y: acY,
-    size: 13,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-  });
-  acY -= 62;
-
-  const teamLabel = options.consultantRole || `${orgName} - FIT Team`;
-  drawSafeText(pAccept, teamLabel, {
-    x: margin,
-    y: acY,
-    size: 12.5,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: brandColor,
-    isBold: true,
-  });
-  acY -= 28;
-
-  const consultantName = options.consultantName || 'Travel Consultant';
-  drawSafeText(pAccept, consultantName, {
-    x: margin,
-    y: acY,
-    size: 16,
-    fontRegular,
-    fontBold,
-    fontGeist,
-    color: charcoal,
-    isBold: true,
-  });
-  acY -= 24;
-
-  if (options.consultantEmail || supportEmail) {
-    drawSafeText(pAccept, options.consultantEmail || supportEmail, {
-      x: margin,
-      y: acY,
-      size: 12.5,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: charcoal,
-    });
-    acY -= 18;
-  }
-
-  if (options.consultantPhone || supportPhone) {
-    drawSafeText(pAccept, options.consultantPhone || supportPhone, {
-      x: margin,
-      y: acY,
-      size: 12.5,
-      fontRegular,
-      fontBold,
-      fontGeist,
-      color: charcoal,
-    });
-  }
-
-  return await pdfDoc.save();
+  return pdfDoc.save();
 }
 
 export interface CustomerQuotePDFOptions extends PDFHeaderThemeOptions {
@@ -3113,7 +1629,7 @@ export async function generateCustomerQuotationPDF(options: CustomerQuotePDFOpti
   }
 
   const totalPagesCount = pdfDoc.getPageCount();
-  const quoteFooterOrg = options.organizationName || 'LGT Holidays';
+  const quoteFooterOrg = options.organizationName || '';
   for (let i = 0; i < totalPagesCount; i++) {
     const page = pdfDoc.getPage(i);
     drawSettingsConfiguredFooter({
@@ -3267,7 +1783,7 @@ export async function generateBookingVoucherPDF(options: BookingVoucherPDFOption
     color: muted,
   });
 
-  const partyStr = `${options.headcountAdults || 2} Adults, ${options.headcountChildren || 0} Children • Tier: ${(options.hotelTier || 'luxury_5star').replace('_', ' ').toUpperCase()}`;
+  const partyStr = `${options.headcountAdults ?? 0} Adults, ${options.headcountChildren || 0} Children • Tier: ${(options.hotelTier || 'luxury_5star').replace('_', ' ').toUpperCase()}`;
   drawSafeText(page, `Party & Tier: ${partyStr}`, {
     x: margin + 15,
     y: y - 79,
@@ -3361,7 +1877,7 @@ export async function generateBookingVoucherPDF(options: BookingVoucherPDFOption
     page,
     pageWidth,
     margin,
-    footerLeftText: `${options.organizationName || 'LGT Holidays'} • Issued on ${formatCalendarDate(new Date())} • CONFIRMED`,
+    footerLeftText: `${options.organizationName || ''} • Issued on ${formatCalendarDate(new Date())} • CONFIRMED`,
     pageNum: 1,
     totalPages: 1,
     fontRegular,

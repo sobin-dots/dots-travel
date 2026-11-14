@@ -1,5 +1,6 @@
 import { getTenantIntegration } from './integrations/credentials-manager';
 import { db } from './db';
+import { assertItineraryReady, ItineraryError, parseItineraryDays, declaredItineraryDuration, assertTripInput } from './itinerary-content';
 
 export interface ItineraryResult {
   title: string;
@@ -7,6 +8,7 @@ export interface ItineraryResult {
   itinerary: string;
   durationDays?: number;
   departureDate?: string;
+  returnDate?: string;
   headcountAdults?: number;
   headcountChildren?: number;
   headcountInfants?: number;
@@ -21,6 +23,8 @@ interface LlmCallOptions {
   temperature?: number;
   timeoutMs?: number;
   organizationId?: string;
+  required?: boolean;
+  validate?: (result: any) => void;
 }
 
 interface ResolvedAiConfig {
@@ -29,6 +33,7 @@ interface ResolvedAiConfig {
   deepseekModel: string;
   openaiKey?: string;
   openaiModel: string;
+  openaiBaseUrl: string;
 }
 
 function normalizeDeepSeekChatModel(model?: string): string {
@@ -59,6 +64,7 @@ async function resolveTenantAiConfig(organizationId?: string): Promise<ResolvedA
   let deepseekBaseUrl = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
   let deepseekModel = normalizeDeepSeekChatModel(process.env.DEEPSEEK_MODEL || 'deepseek-chat');
 
+  let openaiBaseUrl = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
   let openaiKey = process.env.OPENAI_API_KEY;
   let openaiModel = normalizeOpenAiChatModel(process.env.OPENAI_MODEL || 'gpt-4o-mini');
 
@@ -84,6 +90,7 @@ async function resolveTenantAiConfig(organizationId?: string): Promise<ResolvedA
     const openaiInteg = await getTenantIntegration(organizationId, 'openai');
     if (openaiInteg?.credentials?.apiKey) {
       openaiKey = openaiInteg.credentials.apiKey;
+      if (openaiInteg.metadata?.baseUrl) openaiBaseUrl = openaiInteg.metadata.baseUrl.replace(/\/+$/, '');
       const candidateModel = openaiInteg.metadata?.chatModel || openaiInteg.metadata?.model;
       if (candidateModel) {
         openaiModel = normalizeOpenAiChatModel(candidateModel);
@@ -101,170 +108,77 @@ async function resolveTenantAiConfig(organizationId?: string): Promise<ResolvedA
     deepseekModel,
     openaiKey,
     openaiModel,
+    openaiBaseUrl,
   };
 }
 
-/**
- * Common LLM completion invoker returning parsed JSON.
- * Primary: DeepSeek AI (or OpenAI if configured).
- */
-async function callLlmJson<T>({
-  messages,
-  temperature = 0.7,
-  timeoutMs = 35000,
-  organizationId,
-}: LlmCallOptions): Promise<T | null> {
-  const config = await resolveTenantAiConfig(organizationId);
-
-  const effectiveTimeout = process.env.NODE_ENV === 'test' ? Math.min(timeoutMs, 4000) : timeoutMs;
-  // Use a per-provider timeout so that if DeepSeek is slow/unresponsive (> 8s), OpenAI fallback runs immediately
-  const perProviderTimeout =
-    process.env.NODE_ENV === 'test'
-      ? Math.min(effectiveTimeout, 4000)
-      : Math.min(effectiveTimeout, 10000);
-
-  // 1. Primary for itinerary intelligence: DeepSeek API
-  if (config.deepseekKey) {
-    try {
-      console.log(`[AI Itinerary] Calling DeepSeek (${config.deepseekModel}) for org: ${organizationId || 'default'}...`);
-      const response = await fetch(`${config.deepseekBaseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${config.deepseekKey}`,
-        },
-        signal: AbortSignal.timeout(perProviderTimeout),
-        body: JSON.stringify({
-          model: config.deepseekModel,
-          response_format: { type: 'json_object' },
-          messages,
-          temperature,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const content = data.choices?.[0]?.message?.content;
-        if (content) {
-          try {
-            return JSON.parse(content) as T;
-          } catch (parseErr) {
-            console.warn('Failed to parse DeepSeek JSON output:', parseErr);
-          }
+/** Provider failover uses real completions only. A failed generation never becomes a blank success. */
+async function callCompletion<T>(options: LlmCallOptions, json: boolean): Promise<T | null> {
+  const config = await resolveTenantAiConfig(options.organizationId);
+  const providers = [
+    { key: config.deepseekKey, baseUrl: config.deepseekBaseUrl, model: config.deepseekModel },
+    { key: config.openaiKey, baseUrl: config.openaiBaseUrl, model: config.openaiModel },
+  ].filter(provider => provider.key?.trim());
+  if (!providers.length && options.required) {
+    throw new ItineraryError('No itinerary AI provider is configured. Add valid DeepSeek or OpenAI credentials in Settings.', 503, 'ai_not_configured');
+  }
+  let lastError: unknown;
+  const deadline = Date.now() + (options.required ? 180000 : (options.timeoutMs ?? 35000) * providers.length);
+  for (const provider of providers) {
+    for (let attempt = 0; attempt < (options.required ? 2 : 1); attempt++) {
+      if (Date.now() >= deadline) break;
+      try {
+        const response = await fetch(`${provider.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.key}` },
+          signal: AbortSignal.timeout(Math.min(options.timeoutMs ?? 35000, Math.max(1, deadline - Date.now()))),
+          body: JSON.stringify({
+            model: provider.model,
+            ...(json ? { response_format: { type: 'json_object' } } : {}),
+            messages: options.messages,
+            temperature: options.temperature ?? 0.5,
+            ...(options.required ? { max_tokens: 8192 } : {}),
+          }),
+        });
+        if (!response.ok) {
+          const reason = response.status === 401 || response.status === 403 ? 'Check the provider credentials and model permissions in Settings.'
+            : response.status === 429 ? 'Check the provider quota or rate limit, then retry.'
+            : response.status === 400 ? 'Check the configured chat model and provider settings.' : 'The provider is unavailable; please retry.';
+          lastError = new ItineraryError(`The itinerary AI provider returned HTTP ${response.status}. ${reason}`, 502);
+          // Retry transient failures once, then try the next configured provider.
+          if ((response.status === 429 || response.status >= 500) && attempt === 0) continue;
+          break;
         }
-      } else {
-        console.warn(`DeepSeek (${config.deepseekModel}) returned HTTP status`, response.status, await response.text());
+        const data = await response.json();
+        const choice = data.choices?.[0];
+        if (choice?.finish_reason === 'length') throw new Error('AI response was truncated');
+        const content = choice?.message?.content;
+        if (typeof content !== 'string' || !content.trim()) throw new Error('AI response was empty');
+        const result = json ? JSON.parse(content.replace(/^```(?:json)?\s*|\s*```$/g, '')) : content.trim();
+        options.validate?.(result);
+        return result as T;
+      } catch (error) {
+        lastError = error;
+        if (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)) break;
       }
-    } catch (err: any) {
-      console.warn('DeepSeek error or timeout:', err?.message || err);
     }
   }
-
-  // 2. Fallback: OpenAI API (if configured by tenant)
-  if (config.openaiKey) {
-    try {
-      console.log(`[AI Itinerary] Calling OpenAI (${config.openaiModel}) for org: ${organizationId || 'default'}...`);
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${config.openaiKey}`,
-        },
-        signal: AbortSignal.timeout(perProviderTimeout),
-        body: JSON.stringify({
-          model: config.openaiModel,
-          response_format: { type: 'json_object' },
-          messages,
-          temperature,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const content = data.choices?.[0]?.message?.content;
-        if (content) {
-          try {
-            return JSON.parse(content) as T;
-          } catch (parseErr) {
-            console.warn('Failed to parse OpenAI JSON output:', parseErr);
-          }
-        }
-      } else {
-        console.warn(`OpenAI (${config.openaiModel}) returned status`, response.status, await response.text());
-      }
-    } catch (err: any) {
-      console.warn('OpenAI error or timeout:', err?.message || err);
-    }
+  if (options.required) {
+    throw new ItineraryError(
+      lastError instanceof ItineraryError ? lastError.message
+        : 'The AI provider could not produce a complete itinerary. Check provider credentials, availability and quota, then retry. Your previous itinerary has been preserved.',
+      502, 'itinerary_generation_failed'
+    );
   }
-
   return null;
 }
 
-/**
- * Common LLM completion invoker returning plain text / markdown.
- */
-async function callLlmText({
-  messages,
-  temperature = 0.5,
-  timeoutMs = 35000,
-  organizationId,
-}: LlmCallOptions): Promise<string | null> {
-  const config = await resolveTenantAiConfig(organizationId);
-  const effectiveTimeout = process.env.NODE_ENV === 'test' ? Math.min(timeoutMs, 4000) : timeoutMs;
+async function callLlmJson<T>(options: LlmCallOptions): Promise<T | null> {
+  return callCompletion<T>(options, true);
+}
 
-  // 1. Primary: DeepSeek API
-  if (config.deepseekKey) {
-    try {
-      const response = await fetch(`${config.deepseekBaseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${config.deepseekKey}`,
-        },
-        signal: AbortSignal.timeout(effectiveTimeout),
-        body: JSON.stringify({
-          model: config.deepseekModel,
-          messages,
-          temperature,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        return data.choices?.[0]?.message?.content || null;
-      }
-    } catch (err: any) {
-      console.warn('DeepSeek text completion error:', err?.message || err);
-    }
-  }
-
-  // 2. Secondary: OpenAI API
-  if (config.openaiKey) {
-    try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${config.openaiKey}`,
-        },
-        signal: AbortSignal.timeout(effectiveTimeout),
-        body: JSON.stringify({
-          model: config.openaiModel,
-          messages,
-          temperature,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        return data.choices?.[0]?.message?.content || null;
-      }
-    } catch (err: any) {
-      console.warn('OpenAI text completion error:', err?.message || err);
-    }
-  }
-
-  return null;
+async function callLlmText(options: LlmCallOptions): Promise<string | null> {
+  return callCompletion<string>(options, false);
 }
 
 export interface TripParameters {
@@ -380,16 +294,6 @@ function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Dat
 
   const lower = transcript.toLowerCase();
 
-  // 2. Pongal festival (Tamil Nadu harvest festival celebrated on January 14th)
-  if (lower.includes('பொங்கல்') || lower.includes('pongal') || lower.includes('சங்கராந்தி') || lower.includes('sankranti')) {
-    let year = baseDate.getUTCFullYear();
-    // If the reference date is after mid-January (e.g. October/November/December), Pongal is in the upcoming January
-    if (baseDate.getUTCMonth() > 0 || (baseDate.getUTCMonth() === 0 && baseDate.getUTCDate() > 14)) {
-      year += 1;
-    }
-    return `${year}-01-14`;
-  }
-
   // 3. Spoken Month + Day (+ optional Year) or Day + Month (+ optional Year) in English or Tamil
   for (const { month, patterns } of MONTH_ALIASES) {
     for (const pat of patterns) {
@@ -399,7 +303,7 @@ function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Dat
 
       // e.g. "டிசம்பர் 20", "December 20, 2026", "டிசம்பர் 20ஆம் தேதி"
       const monthFirstRegex = new RegExp(
-        `(?:${patRegexStr})\\s*(\\d{1,2})(?:st|nd|rd|th|ஆம்)?(?:[\\s,]+(20\\d{2}))?`,
+        `(?:${patRegexStr})\\s*(\\d{1,2})(?!\\d)(?:st|nd|rd|th|ஆம்)?(?:[\\s,]+(20\\d{2}))?`,
         'i'
       );
       const m1 = transcript.match(monthFirstRegex);
@@ -417,7 +321,7 @@ function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Dat
 
       // e.g. "28 டிசம்பர் 2026", "20th December"
       const dayFirstRegex = new RegExp(
-        `(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:${patRegexStr})(?:[\\s,]+(20\\d{2}))?`,
+        `(?<!\\d)(\\d{1,2})(?!\\d)(?:st|nd|rd|th)?\\s+(?:${patRegexStr})(?:[\\s,]+(20\\d{2}))?`,
         'i'
       );
       const m2 = transcript.match(dayFirstRegex);
@@ -431,39 +335,6 @@ function resolveSpokenDateFromTranscript(transcript: string, referenceDate?: Dat
           }
           return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         }
-      }
-    }
-  }
-
-  // 4. Standalone Month mention (e.g. "ஜான்வரி", "in January", "during December")
-  // For ASCII short words (like "may", "jan", "feb"), require explicit month context so auxiliary verbs or regular words don't trigger.
-  for (const { month, patterns } of MONTH_ALIASES) {
-    for (const pat of patterns) {
-      const isAscii = /^[a-z]+$/i.test(pat);
-      let matched = false;
-
-      if (isAscii) {
-        if (pat === 'may' || pat.length <= 3) {
-          // Require month context prefix like "in may", "during may", "month of may"
-          const ctxRegex = new RegExp(`\\b(?:in|during|month\\s+of|by|for)\\s+${pat}\\b`, 'i');
-          matched = ctxRegex.test(transcript);
-        } else {
-          // Full English month names require strict word boundary \b so "december" won't match "decisions"
-          const fullRegex = new RegExp(`\\b${pat}\\b`, 'i');
-          matched = fullRegex.test(transcript);
-        }
-      } else {
-        // Tamil patterns require non-word / whitespace boundaries
-        const tamilRegex = new RegExp(`(?:^|[^\\u0B80-\\u0BFF\\w])${pat}(?:$|[^\\u0B80-\\u0BFF\\w])`, 'i');
-        matched = tamilRegex.test(transcript);
-      }
-
-      if (matched) {
-        let year = baseDate.getUTCFullYear();
-        if (month - 1 < baseDate.getUTCMonth()) {
-          year += 1;
-        }
-        return `${year}-${String(month).padStart(2, '0')}-01`;
       }
     }
   }
@@ -576,7 +447,8 @@ export async function extractTripParametersFromTranscript(
     let destination = '';
     if (text.includes('singapore') || text.includes('sentosa') || text.includes('சிங்கப்பூர்') || text.includes('சிங்கபூர்') || text.includes('சென்டோசா')) {
       destination = 'Singapore';
-    } else if (
+    }
+    if (
       text.includes('malaysia') ||
       text.includes('kuala lumpur') ||
       text.includes('langkawi') ||
@@ -589,8 +461,10 @@ export async function extractTripParametersFromTranscript(
       text.includes('ஜெண்டிங்') ||
       text.includes('மலேயா')
     ) {
-      destination = 'Malaysia';
-    } else if (text.includes('maldives') || text.includes('மால்தீவ்ஸ்') || text.includes('மாலத்தீவு') || text.includes('மாலத்தீவுகள்')) {
+      destination = destination ? 'Malaysia and Singapore' : 'Malaysia';
+    }
+    if (!destination) {
+    if (text.includes('maldives') || text.includes('மால்தீவ்ஸ்') || text.includes('மாலத்தீவு') || text.includes('மாலத்தீவுகள்')) {
       destination = 'Maldives';
     } else if (
       text.includes('dubai') ||
@@ -600,7 +474,7 @@ export async function extractTripParametersFromTranscript(
       text.includes('துபாய்') ||
       text.includes('அபுதாபி')
     ) {
-      destination = 'Dubai, United Arab Emirates';
+      destination = text.includes('dubai') || text.includes('துபை') || text.includes('துபாய்') ? 'Dubai, United Arab Emirates' : 'United Arab Emirates';
     } else if (
       text.includes('rome') ||
       text.includes('italy') ||
@@ -610,11 +484,11 @@ export async function extractTripParametersFromTranscript(
       text.includes('ரோம்') ||
       text.includes('இத்தாலி')
     ) {
-      destination = text.includes('யூரோப்') || text.includes('europe') || text.includes('ஐரோப்பா') ? 'Rome, Europe' : 'Rome & Amalfi Coast, Italy';
+      destination = 'Italy';
     } else if (text.includes('europe') || text.includes('யூரோப்') || text.includes('ஐரோப்பா')) {
       destination = 'Europe';
     } else if (text.includes('paris') || text.includes('france') || text.includes('பாரிஸ்') || text.includes('பிரான்ஸ்')) {
-      destination = 'Paris, France';
+      destination = text.includes('paris') || text.includes('பாரிஸ்') ? 'Paris, France' : 'France';
     } else if (
       text.includes('swiss') ||
       text.includes('alps') ||
@@ -625,9 +499,9 @@ export async function extractTripParametersFromTranscript(
       text.includes('சுவிஸர்லாந்து') ||
       text.includes('சுவிஸ்')
     ) {
-      destination = 'Swiss Alps, Switzerland';
+      destination = 'Switzerland';
     } else if (text.includes('bali') || text.includes('indonesia') || text.includes('ubud') || text.includes('பாலி') || text.includes('இந்தோனேஷியா')) {
-      destination = 'Bali, Indonesia';
+      destination = text.includes('bali') || text.includes('பாலி') ? 'Bali, Indonesia' : 'Indonesia';
     } else if (
       text.includes('thailand') ||
       text.includes('phuket') ||
@@ -640,7 +514,7 @@ export async function extractTripParametersFromTranscript(
       text.includes('பாங்காக்') ||
       text.includes('பட்டாயா')
     ) {
-      destination = 'Phuket & Krabi, Thailand';
+      destination = 'Thailand';
     } else if (
       text.includes('sri lanka') ||
       text.includes('colombo') ||
@@ -663,7 +537,7 @@ export async function extractTripParametersFromTranscript(
       text.includes('டோக்கியோ') ||
       text.includes('ஜப்பான்')
     ) {
-      destination = 'Tokyo & Kyoto, Japan';
+      destination = 'Japan';
     } else if (
       text.includes('london') ||
       text.includes('uk') ||
@@ -671,7 +545,7 @@ export async function extractTripParametersFromTranscript(
       text.includes('லண்டன்') ||
       text.includes('இங்கிலாந்து')
     ) {
-      destination = 'London, United Kingdom';
+      destination = text.includes('london') || text.includes('லண்டன்') ? 'London, United Kingdom' : 'United Kingdom';
     } else if (
       text.includes('kerala') ||
       text.includes('munnar') ||
@@ -687,9 +561,9 @@ export async function extractTripParametersFromTranscript(
     } else if (text.includes('andaman') || text.includes('அந்தமான்')) {
       destination = 'Andaman Islands, India';
     } else if (text.includes('manali') || text.includes('shimla') || text.includes('மனாலி') || text.includes('சிம்லா')) {
-      destination = 'Shimla & Manali, India';
+      destination = text.includes('manali') || text.includes('மனாலி') ? 'Manali, India' : 'Shimla, India';
     } else if (text.includes('ooty') || text.includes('kodaikanal') || text.includes('ஊட்டி') || text.includes('கொடைக்கானல்')) {
-      destination = 'Ooty & Kodaikanal, India';
+      destination = text.includes('ooty') || text.includes('ஊட்டி') ? 'Ooty, India' : 'Kodaikanal, India';
     } else if (
       text.includes('greece') ||
       text.includes('santorini') ||
@@ -697,7 +571,7 @@ export async function extractTripParametersFromTranscript(
       text.includes('mykonos') ||
       text.includes('கிரீஸ்')
     ) {
-      destination = 'Athens & Santorini, Greece';
+      destination = 'Greece';
     } else if (text.includes('new york') || text.includes('nyc') || text.includes('நியூயார்க்')) {
       destination = 'New York City, USA';
     } else if (
@@ -735,11 +609,12 @@ export async function extractTripParametersFromTranscript(
     } else if (text.includes('south africa') || text.includes('cape town') || text.includes('தென் ஆப்பிரிக்கா')) {
       destination = 'South Africa';
     } else if (text.includes('georgia') || text.includes('tbilisi') || text.includes('azerbaijan') || text.includes('baku') || text.includes('ஜார்ஜியா')) {
-      destination = 'Georgia & Azerbaijan';
+      destination = text.includes('azerbaijan') || text.includes('baku') ? 'Azerbaijan' : 'Georgia';
     } else if (text.includes('canada') || text.includes('toronto') || text.includes('vancouver') || text.includes('கனடா')) {
       destination = 'Canada';
     }
 
+    }
     // Generic travel destination phrasing regex if destination is still unset
     if (!destination) {
       const genericDestMatch = transcriptText.match(
@@ -785,21 +660,9 @@ export async function extractTripParametersFromTranscript(
         if (parsedNights) durationDays = Math.max(1, Math.min(60, parsedNights + 1));
       } else if (text.includes('a week') || text.includes('one week') || text.includes('ஒரு வாரம்')) {
         durationDays = 7;
-      } else if (text.includes('weekend')) {
-        durationDays = 3;
-      }
-    }
-    // Also check "five flights" or "5 flights"
-    if (!durationDays) {
-      const flightsMatch = transcriptText.match(
-        /(\d+|one|two|three|four|five|six|seven|eight|nine|ten|ஒரு|இரண்டு|மூன்று|நான்கு|ஐந்து)\s*(?:flights?|பறப்பு|ஃப்ளைட்ஸ்)/i
-      );
-      if (flightsMatch) {
-        const parsed = parseTamilOrEnglishNumber(flightsMatch[1]);
-        if (parsed) durationDays = Math.max(1, Math.min(60, parsed));
-      }
-    }
 
+      }
+    }
     // 3. Departure Date & Return Date
     const departureDate = resolveSpokenDateFromTranscript(transcriptText, contactInfo?.referenceDate);
     const returnDate = computeReturnDateIso(departureDate, durationDays);
@@ -812,6 +675,7 @@ export async function extractTripParametersFromTranscript(
     // Check Tamil/English "myself and wife" ("நானும், வைப்பும்" / "நானும் என் மனைவியும்" / "my wife and i")
     if (
       text.includes('நானும், வைப்பும்') ||
+      text.includes('நான், வைஃப்பும்') ||
       text.includes('நானும் வைப்பும்') ||
       text.includes('நானும் என் மனைவியும்') ||
       text.includes('my wife and i') ||
@@ -857,14 +721,8 @@ export async function extractTripParametersFromTranscript(
         if (total) {
           headcountAdults = Math.max(1, Math.min(50, total));
         }
-      } else if (text.includes('couple') || text.includes('honeymoon') || text.includes('two of us')) {
+      } else if (text.includes('couple') || text.includes('two of us')) {
         headcountAdults = 2;
-      } else if (text.includes('family of 4') || text.includes('four of us')) {
-        headcountAdults = 2;
-        if (headcountChildren === undefined) headcountChildren = 2;
-      } else if (text.includes('family of 3') || text.includes('three of us')) {
-        headcountAdults = 2;
-        if (headcountChildren === undefined) headcountChildren = 1;
       } else if (text.includes('solo') || text.includes('single traveller') || text.includes('just me')) {
         headcountAdults = 1;
       }
@@ -1001,7 +859,7 @@ export async function extractTripParametersFromTranscript(
 
     // Festival / Holidays
     if (text.includes('பொங்கல்') || text.includes('pongal')) {
-      reqParts.push('Travel planned during Pongal holidays in January (seeking lower airfare options)');
+      reqParts.push('Pongal travel period mentioned; confirm exact dates');
     } else if (text.includes('தீபாவளி') || text.includes('diwali')) {
       reqParts.push('Travel planned during Diwali holidays');
     }
@@ -1029,12 +887,12 @@ export async function extractTripParametersFromTranscript(
 
     // Thrilling rides / theme parks / resort
     if (text.includes('திரில்லிங்') || text.includes('ரைட்ஸ்') || text.includes('rides') || text.includes('resort') || text.includes('ரஸாட்')) {
-      reqParts.push('Exciting attractions, resort stay & thrilling rides requested');
+      reqParts.push('Resort or attraction preferences discussed; confirm the requested experiences');
     }
 
     // Land package & pricing breakdown
     if (text.includes('லான்ட் பாக்கேஜ்') || text.includes('land package')) {
-      reqParts.push('Land package pricing requested (airline tickets separate)');
+      reqParts.push('Land package requested; confirm airfare scope');
     }
 
     // Budget
@@ -1054,7 +912,7 @@ export async function extractTripParametersFromTranscript(
         reqParts.push('Daily breakfast included');
       }
     } else if (text.includes('ஃபுட்') || text.includes('சாப்பாடு') || text.includes('food')) {
-      reqParts.push('All meals / food package requested');
+      reqParts.push('Meal preferences discussed; confirm included meals');
     }
 
     // Transfers & Driver
@@ -1071,7 +929,7 @@ export async function extractTripParametersFromTranscript(
       reqParts.push('Dietary preference noted in call');
     }
     if (text.includes('anniversary') || text.includes('honeymoon') || text.includes('birthday')) {
-      reqParts.push('Special celebration amenities requested');
+      reqParts.push('Special occasion mentioned; confirm requested arrangements');
     }
 
     // 8. Spoken Customer Email & Name
@@ -1087,27 +945,8 @@ export async function extractTripParametersFromTranscript(
       }
     }
 
-    // If caller explicitly spelled/dictated an email like gokilakarnan2003@gmail.com
-    let derivedNameFromEmail = '';
-    if (spokenEmail) {
-      reqParts.push(`Requested delivery to email: ${spokenEmail}`);
-      const emailUser = spokenEmail.split('@')[0].replace(/\d+/g, '');
-      if (emailUser.toLowerCase() === 'gokilakarnan') {
-        derivedNameFromEmail = 'Gokila Karnan';
-      } else if (emailUser.includes('.')) {
-        derivedNameFromEmail = emailUser.split('.').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
-      } else if (emailUser.length >= 3) {
-        derivedNameFromEmail = emailUser.charAt(0).toUpperCase() + emailUser.slice(1);
-      }
-    }
-
-    // If caller gave an email that differs from contact directory, prioritize name from email/call
-    const resolvedName =
-      extractedName ||
-      (spokenEmail && spokenEmail !== contactInfo?.email && derivedNameFromEmail ? derivedNameFromEmail : '') ||
-      cleanContactName ||
-      derivedNameFromEmail ||
-      '';
+    // An email address does not establish a person's name.
+    const resolvedName = extractedName || cleanContactName || '';
 
     const resolvedEmail = spokenEmail || contactInfo?.email || '';
 
@@ -1352,14 +1191,13 @@ CRITICAL INSTRUCTION: You MUST incorporate all the active rules above into the f
       rules: applicableRules,
     };
   } catch (err: any) {
-    console.warn('Failed to load active itinerary rules for org:', err?.message || err);
-    return { promptText: '', ruleCount: 0, rules: [] };
+    throw new ItineraryError('Agency itinerary rules could not be loaded. Please retry without changing the saved itinerary.', 503, 'itinerary_rules_unavailable');
   }
 }
 
 export async function generateItineraryFromTranscript(
   transcriptText: string,
-  contactInfo?: { name?: string; phone?: string; company?: string; email?: string },
+  contactInfo?: { name?: string; phone?: string; company?: string; email?: string; referenceDate?: Date | string },
   organizationId?: string,
   customParams?: TripParameters
 ): Promise<ItineraryResult> {
@@ -1377,6 +1215,8 @@ export async function generateItineraryFromTranscript(
   const budget = budgetVal ? `₹${Number(budgetVal).toLocaleString('en-IN')}` : '';
   const hotelTier = customParams?.hotelTier?.trim() || extracted.hotelTier?.trim() || '';
   const departureDate = customParams?.departureDate?.trim() || extracted.departureDate?.trim() || '';
+  const returnDate = customParams?.returnDate?.trim() || computeReturnDateIso(departureDate, duration) || extracted.returnDate || '';
+  assertTripInput({ destination, durationDays: duration, departureDate, returnDate, headcountAdults: adults, headcountChildren: children, headcountInfants: infants, targetBudget: budgetVal });
   const specialRequests = customParams?.specialRequests?.trim() || extracted.specialRequests?.trim() || '';
   const customerName =
     (customParams?.customerName && customParams.customerName !== 'Valued Client' ? customParams.customerName.trim() : '') ||
@@ -1396,22 +1236,8 @@ export async function generateItineraryFromTranscript(
     hotelTier: hotelTier || undefined,
   });
 
-  // If neither transcript nor destination was provided, return blank itinerary and only the provided fields
-  if (!transcriptText?.trim() && !destination) {
-    return {
-      title: '',
-      destination: '',
-      itinerary: '',
-      durationDays: duration,
-      departureDate: departureDate || undefined,
-      headcountAdults: adults,
-      headcountChildren: children,
-      headcountInfants: infants,
-      hotelTier: hotelTier || undefined,
-      specialRequests: specialRequests || undefined,
-      customerName: customerName || undefined,
-      customerEmail: customerEmail || undefined,
-    };
+  if (!destination || !duration || !Number.isInteger(duration) || duration < 1 || duration > 60) {
+    throw new ItineraryError('Confirm a destination and a duration between 1 and 60 days before generating the itinerary.', 400, 'missing_trip_parameters');
   }
 
   const messages = [
@@ -1420,7 +1246,7 @@ export async function generateItineraryFromTranscript(
       content:
         `You are an elite FIT travel proposal specialist. Analyze the customer conversation transcript, confirmed travel parameters, and the travel agency's strict itinerary preparation rules, and generate a comprehensive, destination-specific FIT travel proposal.${
           rulesContext.ruleCount > 0 ? `\n\n${rulesContext.promptText}` : ''
-        }\n\nIMPORTANT: Do NOT use static sample content from other destinations. Every section, day programme, inclusion, exclusion, and preference must be dynamically tailored to the guest's actual destination (${destination || 'as stated in transcript'}), duration (${duration ? `${duration} days` : 'as stated in transcript'}), and transcript. Do NOT use USD currency or include estimated budget disclaimers before supplier quotation; always use INR (₹) if currency is referenced, and use clean bullet points (- ...) instead of pipe tables (| ... |) for lists.\n\nReturn a strictly valid JSON object with the following keys:\n- "title": A compelling title for the itinerary\n- "destination": The target destination\n- "itinerary": The complete Markdown travel proposal following this exact structure:\n  1. "# <Title>" with Guest, Destination, Duration, Travel Dates, Party Size, Accommodation Category\n  2. "## 1. Executive Summary" (Overview paragraph + structured Trip Overview bullets: Destination, Duration, Hotel plan, Meal plan, Transfers, Flights, Pace)\n  3. "## 2. Guest Preferences" with "### Recorded requirements" and "### To confirm before booking"\n  4. "## 3. Day-by-Day Journey Itinerary" with "### Day 1: <Title>" through the final day. Each day MUST include 1-2 concise programme paragraphs followed by:\n     Overnight: <City> (omit on final departure day)\n     Meals: <Included meals>\n     Transfers: <Transfer type>\n     Included experience: <Specific attraction/tour included>\n     Notes: <Operational note>\n  5. "## 4. Curated Accommodations" (Hotel category, Stay, Room, Meal plan, Hotel name)\n  6. "## 5. Package Includes" (numbered list of exact included services matching the daily itinerary)\n  7. "## 6. Package Excludes" (numbered list of excluded items)\n  8. "## 7. Before Travel" (clean bullet list of items to provide or confirm before travel — never a pipe table)\n  (Do NOT include a Sample Quotation section in the itinerary before supplier quotation)`,
+        }\n\nIMPORTANT: Do NOT use static sample content from other destinations. Every section, day programme, inclusion, exclusion, and preference must be dynamically tailored to the guest's actual destination (${destination || 'as stated in transcript'}), duration (${duration ? `${duration} days` : 'as stated in transcript'}), and transcript. Do NOT use USD currency or include estimated budget disclaimers before supplier quotation; always use INR (₹) if currency is referenced, and use clean bullet points (- ...) instead of pipe tables (| ... |) for lists.\n\nUse confirmed inputs as authoritative. Cover every requested destination, including intercity or cross-border travel when relevant. Present suggested attractions as proposals, never as booked services. Never invent confirmed hotel names, flights, prices, tickets, meals, private transfers or inclusions. If a service is unconfirmed, label it as proposed or to be confirmed. Return a strictly valid JSON object with the following keys:\n- "title": A compelling title for the itinerary\n- "destination": The target destination\n- "itinerary": The complete Markdown travel proposal following this exact structure:\n  1. "# <Title>" with Guest, Destination, Duration, Travel Dates, Party Size, Accommodation Category\n  2. "## 1. Executive Summary" (Overview paragraph + structured Trip Overview bullets: Destination, Duration, Hotel plan, Meal plan, Transfers, Flights, Pace)\n  3. "## 2. Guest Preferences" with "### Recorded requirements" and "### To confirm before booking"\n  4. "## 3. Day-by-Day Journey Itinerary" with "### Day 1: <Title>" through the final day. Each day MUST include a detailed, practical programme (about 100-180 words, including morning, afternoon and evening where appropriate). Explain the sequence of visits, travel between locations, time to explore and relevant guest preferences. Arrival/departure days may be shorter but must describe actual logistics. Do not pad with generic repeated sentences. Follow the programme with:\n     Overnight: <City> (omit on final departure day)\n     Meals: <Included meals>\n     Transfers: <Transfer type>\n     Included experience: <Specific attraction/tour included>\n     Notes: <Operational note>\n  5. "## 4. Curated Accommodations" (Hotel category, Stay, Room, Meal plan, Hotel name)\n  6. "## 5. Package Includes" (numbered list of exact included services matching the daily itinerary)\n  7. "## 6. Package Excludes" (numbered list of excluded items)\n  8. "## 7. Before Travel" (clean bullet list of items to provide or confirm before travel — never a pipe table)\n  (Do NOT include a Sample Quotation section in the itinerary before supplier quotation)`,
     },
     {
       role: 'user',
@@ -1430,9 +1256,10 @@ Email: ${customerEmail || 'Not specified'}
 
 Confirmed Trip Parameters:
 - Target Destination: ${destination || 'Extract from transcript'}
-- Duration: ${duration ? `${duration} Days / ${Math.max(1, duration - 1)} Nights` : 'Extract from transcript'}
+- Duration: ${duration ? `${duration} Days / ${Math.max(0, duration - 1)} Nights` : 'Extract from transcript'}
 - Departure Date: ${departureDate || 'Not specified'}
-- Party Size: ${adults != null ? `${adults} Adults` : 'Not specified'}${children != null ? `, ${children} Children` : ''}
+- Return Date: ${returnDate || 'Not specified'}
+- Party Size: ${adults != null ? `${adults} Adults` : 'Not specified'}${children != null ? `, ${children} Children` : ''}${infants != null ? `, ${infants} Infants` : ''}
 - Target Budget: ${budget || 'Not specified'}
 - Preferred Hotel Tier: ${hotelTier || 'Not specified'}
 - Special Requests & Inclusions: ${specialRequests || 'None specified'}
@@ -1447,25 +1274,23 @@ Synthesize the travel proposal adhering strictly to the confirmed parameters and
   const result = await callLlmJson<{ title?: string; destination?: string; itinerary?: string }>({
     messages,
     temperature: 0.6,
-    timeoutMs: 35000,
+    timeoutMs: 90000,
     organizationId,
+    required: true,
+    validate: value => assertItineraryReady(value?.itinerary, duration, 160),
   });
 
   if (result?.itinerary) {
-    let finalItinerary = result.itinerary;
-    if (rulesContext.rules.length > 0 && !finalItinerary.includes('Applied Agency Guidelines')) {
-      finalItinerary += `\n\n> **Applied Agency Guidelines:**\n${rulesContext.rules.map((r) => `> - *${r.title}*: ${r.rulePrompt}`).join('\n')}\n`;
-    }
-    const resolvedDestination = result.destination?.trim() || destination;
+    const finalItinerary = result.itinerary;
+    const resolvedDestination = destination;
     const resolvedTitle =
-      result.title?.trim() ||
+      (typeof result.title === 'string' ? result.title.trim().replace(/\b\d+-Day\b/gi, `${duration}-Day`) : '') ||
       (resolvedDestination
         ? duration
           ? `Bespoke ${duration}-Day Journey to ${resolvedDestination}`
           : `${resolvedDestination} Itinerary`
         : '');
-    const titleDayMatch = resolvedTitle.match(/\b(\d+)-Day\b/i);
-    const effectiveDuration = titleDayMatch ? parseInt(titleDayMatch[1], 10) : duration;
+    const effectiveDuration = duration;
 
     return {
       title: resolvedTitle,
@@ -1473,6 +1298,7 @@ Synthesize the travel proposal adhering strictly to the confirmed parameters and
       itinerary: finalItinerary,
       durationDays: effectiveDuration,
       departureDate: departureDate || undefined,
+      returnDate: returnDate || undefined,
       headcountAdults: adults,
       headcountChildren: children,
       headcountInfants: infants,
@@ -1483,34 +1309,16 @@ Synthesize the travel proposal adhering strictly to the confirmed parameters and
     };
   }
 
-  // No hardcoded offline fallback itinerary — keep itinerary blank for manual entry/revision
-  const minimalTitle = destination
-    ? duration
-      ? `Bespoke ${duration}-Day Journey to ${destination}`
-      : `${destination} Itinerary`
-    : '';
-
-  return {
-    title: minimalTitle,
-    destination,
-    itinerary: '',
-    durationDays: duration,
-    departureDate: departureDate || undefined,
-    headcountAdults: adults,
-    headcountChildren: children,
-    headcountInfants: infants,
-    hotelTier: hotelTier || undefined,
-    specialRequests: specialRequests || undefined,
-    customerName: customerName || undefined,
-    customerEmail: customerEmail || undefined,
-  };
+  throw new ItineraryError('The AI returned no complete itinerary. Please retry.', 502, 'itinerary_generation_failed');
 }
 
 export async function reviseItineraryWithDeepSeek(
   currentItinerary: string,
   correctionNotes: string,
-  organizationId?: string
+  organizationId?: string,
+  expectedDays?: number | null
 ): Promise<string> {
+  if (!currentItinerary?.trim()) throw new ItineraryError('Generate an itinerary before requesting a revision.');
   const rulesContext = await getActiveItineraryRulesForOrg(organizationId);
 
   const messages = [
@@ -1536,13 +1344,14 @@ Provide the complete updated and polished itinerary adhering to the corrections 
   const content = await callLlmText({
     messages,
     temperature: 0.5,
-    timeoutMs: 35000,
+    timeoutMs: 90000,
     organizationId,
+    required: true,
+    validate: value => assertItineraryReady(value, expectedDays ?? declaredItineraryDuration(String(value)) ?? parseItineraryDays(currentItinerary).length, 160),
   });
 
-  if (content) return content;
-
-  return currentItinerary;
+  if (!content) throw new ItineraryError('The AI returned no revision.', 502, 'itinerary_generation_failed');
+  return content;
 }
 
 
