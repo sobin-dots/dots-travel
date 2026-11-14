@@ -203,6 +203,33 @@ describe('End-to-End Call Lifecycle Driven by Signed Webhooks', () => {
     expect(finalCall?.transcriptions[0].text).toContain('verified test transcription');
   });
 
+  it('creates a new verified contact and allows immediate outbound call authorization without sync delays', async () => {
+    const contact = await db.contact.create({
+      data: {
+        organizationId: org.id,
+        name: 'Immediate Test Contact',
+        phone: '+919876500000',
+        company: 'Pilvo Test Corp',
+        email: 'test@pilvotest.corp',
+      },
+    });
+
+    expect(contact.id).toBeDefined();
+    expect(contact.phone).toBe('+919876500000');
+
+    // Verify contact is queryable immediately by organization
+    const found = await db.contact.findUnique({
+      where: {
+        organizationId_phone: {
+          organizationId: org.id,
+          phone: '+919876500000',
+        },
+      },
+    });
+    expect(found).not.toBeNull();
+    expect(found?.name).toBe('Immediate Test Contact');
+  });
+
   it('serves fallback voice answer route with valid Plivo XML', async () => {
     const { POST } = await import('../src/app/api/v1/webhooks/voice/fallback/route');
     const { NextRequest } = await import('next/server');

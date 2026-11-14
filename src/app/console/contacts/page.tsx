@@ -10,6 +10,7 @@ export default function ContactsPage() {
     setShowContactModal,
     setShowBulkContactsModal,
     setCallDestination,
+    callForwardTo,
     setCallMode,
     setShowCallModal,
     handleDeleteContact,
@@ -80,7 +81,11 @@ export default function ContactsPage() {
                         type="button"
                         onClick={() => {
                           setCallDestination(contact.phone);
-                          setCallMode('bridge');
+                          if (!callForwardTo) {
+                            setCallMode('browser');
+                          } else {
+                            setCallMode('bridge');
+                          }
                           setShowCallModal(true);
                         }}
                         className="text-xs bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 inline-flex items-center gap-1.5 transition"

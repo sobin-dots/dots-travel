@@ -107,6 +107,7 @@ export default function LeadsPage() {
     setLeadsList,
     handleUpdateLeadStatus,
     setCallDestination,
+    callForwardTo,
     setCallMode,
     setShowCallModal,
     handleSelectLead,
@@ -467,7 +468,11 @@ export default function LeadsPage() {
                               type="button"
                               onClick={() => {
                                 setCallDestination(lead.contact.phone);
-                                setCallMode('bridge');
+                                if (!callForwardTo) {
+                                  setCallMode('browser');
+                                } else {
+                                  setCallMode('bridge');
+                                }
                                 setShowCallModal(true);
                               }}
                               className="text-xs bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 px-2.5 py-1.5 rounded border border-emerald-500/30 font-medium transition inline-flex items-center gap-1.5"
