@@ -3,7 +3,11 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 
+import { generateItineraryFromTranscript } from '@/lib/deepseek';
+import { assertTripInput, assertItineraryReady, ItineraryError } from '@/lib/itinerary-content';
+
 export const runtime = 'nodejs';
+export const maxDuration = 300;
 
 export async function GET(
   req: NextRequest,
@@ -62,6 +66,7 @@ export async function PATCH(
 
   try {
     const body = await req.json();
+    assertTripInput(body);
     const {
       status,
       customerEmail,
@@ -132,8 +137,48 @@ export async function PATCH(
       dataToUpdate.metadata = { ...existingMeta, currency };
     }
 
+    const tripFields = ['destination', 'durationDays', 'departureDate', 'returnDate', 'headcountAdults', 'headcountChildren', 'hotelTier', 'specialRequests'];
+    const comparable = (value: any) => value instanceof Date ? value.toISOString().slice(0, 10) : (value ?? '');
+    const tripChanged = tripFields.some(field => dataToUpdate[field] !== undefined && comparable(dataToUpdate[field]) !== comparable((lead as any)[field]));
+    const metadata = { ...((lead.metadata as Record<string, any>) || {}), ...(dataToUpdate.metadata || {}) };
+    if (body.regenerateItinerary === true) {
+      const params = { ...lead, ...dataToUpdate };
+      assertTripInput({ ...params, departureDate: params.departureDate?.toISOString().slice(0, 10), returnDate: params.returnDate?.toISOString().slice(0, 10) });
+      const call = lead.callId ? await db.call.findFirst({
+        where: { id: lead.callId, organizationId: auth!.organizationId },
+        include: { transcriptions: { where: { status: 'completed' }, orderBy: { createdAt: 'desc' } } },
+      }) : null;
+      const result = await generateItineraryFromTranscript(
+        call?.transcriptions.find(t => t.text?.trim())?.text || '',
+        { name: metadata.customerName, email: params.customerEmail || undefined },
+        auth!.organizationId,
+        {
+          destination: params.destination || undefined,
+          durationDays: params.durationDays || undefined,
+          departureDate: params.departureDate?.toISOString().slice(0, 10),
+          returnDate: params.returnDate?.toISOString().slice(0, 10),
+          headcountAdults: params.headcountAdults,
+          headcountChildren: params.headcountChildren,
+          headcountInfants: params.headcountInfants,
+          hotelTier: params.hotelTier || undefined,
+          specialRequests: params.specialRequests || undefined,
+          targetBudget: params.targetBudget != null ? Number(params.targetBudget) : undefined,
+        }
+      );
+      assertItineraryReady(result.itinerary, params.durationDays);
+      dataToUpdate.itinerary = result.itinerary;
+      dataToUpdate.title = result.title;
+      metadata.itineraryNeedsRegeneration = false;
+    } else if (itinerary !== undefined) {
+      assertItineraryReady(itinerary, dataToUpdate.durationDays ?? lead.durationDays);
+      metadata.itineraryNeedsRegeneration = false;
+    } else if (tripChanged) {
+      metadata.itineraryNeedsRegeneration = true;
+    }
+    dataToUpdate.metadata = metadata;
+
     const updated = await db.lead.update({
-      where: { id: lead.id },
+      where: { id: lead.id, updatedAt: lead.updatedAt },
       data: dataToUpdate,
       include: {
         contact: true,
@@ -170,9 +215,10 @@ export async function PATCH(
       lead: updated,
     });
   } catch (err: any) {
+    if (err?.code === 'P2025') return NextResponse.json({ error: 'This lead changed while the itinerary was being generated. Reload it and retry.' }, { status: 409 });
     return NextResponse.json(
-      { api_id: 'internal_err', error: err.message || 'Failed to update lead' },
-      { status: 500 }
+      { api_id: err instanceof ItineraryError ? err.code : 'internal_err', error: err.message || 'Failed to update lead' },
+      { status: err instanceof ItineraryError ? err.status : 500 }
     );
   }
 }

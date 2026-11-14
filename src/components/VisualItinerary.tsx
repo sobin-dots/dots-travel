@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { parseItineraryDays, validateItinerary } from '@/lib/itinerary-content';
 import {
   Calendar,
   MapPin,
@@ -227,12 +228,28 @@ export function parseItinerary(text?: string | null) {
     }
   }
 
-  if (currentDay) days.push(currentDay);
+  // Interpret day programmes identically in the dashboard and exported PDF.
+  days.splice(0, days.length, ...parseItineraryDays(text).map(day => {
+    const display: ParsedDay = { dayNumber: `Day ${day.dayNumber}`, title: day.title, generalActivities: [] };
+    let slot: 'morning' | 'afternoon' | 'evening' | undefined;
+    for (const paragraph of day.paragraphs) {
+      const marker = paragraph.match(/^(morning|afternoon|evening)(?:\s*:\s*|$)(.*)$/i);
+      if (marker) {
+        slot = marker[1].toLowerCase() as typeof slot;
+        display[slot!] = marker[2];
+      } else if (slot) display[slot] = [display[slot], paragraph].filter(Boolean).join(' ');
+      else display.generalActivities.push(paragraph);
+    }
+    for (const [label, value] of [['Overnight', day.overnight], ['Meals', day.meals], ['Transfers', day.transfers], ['Included experience', day.experience], ['Notes', day.notes]]) {
+      if (value) display.generalActivities.push(`${label}: ${value}`);
+    }
+    return display;
+  }));
 
   return {
     title,
     destination,
-    duration: duration || (days.length ? `${days.length} Days / ${Math.max(1, days.length - 1)} Nights` : ''),
+    duration: duration || (days.length ? `${days.length} Days / ${Math.max(0, days.length - 1)} Nights` : ''),
     overview,
     accommodations,
     days,
@@ -245,6 +262,7 @@ export function VisualItinerary({ itineraryText, destination: propDest, leadTitl
   const [viewMode, setViewMode] = useState<'visual' | 'raw'>('visual');
   const safeText = typeof itineraryText === 'string' ? itineraryText : '';
   const parsed = parseItinerary(safeText);
+  const itineraryIssue = validateItinerary(safeText, durationDays);
   const effectiveDaysCount =
     durationDays && Number(durationDays) > 0
       ? Number(durationDays)
@@ -252,7 +270,7 @@ export function VisualItinerary({ itineraryText, destination: propDest, leadTitl
       ? parsed.days.length
       : null;
   const displayDuration = effectiveDaysCount
-    ? `${effectiveDaysCount} Days / ${Math.max(1, effectiveDaysCount - 1)} Nights`
+    ? `${effectiveDaysCount} Days / ${Math.max(0, effectiveDaysCount - 1)} Nights`
     : parsed.duration;
 
   return (
@@ -265,7 +283,7 @@ export function VisualItinerary({ itineraryText, destination: propDest, leadTitl
             Itinerary Presentation
           </span>
           <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
-            AI Formatted
+            {itineraryIssue ? 'Needs attention' : 'Itinerary available'}
           </span>
         </div>
 
@@ -297,6 +315,11 @@ export function VisualItinerary({ itineraryText, destination: propDest, leadTitl
         </div>
       </div>
 
+      {itineraryIssue && (
+        <div role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+          {itineraryIssue} Use Save Parameters & Generate Itinerary to retry.
+        </div>
+      )}
       {viewMode === 'raw' ? (
         <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800 font-mono text-xs text-zinc-300 whitespace-pre-line leading-relaxed max-h-[500px] overflow-y-auto select-text">
           {safeText || '(No itinerary details generated yet)'}
@@ -327,7 +350,7 @@ export function VisualItinerary({ itineraryText, destination: propDest, leadTitl
                   <span>{displayDuration}</span>
                 </div>
                 <div className="text-[10px] text-zinc-500 mt-0.5">
-                  {effectiveDaysCount || parsed.days.length} Days Planned
+                  {parsed.days.length} Days Available
                 </div>
               </div>
             </div>

@@ -5,6 +5,8 @@ import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { sendCustomerItineraryEmail } from '@/lib/email';
 import { generateCustomerQuotationPDF } from '@/lib/pdf-generator';
 
+import { leadItineraryIssue } from '@/lib/itinerary-content';
+
 export const runtime = 'nodejs';
 
 // P2-12 & P2-13: Email Quotation Dispatch & Automated Follow-ups
@@ -41,6 +43,9 @@ export async function POST(
       return NextResponse.json({ api_id: 'not_found', error: 'Lead not found' }, { status: 404 });
     }
 
+    const itineraryIssue = leadItineraryIssue(lead);
+    if (itineraryIssue) return NextResponse.json({ api_id: 'invalid_itinerary', error: itineraryIssue }, { status: 422 });
+
     // Resolve target quote
     let quote = null;
     if (quotationId) {
@@ -54,10 +59,12 @@ export async function POST(
       });
     }
 
+    if (!quote) return NextResponse.json({ api_id: 'missing_quotation', error: 'Create a customer quotation before downloading or sending a quotation PDF.' }, { status: 422 });
+
     const recipientEmail = lead.customerEmail || lead.contact?.email || 'customer@voyages.test';
     const recipientName = lead.contact?.name || 'Valued Client';
     const version = quote?.version || 1;
-    const finalPrice = quote ? Number(quote.finalSellingPrice) : Number(lead.targetBudget || 0);
+    const finalPrice = Number(quote.finalSellingPrice);
 
     const results: Record<string, any> = {
       email: null,

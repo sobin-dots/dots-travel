@@ -12,6 +12,7 @@
     "lint": "eslint",
     "tool": "tsx",
     "test": "vitest run",
+    "test:itinerary": "node tools/test-itinerary.cjs",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",

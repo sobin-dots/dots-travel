@@ -143,7 +143,15 @@ async function resolveCandidateAuthTokens(
     } catch {}
   }
 
-  // 4. If still empty in test environment, allow simulator token
+  // 4. Fallback to platform environment variables if configured
+  if (process.env.PLIVO_WEBHOOK_AUTH_TOKEN) {
+    candidateTokens.add(process.env.PLIVO_WEBHOOK_AUTH_TOKEN);
+  }
+  if (process.env.PLIVO_AUTH_TOKEN) {
+    candidateTokens.add(process.env.PLIVO_AUTH_TOKEN);
+  }
+
+  // 5. If still empty in test environment, allow simulator token
   if (candidateTokens.size === 0 && (process.env.NODE_ENV === 'test' || process.env.TELEPHONY_MODE !== 'live')) {
     candidateTokens.add('simulator-auth-token-2026');
   }

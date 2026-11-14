@@ -4,9 +4,12 @@ import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { generateItineraryFromTranscript } from '@/lib/deepseek';
 
-export const runtime = 'nodejs';
+import { ItineraryError, assertTripInput, assertItineraryReady } from '@/lib/itinerary-content';
 
-const inFlightLeadGenerationByKey = new Map<string, Promise<any>>();
+export const runtime = 'nodejs';
+export const maxDuration = 300;
+
+const inFlightLeadGenerationByKey = new Map<string, { signature: string; promise: Promise<any> }>();
 
 export async function POST(req: NextRequest) {
   const { auth, errorResponse } = await authenticateRequest(req, 'operator');
@@ -14,6 +17,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
+    assertTripInput(body);
     const {
       callId,
       destination: customDestination,
@@ -35,9 +39,11 @@ export async function POST(req: NextRequest) {
     }
 
     const dedupeKey = `${auth!.organizationId}:${callId}`;
+    const signature = JSON.stringify(Object.fromEntries(Object.entries(body).sort(([a], [b]) => a.localeCompare(b))));
     const existingInFlight = inFlightLeadGenerationByKey.get(dedupeKey);
     if (existingInFlight) {
-      const lead = await existingInFlight;
+      if (existingInFlight.signature !== signature) return NextResponse.json({ error: 'An itinerary is already being generated for this call. Wait for it to finish before changing the parameters.' }, { status: 409 });
+      const lead = await existingInFlight.promise;
       return NextResponse.json(
         {
           api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
@@ -48,60 +54,60 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const call = await db.call.findFirst({
-      where: { id: callId, organizationId: auth!.organizationId },
-      include: {
-        transcriptions: {
-          orderBy: { createdAt: 'desc' },
-        },
-        recordings: true,
-      },
-    });
-
-    if (!call) {
-      return NextResponse.json({ api_id: 'not_found', error: 'Call not found' }, { status: 404 });
-    }
-
-    // Resolve transcription text strictly from call transcriptions (no synthetic fallback text)
-    const targetPhone = call.direction === 'outbound' ? call.to : call.from;
-    const transcription = call.transcriptions?.find(
-      (t) => t.status === 'completed' && t.text && t.text.trim().length > 0
-    ) || call.transcriptions?.find(
-      (t) => t.text && t.text.trim().length > 0
-    ) || call.transcriptions?.[0];
-    const transcriptText = (transcription?.text && transcription.text.trim().length > 0)
-      ? transcription.text.trim()
-      : '';
-
-    // Match contact by phone number (exact match or stripped digits)
-    const cleanTarget = targetPhone.replace(/\D/g, '');
-    const contact = await db.contact.findFirst({
-      where: {
-        organizationId: auth!.organizationId,
-        OR: [
-          { phone: targetPhone },
-          ...(cleanTarget ? [{ phone: `+${cleanTarget}` }, { phone: cleanTarget }] : []),
-        ],
-      },
-    });
-
-    const customParams = {
-      destination: customDestination,
-      departureDate,
-      returnDate,
-      durationDays: durationDays != null && durationDays !== '' ? Number(durationDays) : undefined,
-      headcountAdults: headcountAdults != null && headcountAdults !== '' ? Number(headcountAdults) : undefined,
-      headcountChildren: headcountChildren != null && headcountChildren !== '' ? Number(headcountChildren) : undefined,
-      headcountInfants: headcountInfants != null && headcountInfants !== '' ? Number(headcountInfants) : undefined,
-      targetBudget: targetBudget ? Number(targetBudget) : undefined,
-      hotelTier,
-      specialRequests,
-      customerName: customName || contact?.name,
-      customerEmail: customEmail || contact?.email,
-      customerPhone: targetPhone,
-    };
-
     const generateAndPersistLead = async () => {
+      const call = await db.call.findFirst({
+        where: { id: callId, organizationId: auth!.organizationId },
+        include: {
+          transcriptions: {
+            orderBy: { createdAt: 'desc' },
+          },
+          recordings: true,
+        },
+      });
+
+      if (!call) {
+        throw new ItineraryError('Call not found', 404, 'not_found');
+      }
+
+      // Resolve transcription text strictly from call transcriptions (no synthetic fallback text)
+      const targetPhone = call.direction === 'outbound' ? call.to : call.from;
+      const transcription = call.transcriptions?.find(
+        (t) => t.status === 'completed' && t.text && t.text.trim().length > 0
+      ) || call.transcriptions?.find(
+        (t) => t.text && t.text.trim().length > 0
+      ) || call.transcriptions?.[0];
+      const transcriptText = (transcription?.text && transcription.text.trim().length > 0)
+        ? transcription.text.trim()
+        : '';
+
+      // Match contact by phone number (exact match or stripped digits)
+      const cleanTarget = targetPhone.replace(/\D/g, '');
+      const contact = await db.contact.findFirst({
+        where: {
+          organizationId: auth!.organizationId,
+          OR: [
+            { phone: targetPhone },
+            ...(cleanTarget ? [{ phone: `+${cleanTarget}` }, { phone: cleanTarget }] : []),
+          ],
+        },
+      });
+
+      const customParams = {
+        destination: customDestination,
+        departureDate,
+        returnDate,
+        durationDays: durationDays != null && durationDays !== '' ? Number(durationDays) : undefined,
+        headcountAdults: headcountAdults != null && headcountAdults !== '' ? Number(headcountAdults) : undefined,
+        headcountChildren: headcountChildren != null && headcountChildren !== '' ? Number(headcountChildren) : undefined,
+        headcountInfants: headcountInfants != null && headcountInfants !== '' ? Number(headcountInfants) : undefined,
+        targetBudget: targetBudget ? Number(targetBudget) : undefined,
+        hotelTier,
+        specialRequests,
+        customerName: customName || contact?.name,
+        customerEmail: customEmail || contact?.email,
+        customerPhone: targetPhone,
+      };
+
       // Generate Itinerary with DeepSeek adhering to confirmed parameters (no fallback defaults)
       const result = await generateItineraryFromTranscript(
         transcriptText,
@@ -110,6 +116,7 @@ export async function POST(req: NextRequest) {
           phone: targetPhone,
           email: customEmail || contact?.email || undefined,
           company: contact?.company || undefined,
+          referenceDate: call.startedAt,
         },
         auth!.organizationId,
         customParams
@@ -120,6 +127,7 @@ export async function POST(req: NextRequest) {
         durationDays != null && durationDays !== ''
           ? Number(durationDays)
           : result.durationDays ?? null;
+      assertItineraryReady(result.itinerary, resolvedDurationDays);
       const effectiveDepStr = departureDate || result.departureDate || null;
       const parsedDeparture = effectiveDepStr ? new Date(effectiveDepStr) : null;
       let parsedReturn = returnDate ? new Date(returnDate) : null;
@@ -194,12 +202,13 @@ export async function POST(req: NextRequest) {
         targetBudget: targetBudget ? Number(targetBudget) : null,
         hotelTier: hotelTier || result.hotelTier || null,
         specialRequests: specialRequests || result.specialRequests || null,
-        itinerary: result.itinerary || '',
+        itinerary: result.itinerary,
         customerEmail: resolvedCustomerEmail,
         metadata: {
           customerName: resolvedCustomerName || undefined,
           customerPhone: targetPhone || undefined,
           currency: 'INR',
+          itineraryNeedsRegeneration: false,
         },
       };
 
@@ -262,7 +271,7 @@ export async function POST(req: NextRequest) {
     const genPromise = generateAndPersistLead().finally(() => {
       inFlightLeadGenerationByKey.delete(dedupeKey);
     });
-    inFlightLeadGenerationByKey.set(dedupeKey, genPromise);
+    inFlightLeadGenerationByKey.set(dedupeKey, { signature, promise: genPromise });
     const lead = await genPromise;
 
     return NextResponse.json(
@@ -276,8 +285,8 @@ export async function POST(req: NextRequest) {
   } catch (err: any) {
     console.error('Error generating itinerary:', err);
     return NextResponse.json(
-      { api_id: 'server_err', error: err.message || 'Internal error generating itinerary' },
-      { status: 500 }
+      { api_id: err instanceof ItineraryError ? err.code : 'server_err', error: err.message || 'Internal error generating itinerary' },
+      { status: err instanceof ItineraryError ? err.status : 500 }
     );
   }
 }

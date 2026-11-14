@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { CallToneGenerator } from '@/lib/call-tones';
+import { assertItineraryReady } from '@/lib/itinerary-content';
 import { patchPlivoSDK, createNoiseSuppressionShim, getLiveMicrophoneStream } from '@/lib/telephony/plivo-shim';
 
 interface ConsoleContextType {
@@ -1831,15 +1832,16 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         const data = await res.json();
         if (res.ok) {
           const revisedLead = data.lead;
-          const newItinerary = revisedLead?.itinerary || data.itinerary || selectedLead.itinerary || '';
+          const newItinerary = revisedLead?.itinerary ?? data.itinerary;
+          assertItineraryReady(newItinerary, revisedLead?.durationDays ?? selectedLead.durationDays);
           const newRevisionNotes = revisedLead?.revisionNotes || data.revisionNotes || selectedLead.revisionNotes || '';
 
-          setSelectedLead((prev: any) => ({
+          setSelectedLead((prev: any) => prev?.id !== selectedLead.id ? prev : ({
             ...(prev || {}),
             ...(revisedLead || {}),
             itinerary: newItinerary,
             revisionNotes: newRevisionNotes,
-            status: revisedLead?.status || 'revision_requested',
+            status: revisedLead?.status || prev.status,
           }));
           setLeadRevisionNotes('');
           fetchData();

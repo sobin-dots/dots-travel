@@ -3,6 +3,8 @@ import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
 import { generateItineraryPDF, resolveCustomerNameForPdf } from '@/lib/pdf-generator';
 
+import { leadItineraryIssue } from '@/lib/itinerary-content';
+
 export const runtime = 'nodejs';
 
 export async function GET(
@@ -31,6 +33,9 @@ export async function GET(
   if (!lead) {
     return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
   }
+
+  const itineraryIssue = leadItineraryIssue(lead);
+  if (itineraryIssue) return NextResponse.json({ api_id: 'invalid_itinerary', error: itineraryIssue }, { status: 422 });
 
   const { searchParams } = new URL(req.url);
   const type = searchParams.get('type') === 'supplier' ? 'supplier' : 'customer';
@@ -97,7 +102,7 @@ export async function GET(
     travelDates,
     departureDate: lead.departureDate,
     returnDate: lead.returnDate,
-    headcountAdults: lead.headcountAdults || 2,
+    headcountAdults: lead.headcountAdults,
     headcountChildren: lead.headcountChildren || 0,
     hotelTier: lead.hotelTier || undefined,
     specialRequests: lead.specialRequests || undefined,

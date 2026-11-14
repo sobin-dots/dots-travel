@@ -5,6 +5,8 @@ import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { generateItineraryPDF, resolveCustomerNameForPdf } from '@/lib/pdf-generator';
 import { sendCustomerItineraryEmail, sendSupplierRfqEmail } from '@/lib/email';
 
+import { leadItineraryIssue } from '@/lib/itinerary-content';
+
 export const runtime = 'nodejs';
 
 export async function POST(
@@ -33,6 +35,9 @@ export async function POST(
   if (!lead) {
     return NextResponse.json({ api_id: 'not_found', error: 'Lead not found' }, { status: 404 });
   }
+
+  const itineraryIssue = leadItineraryIssue(lead);
+  if (itineraryIssue) return NextResponse.json({ api_id: 'invalid_itinerary', error: itineraryIssue }, { status: 422 });
 
   try {
     const body = await req.json();
@@ -140,7 +145,7 @@ export async function POST(
         travelDates: formattedTravelDates,
         departureDate: lead.departureDate,
         returnDate: lead.returnDate,
-        headcountAdults: lead.headcountAdults || 2,
+        headcountAdults: lead.headcountAdults,
         headcountChildren: lead.headcountChildren || 0,
         hotelTier: lead.hotelTier || undefined,
         specialRequests: lead.specialRequests || undefined,
@@ -199,7 +204,7 @@ export async function POST(
           travelDates: formattedTravelDates,
           departureDate: lead.departureDate,
           returnDate: lead.returnDate,
-          headcountAdults: lead.headcountAdults || 2,
+          headcountAdults: lead.headcountAdults,
           headcountChildren: lead.headcountChildren || 0,
           hotelTier: lead.hotelTier || undefined,
           specialRequests: lead.specialRequests || undefined,

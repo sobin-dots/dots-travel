@@ -3,6 +3,8 @@ import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
 import { generateCustomerQuotationPDF } from '@/lib/pdf-generator';
 
+import { leadItineraryIssue } from '@/lib/itinerary-content';
+
 export const runtime = 'nodejs';
 
 // P2-06: Final Customer Quotation Document Builder
@@ -34,6 +36,9 @@ export async function GET(
     }
 
     // Fetch specified quote or latest quote
+    const itineraryIssue = leadItineraryIssue(lead);
+    if (itineraryIssue) return NextResponse.json({ api_id: 'invalid_itinerary', error: itineraryIssue }, { status: 422 });
+
     let quote = null;
     if (quoteId) {
       quote = await db.customerQuotation.findFirst({
@@ -46,9 +51,11 @@ export async function GET(
       });
     }
 
+    if (!quote) return NextResponse.json({ api_id: 'missing_quotation', error: 'Create a customer quotation before downloading or sending a quotation PDF.' }, { status: 422 });
+
     const recipientName = lead.contact?.name || 'Valued Client';
     const recipientEmail = lead.customerEmail || lead.contact?.email || undefined;
-    const finalPrice = quote ? Number(quote.finalSellingPrice) : (lead.targetBudget ? Number(lead.targetBudget) : 5000);
+    const finalPrice = Number(quote.finalSellingPrice);
     const version = quote?.version || 1;
 
     const leadMeta = (lead.metadata as Record<string, any>) || {};
