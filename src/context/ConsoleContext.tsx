@@ -177,6 +177,9 @@ interface ConsoleContextType {
   setShowContactModal: (show: boolean) => void;
   showBulkContactsModal: boolean;
   setShowBulkContactsModal: (show: boolean) => void;
+  returnToCallModal: boolean;
+  setReturnToCallModal: (val: boolean) => void;
+  fetchContacts: () => Promise<any[]>;
   contactName: string;
   setContactName: (name: string) => void;
   contactPhone: string;
@@ -302,10 +305,23 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   // Outbound call modal state
   const [showCallModal, setShowCallModal] = useState(false);
+  const [returnToCallModal, setReturnToCallModal] = useState(false);
   const [callDestination, setCallDestination] = useState('');
   const [callFromNumber, setCallFromNumber] = useState('');
   const [callMode, setCallMode] = useState<'browser' | 'bridge' | 'xml' | 'forward' | 'voicemail'>('browser');
-  const [callForwardTo, setCallForwardTo] = useState('');
+  const [callForwardTo, setCallForwardToState] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('plivo_staff_forward_to') || '';
+    }
+    return '';
+  });
+
+  const setCallForwardTo = (num: string) => {
+    setCallForwardToState(num);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('plivo_staff_forward_to', num);
+    }
+  };
   const [callRecord, setCallRecord] = useState(true);
   const [callTranscribe, setCallTranscribe] = useState(true);
   const [callLoading, setCallLoading] = useState(false);
@@ -667,6 +683,37 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error('Failed to refresh integrations:', err);
     }
+  };
+
+  const fetchContacts = async (): Promise<any[]> => {
+    let token: string =
+      tokenRef.current ||
+      bearerToken ||
+      (typeof window !== 'undefined' ? localStorage.getItem('plivo_access_token') || '' : '');
+    if (!token) return [];
+
+    try {
+      const res = await fetch('/api/v1/contacts', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'ngrok-skip-browser-warning': 'true',
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.objects)) {
+          setContactsList(data.objects);
+          setCallDestination((prev) => {
+            if (prev && data.objects.some((c: any) => c.phone === prev)) return prev;
+            return data.objects[0]?.phone || '';
+          });
+          return data.objects;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch contacts:', err);
+    }
+    return [];
   };
 
   const handleSwitchOrganization = async (orgId: string) => {
@@ -1418,14 +1465,40 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         });
         const data = await res.json();
         if (res.ok) {
-          alert(`Contact ${contactName} added successfully!`);
+          const newContact = data.contact || {
+            id: `temp_${Date.now()}`,
+            name: contactName,
+            phone: contactPhone,
+            email: contactEmail || null,
+            company: contactCompany || null,
+            notes: contactNotes || null,
+          };
+
+          // 1. Immediately update contactsList in state so call buttons & dropdowns enable instantly (0ms)
+          setContactsList((prev) => {
+            const filtered = prev.filter((c: any) => c.id !== newContact.id && c.phone !== newContact.phone);
+            return [newContact, ...filtered].sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
+          });
+
+          // 2. Immediately set destination to new contact's canonical phone number
+          setCallDestination(newContact.phone);
+
+          // 3. Clear modal inputs and close contact modal
           setShowContactModal(false);
-          setCallDestination(contactPhone);
           setContactName('');
           setContactPhone('');
           setContactEmail('');
           setContactCompany('');
           setContactNotes('');
+
+          // 4. If contact was added from inside Call Modal, automatically return and reopen Call Modal
+          if (returnToCallModal) {
+            setReturnToCallModal(false);
+            setShowCallModal(true);
+          }
+
+          // 5. Asynchronously refresh contacts specifically and overall console data
+          fetchContacts();
           fetchData();
         } else {
           alert(data.error || 'Failed to add contact');
@@ -1447,7 +1520,18 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           method: 'DELETE',
         });
         if (res.ok) {
-          setContactsList((prev) => prev.filter((c) => c.id !== contactId));
+          setContactsList((prev) => {
+            const next = prev.filter((c) => c.id !== contactId);
+            setCallDestination((curr) => {
+              const deleted = prev.find((c: any) => c.id === contactId);
+              if (deleted && curr === deleted.phone) {
+                return next[0]?.phone || '';
+              }
+              return curr;
+            });
+            return next;
+          });
+          fetchContacts();
           fetchData();
         }
       } catch (err: any) {
@@ -2013,6 +2097,9 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         setShowContactModal,
         showBulkContactsModal,
         setShowBulkContactsModal,
+        returnToCallModal,
+        setReturnToCallModal,
+        fetchContacts,
         contactName,
         setContactName,
         contactPhone,

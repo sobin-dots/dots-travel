@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   Phone,
   Mic,
@@ -45,7 +45,17 @@ export function CallModal() {
     numbers,
     contactsList,
     setShowContactModal,
+    setReturnToCallModal,
   } = useConsole();
+
+  // Automatically ensure a destination contact is selected if contacts exist
+  useEffect(() => {
+    if (showCallModal && contactsList.length > 0) {
+      if (!callDestination || !contactsList.some((c: any) => c.phone === callDestination)) {
+        setCallDestination(contactsList[0].phone);
+      }
+    }
+  }, [showCallModal, contactsList, callDestination, setCallDestination]);
 
   if (!showCallModal) return null;
 
@@ -228,6 +238,7 @@ export function CallModal() {
                 <button
                   type="button"
                   onClick={() => {
+                    setReturnToCallModal(true);
                     setShowCallModal(false);
                     setShowContactModal(true);
                   }}
@@ -248,6 +259,7 @@ export function CallModal() {
                   <button
                     type="button"
                     onClick={() => {
+                      setReturnToCallModal(true);
                       setShowCallModal(false);
                       setShowContactModal(true);
                     }}
@@ -303,6 +315,11 @@ export function CallModal() {
                   onChange={(e) => setCallForwardTo(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200 text-xs font-mono focus:border-indigo-500"
                 />
+                {!callForwardTo && (
+                  <p className="text-[11px] text-amber-400">
+                    * Enter your mobile phone number above so Plivo can ring your phone to bridge the call.
+                  </p>
+                )}
                 <p className="text-[11px] text-zinc-400 leading-relaxed">
                   Plivo calls your staff mobile phone first. As soon as you answer, it dials the recipient contact and bridges both parties together into a recorded call.
                 </p>

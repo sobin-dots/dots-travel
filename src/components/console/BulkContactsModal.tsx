@@ -27,6 +27,7 @@ export function BulkContactsModal() {
     showBulkContactsModal,
     setShowBulkContactsModal,
     contactsList,
+    fetchContacts,
     fetchData,
     authFetch,
   } = useConsole();
@@ -143,7 +144,8 @@ export function BulkContactsModal() {
         skippedDetails: data.skippedDetails,
       });
 
-      // Refresh directory
+      // Refresh directory immediately
+      await fetchContacts();
       await fetchData();
     } catch (err: any) {
       console.error('Import error:', err);
