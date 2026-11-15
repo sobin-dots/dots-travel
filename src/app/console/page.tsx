@@ -8,6 +8,7 @@ import {
   Phone,
   MessageSquare,
   Plus,
+  Clock,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
@@ -109,35 +110,63 @@ export default function ConsoleOverviewPage() {
               No recent call activity.
             </div>
           ) : (
-            calls.slice(0, 5).map((call) => (
-              <div key={call.id} className="px-4 sm:px-5 py-3.5 flex items-center justify-between text-xs hover:bg-zinc-800/30 gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div
-                    className={`w-2 h-2 rounded-full shrink-0 ${
-                      call.status === 'completed'
-                        ? 'bg-emerald-400'
-                        : call.status === 'in-progress'
-                        ? 'bg-indigo-400 animate-pulse'
-                        : 'bg-amber-400'
-                    }`}
-                  />
-                  <div className="min-w-0">
-                    <div className="font-mono text-zinc-200 font-medium truncate">
-                      {call.from} &rarr; {call.to}
+            calls.slice(0, 5).map((call) => {
+              const rawDate = call.startedAt || call.answeredAt || call.createdAt;
+              const dateObj = rawDate ? new Date(rawDate) : null;
+              const formattedDate = dateObj && !isNaN(dateObj.getTime())
+                ? dateObj.toLocaleDateString('en-IN', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                  })
+                : null;
+              const formattedTime = dateObj && !isNaN(dateObj.getTime())
+                ? dateObj.toLocaleTimeString('en-IN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true,
+                  })
+                : null;
+
+              return (
+                <div key={call.id} className="px-4 sm:px-5 py-3.5 flex items-center justify-between text-xs hover:bg-zinc-800/30 gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className={`w-2 h-2 rounded-full shrink-0 ${
+                        call.status === 'completed'
+                          ? 'bg-emerald-400'
+                          : call.status === 'in-progress'
+                          ? 'bg-indigo-400 animate-pulse'
+                          : 'bg-amber-400'
+                      }`}
+                    />
+                    <div className="min-w-0">
+                      <div className="font-mono text-zinc-200 font-medium truncate flex items-center gap-2">
+                        <span>{call.contactName ? `${call.contactName} (${call.to})` : `${call.from} → ${call.to}`}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono mt-0.5 flex-wrap">
+                        {formattedDate && (
+                          <span className="flex items-center gap-1 text-zinc-300">
+                            <Clock className="w-2.5 h-2.5 text-indigo-400 shrink-0" />
+                            {formattedDate} at {formattedTime}
+                          </span>
+                        )}
+                        {formattedDate && <span>•</span>}
+                        <span className="text-zinc-500">UUID: {call.plivoCallUuid}</span>
+                      </div>
                     </div>
-                    <div className="text-[10px] text-zinc-500 font-mono truncate">UUID: {call.plivoCallUuid}</div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="capitalize px-2 py-0.5 rounded text-[10px] sm:text-[11px] bg-zinc-800 text-zinc-300 font-medium">
+                      {call.status}
+                    </span>
+                    <div className="text-[10px] text-zinc-500 mt-1">
+                      {call.billDurationSeconds ? `${call.billDurationSeconds}s billed` : 'Queued'}
+                    </div>
                   </div>
                 </div>
-                <div className="text-right shrink-0">
-                  <span className="capitalize px-2 py-0.5 rounded text-[10px] sm:text-[11px] bg-zinc-800 text-zinc-300 font-medium">
-                    {call.status}
-                  </span>
-                  <div className="text-[10px] text-zinc-500 mt-1">
-                    {call.billDurationSeconds ? `${call.billDurationSeconds}s billed` : 'Queued'}
-                  </div>
-                </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>

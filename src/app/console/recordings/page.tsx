@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Sparkles, Download, RefreshCw, FileText } from 'lucide-react';
+import { Sparkles, Download, RefreshCw, FileText, Clock } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
 export default function RecordingsPage() {
@@ -35,12 +35,61 @@ export default function RecordingsPage() {
             const hasTranscription = rec.transcriptions && rec.transcriptions.length > 0;
             const primaryTranscript = hasTranscription ? rec.transcriptions[0] : null;
 
+            const rawDate = rec.createdAt || rec.startedAt || rec.call?.startedAt;
+            const dateObj = rawDate ? new Date(rawDate) : null;
+            const formattedDate = dateObj && !isNaN(dateObj.getTime())
+              ? dateObj.toLocaleDateString('en-IN', {
+                  day: '2-digit',
+                  month: 'short',
+                  year: 'numeric',
+                })
+              : null;
+            const formattedTime = dateObj && !isNaN(dateObj.getTime())
+              ? dateObj.toLocaleTimeString('en-IN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: true,
+                })
+              : null;
+
+            const trRawDate = primaryTranscript?.createdAt || primaryTranscript?.updatedAt;
+            const trDateObj = trRawDate ? new Date(trRawDate) : null;
+            const formattedTrDate = trDateObj && !isNaN(trDateObj.getTime())
+              ? trDateObj.toLocaleDateString('en-IN', {
+                  day: '2-digit',
+                  month: 'short',
+                  year: 'numeric',
+                })
+              : null;
+            const formattedTrTime = trDateObj && !isNaN(trDateObj.getTime())
+              ? trDateObj.toLocaleTimeString('en-IN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: true,
+                })
+              : null;
+
             return (
               <div key={rec.id} className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 sm:p-5 space-y-3.5">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 space-y-1">
                     <div className="font-mono text-xs font-semibold text-zinc-200 truncate">{rec.plivoRecordingId}</div>
-                    <div className="text-[11px] text-zinc-500 mt-0.5">Duration: {rec.durationSeconds || 45} seconds</div>
+                    <div className="flex items-center gap-2 text-[11px] text-zinc-400 font-mono flex-wrap">
+                      {formattedDate && (
+                        <span className="flex items-center gap-1 text-zinc-300">
+                          <Clock className="w-3 h-3 text-indigo-400 shrink-0" />
+                          {formattedDate} at {formattedTime}
+                        </span>
+                      )}
+                      {formattedDate && <span>•</span>}
+                      <span className="text-zinc-500">Duration: {rec.durationSeconds || 45}s</span>
+                      {rec.call && (
+                        <>
+                          <span className="text-zinc-600">•</span>
+                          <span className="text-zinc-400">{rec.call.from} → {rec.call.to}</span>
+                        </>
+                      )}
+                    </div>
                   </div>
                   <span className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded text-[10px] font-medium shrink-0">
                     {rec.status}
@@ -57,10 +106,18 @@ export default function RecordingsPage() {
                 {/* Transcription Preview if Available */}
                 {primaryTranscript && (
                   <div className="bg-zinc-950/70 p-3 rounded-lg border border-zinc-800/80 space-y-1.5">
-                    <div className="flex items-center justify-between text-[10px]">
-                      <span className="px-1.5 py-0.5 rounded font-mono font-medium border bg-emerald-950/80 text-emerald-400 border-emerald-800/60">
-                        OpenAI ({primaryTranscript.rawPayload?.model || configuredTranscriptionModel})
-                      </span>
+                    <div className="flex items-center justify-between text-[10px] flex-wrap gap-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="px-1.5 py-0.5 rounded font-mono font-medium border bg-emerald-950/80 text-emerald-400 border-emerald-800/60">
+                          OpenAI ({primaryTranscript.rawPayload?.model || configuredTranscriptionModel})
+                        </span>
+                        {formattedTrDate && (
+                          <span className="text-zinc-400 font-mono flex items-center gap-1">
+                            <Clock className="w-2.5 h-2.5 text-indigo-400 shrink-0" />
+                            {formattedTrDate} at {formattedTrTime}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-zinc-500 font-mono">
                         {primaryTranscript.wordCount || 0} words
                       </span>

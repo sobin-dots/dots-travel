@@ -62,8 +62,9 @@ export function CallDetailDrawer() {
     }
   };
 
-  const formattedCallTimestamp = selectedCallDetail.startedAt
-    ? new Date(selectedCallDetail.startedAt).toLocaleString('en-IN', {
+  const rawTimestamp = selectedCallDetail.startedAt || selectedCallDetail.answeredAt || selectedCallDetail.createdAt;
+  const formattedCallTimestamp = rawTimestamp
+    ? new Date(rawTimestamp).toLocaleString('en-IN', {
         day: '2-digit',
         month: 'short',
         year: 'numeric',
@@ -223,8 +224,26 @@ export function CallDetailDrawer() {
                 className="w-full h-9 rounded bg-zinc-900 border border-zinc-800"
                 src={`/api/v1/recordings/${primaryRecording.id}/stream`}
               />
-              <div className="flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-                <span>ID: {primaryRecording.plivoRecordingId}</span>
+              <div className="flex items-center justify-between text-[11px] text-zinc-500 font-mono flex-wrap gap-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span>ID: {primaryRecording.plivoRecordingId}</span>
+                  {(primaryRecording.createdAt || primaryRecording.startedAt || selectedCallDetail.startedAt || selectedCallDetail.createdAt) && (
+                    <>
+                      <span className="text-zinc-700">•</span>
+                      <span className="flex items-center gap-1 text-zinc-400">
+                        <Clock className="w-3 h-3 text-indigo-400 shrink-0" />
+                        {new Date(primaryRecording.createdAt || primaryRecording.startedAt || selectedCallDetail.startedAt || selectedCallDetail.createdAt).toLocaleString('en-IN', {
+                          day: '2-digit',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: true,
+                        })}
+                      </span>
+                    </>
+                  )}
+                </div>
                 <span>Duration: {primaryRecording.durationSeconds || selectedCallDetail.durationSeconds || 0}s</span>
               </div>
             </div>
@@ -319,11 +338,26 @@ export function CallDetailDrawer() {
               const modelLabel = tr.rawPayload?.model || configuredTranscriptionModel;
               return (
                 <div key={tr.id} className="pt-2 space-y-1.5">
-                  <div className="flex items-center justify-between text-[10px]">
-                    <span className="px-2 py-0.5 rounded font-mono font-medium border flex items-center gap-1 bg-emerald-950/80 text-emerald-400 border-emerald-800/60">
-                      <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
-                      <span>{`OpenAI (${modelLabel})`}</span>
-                    </span>
+                  <div className="flex items-center justify-between text-[10px] flex-wrap gap-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="px-2 py-0.5 rounded font-mono font-medium border flex items-center gap-1 bg-emerald-950/80 text-emerald-400 border-emerald-800/60">
+                        <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
+                        <span>{`OpenAI (${modelLabel})`}</span>
+                      </span>
+                      {(tr.createdAt || tr.updatedAt || selectedCallDetail.startedAt || selectedCallDetail.createdAt) && (
+                        <span className="text-zinc-400 font-mono flex items-center gap-1">
+                          <Clock className="w-2.5 h-2.5 text-indigo-400 shrink-0" />
+                          {new Date(tr.createdAt || tr.updatedAt || selectedCallDetail.startedAt || selectedCallDetail.createdAt).toLocaleString('en-IN', {
+                            day: '2-digit',
+                            month: 'short',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: true,
+                          })}
+                        </span>
+                      )}
+                    </div>
                     <span className="text-zinc-500 font-mono">
                       {tr.wordCount || 0} words • {tr.status}
                     </span>

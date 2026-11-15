@@ -421,15 +421,16 @@ export default function CallsPage() {
                 </tr>
               ) : (
                 paginatedCalls.map((call) => {
-                  const callDateObj = call.startedAt ? new Date(call.startedAt) : null;
-                  const formattedDate = callDateObj
+                  const rawDate = call.startedAt || call.answeredAt || call.createdAt;
+                  const callDateObj = rawDate ? new Date(rawDate) : null;
+                  const formattedDate = callDateObj && !isNaN(callDateObj.getTime())
                     ? callDateObj.toLocaleDateString('en-IN', {
                         day: '2-digit',
                         month: 'short',
                         year: 'numeric',
                       })
                     : '—';
-                  const formattedTime = callDateObj
+                  const formattedTime = callDateObj && !isNaN(callDateObj.getTime())
                     ? callDateObj.toLocaleTimeString('en-IN', {
                         hour: '2-digit',
                         minute: '2-digit',

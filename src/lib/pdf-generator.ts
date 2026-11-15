@@ -1218,85 +1218,297 @@ export async function generateItineraryPDF(options: PDFOptions): Promise<Uint8Ar
     tryEmbedImage(pdfDoc, options.organizationLogo),
     tryEmbedImage(pdfDoc, options.organizationLetterhead),
   ]);
+
   let page: any;
   let y = 0;
   let pageNum = 0;
-  let section = '';
-  const newPage = (heading: string, continued = false) => {
+  let currentSection = '';
+
+  const startNewPage = (heading: string, isContinuation = false) => {
     page = pdfDoc.addPage([pageWidth, pageHeight]);
     pageNum++;
-    section = heading;
+    currentSection = heading;
     y = drawSettingsConfiguredHeader({
-      page, pageWidth, pageHeight, margin, options, logoImg, letterheadImg,
-      fontRegular, fontBold, fontGeist,
+      page,
+      pageWidth,
+      pageHeight,
+      margin,
+      options,
+      logoImg,
+      letterheadImg,
+      fontRegular,
+      fontBold,
+      fontGeist,
       badgeText: options.recipientType === 'supplier' ? 'SUPPLIER RFQ' : 'ITINERARY PROPOSAL',
       subRightText: `Page ${pageNum}`,
     }) - 8;
     drawSettingsConfiguredFooter({
-      page, pageWidth, margin, footerLeftText: options.organizationName || '', pageNum,
-      fontRegular, fontBold, fontGeist, brandColor, muted,
+      page,
+      pageWidth,
+      margin,
+      footerLeftText: options.organizationName || '',
+      pageNum,
+      fontRegular,
+      fontBold,
+      fontGeist,
+      brandColor,
+      muted,
     });
-    write(continued ? `${heading} (continued)` : heading, 21, true, brandColor);
-    y -= 10;
-  };
-  const write = (text: string, size = 12, bold = false, color = charcoal) => {
-    if (!text?.trim()) return;
-    // Each line is retained, even if one programme, note or list item spans multiple pages.
-    for (const line of wrapText(text, contentWidth, bold ? fontBold : fontRegular, size)) {
-      if (y < 65) newPage(section, true);
-      drawSafeText(page, line, { x: margin, y, size, fontRegular, fontBold, fontGeist, color, isBold: bold });
-      y -= size * 1.5;
+
+    if (isContinuation && heading) {
+      writeText(`${heading} (continued)`, 13.5, true, brandColor, 18, 8);
     }
-    y -= 10;
   };
-  const rows = (values: Array<[string, string]>) => {
-    for (const [label, value] of values) if (value?.trim()) write(`${label}: ${value}`);
+
+  const writeText = (
+    text: string,
+    size = 10.5,
+    bold = false,
+    color = charcoal,
+    lineHeight = size * 1.45,
+    paragraphGap = 6
+  ) => {
+    if (!text?.trim()) return;
+    const font = bold ? fontBold : fontRegular;
+    const lines = wrapText(text, contentWidth, font, size);
+    for (const line of lines) {
+      if (y < 68) {
+        startNewPage(currentSection, true);
+      }
+      drawSafeText(page, line, {
+        x: margin,
+        y,
+        size,
+        fontRegular,
+        fontBold,
+        fontGeist,
+        color,
+        isBold: bold,
+      });
+      y -= lineHeight;
+    }
+    y -= paragraphGap;
   };
-  const list = (heading: string, items: string[]) => {
-    if (!items.length) return;
-    newPage(heading);
-    items.forEach((item, index) => write(`${index + 1}. ${item}`));
+
+  const ensureSpace = (neededPoints: number, nextHeading: string): boolean => {
+    if (y < (68 + neededPoints)) {
+      startNewPage(nextHeading, false);
+      return true;
+    }
+    return false;
   };
-  newPage(options.title);
-  rows([
+
+  const writeSectionHeading = (heading: string, minSpace = 120) => {
+    const createdNew = ensureSpace(minSpace, heading);
+    currentSection = heading;
+    if (!createdNew) {
+      y -= 8;
+      page.drawRectangle({
+        x: margin,
+        y: y + 4,
+        width: contentWidth,
+        height: 1,
+        color: rgb(0.88, 0.90, 0.92),
+      });
+      y -= 10;
+      writeText(heading, 15, true, brandColor, 20, 6);
+    } else {
+      writeText(heading, 16, true, brandColor, 22, 6);
+    }
+  };
+
+  const renderItemList = (heading: string, items: string[], minSpace = 110) => {
+    if (!items || !items.length) return;
+    writeSectionHeading(heading, minSpace);
+    items.forEach((item, index) => {
+      writeText(`${index + 1}.  ${item}`, 10, false, charcoal, 14.5, 3);
+    });
+    y -= 4;
+  };
+
+  // Start First Page with Main Title
+  startNewPage(options.title, false);
+  writeText(options.title, 19, true, brandColor, 25, 10);
+
+  // Key Specifications
+  const partyParts = [
+    options.headcountAdults != null ? `${options.headcountAdults} Adults` : '',
+    options.headcountChildren ? `${options.headcountChildren} Children` : '',
+  ].filter(Boolean).join(', ');
+
+  const rawMetaRows: Array<[string, string]> = [
     ['Prepared for', resolveCustomerNameForPdf(options, options.itineraryText)],
-    ['Destination', parsed.destination], ['Duration', `${parsed.durationDays} days / ${parsed.durationNights} nights`],
+    ['Destination', parsed.destination],
+    ['Duration', `${parsed.durationDays} days / ${parsed.durationNights} nights`],
     ['Travel dates', parsed.travelDates],
-    ['Adults', options.headcountAdults != null ? String(options.headcountAdults) : ''],
-    ['Children', options.headcountChildren != null ? String(options.headcountChildren) : ''],
-    ['Prepared', parsed.preparedDateStr], ['Reference', options.bookingReference || ''],
-  ]);
-  if (parsed.overviewParagraph) write(parsed.overviewParagraph);
-  rows(parsed.overviewTableRows.filter(([label]) => !['Destination', 'Duration'].includes(label)));
-  list('Recorded requirements', parsed.recordedRequirements);
-  list('To confirm before booking', parsed.toConfirmItems);
-  for (const day of parsed.days) {
-    newPage(`Day ${day.dayNumber}: ${day.title}`);
-    if (day.dateLabel) write(day.dateLabel, 11, false, muted);
-    day.paragraphs.forEach(paragraph => write(paragraph, 12.5));
-    rows([['Overnight', day.overnight], ['Meals', day.meals], ['Transfers', day.transfers],
-      ['Included experience', day.experience], ['Notes', day.notes]]);
+    ['Party size', partyParts],
+    ['Prepared date', parsed.preparedDateStr],
+    ['Reference', options.bookingReference || ''],
+  ];
+  const metaRows = rawMetaRows.filter(([_, val]) => Boolean(val && val.trim().length > 0));
+
+  for (const [lbl, val] of metaRows) {
+    if (y < 68) startNewPage(currentSection, true);
+    const prefix = `${lbl}: `;
+    const prefW = fontBold.widthOfTextAtSize(prefix, 10);
+    drawSafeText(page, prefix, { x: margin, y, size: 10, fontRegular, fontBold, fontGeist, color: charcoal, isBold: true });
+    drawSafeText(page, val, { x: margin + prefW + 4, y, size: 10, fontRegular, fontBold, fontGeist, color: charcoal });
+    y -= 15;
   }
+  y -= 6;
+
+  // Overview Paragraph
+  if (parsed.overviewParagraph) {
+    writeText(parsed.overviewParagraph, 10.5, false, charcoal, 15, 8);
+  }
+
+  // Overview Specifications / Table rows (Hotel plan, Meal plan, Transfers, etc.)
+  const overviewRows = parsed.overviewTableRows.filter(
+    ([label]) => !['Destination', 'Duration'].includes(label)
+  );
+  if (overviewRows.length > 0) {
+    for (const [lbl, val] of overviewRows) {
+      if (!val?.trim()) continue;
+      if (y < 68) startNewPage(currentSection, true);
+      const lblStr = `${lbl}: `;
+      const lblW = Math.min(130, fontBold.widthOfTextAtSize(lblStr, 10));
+      drawSafeText(page, lblStr, { x: margin, y, size: 10, fontRegular, fontBold, fontGeist, color: charcoal, isBold: true });
+      const valLines = wrapText(val, contentWidth - lblW - 4, fontRegular, 10);
+      let first = true;
+      for (const vLine of valLines) {
+        if (!first && y < 68) startNewPage(currentSection, true);
+        drawSafeText(page, vLine, { x: margin + lblW + 4, y, size: 10, fontRegular, fontBold, fontGeist, color: charcoal });
+        y -= 14.5;
+        first = false;
+      }
+      if (first) y -= 14.5;
+    }
+    y -= 6;
+  }
+
+  // Guest Preferences (Recorded Requirements & To Confirm Before Booking)
+  renderItemList('Recorded Requirements', parsed.recordedRequirements, 110);
+  renderItemList('To Confirm Before Booking', parsed.toConfirmItems, 110);
+
+  // Day-by-Day Journey Itinerary
+  writeSectionHeading('Day-by-Day Journey Itinerary', 140);
+
+  for (let i = 0; i < parsed.days.length; i++) {
+    const day = parsed.days[i];
+    // Need at least 110pt to start a day cleanly; otherwise start on next page
+    const isNewDayPage = ensureSpace(110, `Day ${day.dayNumber}: ${day.title}`);
+    if (!isNewDayPage && i > 0) {
+      y -= 6;
+      page.drawRectangle({
+        x: margin,
+        y: y + 3,
+        width: contentWidth,
+        height: 0.65,
+        color: rgb(0.88, 0.90, 0.92),
+      });
+      y -= 8;
+    }
+
+    currentSection = `Day ${day.dayNumber}: ${day.title}`;
+    writeText(`Day ${day.dayNumber}: ${day.title}`, 13.5, true, brandColor, 18, 2);
+
+    if (day.dateLabel) {
+      writeText(day.dateLabel, 9.5, false, muted, 13, 5);
+    } else {
+      y -= 3;
+    }
+
+    day.paragraphs.forEach(paragraph => {
+      writeText(paragraph, 10.5, false, charcoal, 15, 5);
+    });
+
+    const rawDayMeta: Array<[string, string]> = [
+      ['Overnight', day.overnight],
+      ['Meals', day.meals],
+      ['Transfers', day.transfers],
+      ['Included experience', day.experience],
+      ['Notes', day.notes],
+    ];
+    const dayMeta = rawDayMeta.filter(([, val]) => Boolean(val && val.trim().length > 0 && !val.toLowerCase().includes('not applicable')));
+
+    if (dayMeta.length > 0) {
+      y -= 2;
+      for (const [lbl, val] of dayMeta) {
+        if (y < 68) startNewPage(currentSection, true);
+        const prefix = `${lbl}: `;
+        const prefW = fontBold.widthOfTextAtSize(prefix, 9.5);
+        drawSafeText(page, prefix, { x: margin, y, size: 9.5, fontRegular, fontBold, fontGeist, color: rgb(0.25, 0.28, 0.32), isBold: true });
+        const valLines = wrapText(val, contentWidth - prefW - 4, fontRegular, 9.5);
+        let first = true;
+        for (const vLine of valLines) {
+          if (!first && y < 68) startNewPage(currentSection, true);
+          drawSafeText(page, vLine, { x: margin + prefW + 4, y, size: 9.5, fontRegular, fontBold, fontGeist, color: charcoal });
+          y -= 13.5;
+          first = false;
+        }
+        if (first) y -= 13.5;
+      }
+      y -= 4;
+    }
+  }
+
+  // Curated Accommodations
   if (parsed.accommodationRows.some(([, value]) => value)) {
-    newPage('Curated accommodations');
-    rows(parsed.accommodationRows);
-    write(parsed.alternativeAccommodationText);
+    writeSectionHeading('Curated Accommodations', 120);
+    for (const [lbl, val] of parsed.accommodationRows) {
+      if (!val?.trim()) continue;
+      if (y < 68) startNewPage('Curated Accommodations', true);
+      const lblStr = `${lbl}: `;
+      const lblW = Math.min(130, fontBold.widthOfTextAtSize(lblStr, 10));
+      drawSafeText(page, lblStr, { x: margin, y, size: 10, fontRegular, fontBold, fontGeist, color: charcoal, isBold: true });
+      const valLines = wrapText(val, contentWidth - lblW - 4, fontRegular, 10);
+      let first = true;
+      for (const vLine of valLines) {
+        if (!first && y < 68) startNewPage('Curated Accommodations', true);
+        drawSafeText(page, vLine, { x: margin + lblW + 4, y, size: 10, fontRegular, fontBold, fontGeist, color: charcoal });
+        y -= 14.5;
+        first = false;
+      }
+      if (first) y -= 14.5;
+    }
+    if (parsed.alternativeAccommodationText) {
+      y -= 4;
+      writeText(parsed.alternativeAccommodationText, 10, false, muted, 14, 6);
+    }
   }
-  list('Package includes', parsed.inclusions);
-  list('Package excludes', parsed.exclusions);
-  list('Important travel information', parsed.importantInfo);
-  list('Before travel', parsed.beforeTravelItems);
-  // Render configured contact details only; never infer addresses, registration IDs or service hours.
+
+  // Inclusions & Exclusions
+  renderItemList('Package Includes', parsed.inclusions, 120);
+  renderItemList('Package Excludes', parsed.exclusions, 110);
+  renderItemList('Important Travel Information', parsed.importantInfo, 110);
+  renderItemList('Before Travel Checklist', parsed.beforeTravelItems, 110);
+
+  // Contact Details
   if (options.consultantName || options.organizationPhone || options.consultantEmail || options.organizationAddress) {
-    newPage('Contact details');
-    rows([
-      ['Agency', options.organizationName || ''], ['Address', options.organizationAddress || ''],
+    writeSectionHeading('Agency & Concierge Contact', 100);
+    const rawContactRows: Array<[string, string]> = [
+      ['Agency', options.organizationName || ''],
+      ['Consultant', options.consultantName || ''],
+      ['Email', options.consultantEmail || ''],
       ['Phone', options.organizationPhone || options.consultantPhone || ''],
-      ['Website', options.organizationWebsite || ''], ['Consultant', options.consultantName || ''],
-      ['Email', options.consultantEmail || ''], ['CIN', options.companyCin || ''],
-      ['GSTIN', options.companyGstin || ''], ['PAN', options.companyPan || ''],
-    ]);
+      ['Website', options.organizationWebsite || ''],
+      ['Address', options.organizationAddress || ''],
+      ['CIN', options.companyCin || ''],
+      ['GSTIN', options.companyGstin || ''],
+      ['PAN', options.companyPan || ''],
+    ];
+    const contactRows = rawContactRows.filter(([, v]) => Boolean(v && v.trim().length > 0));
+
+    for (const [lbl, val] of contactRows) {
+      if (y < 68) startNewPage('Agency & Concierge Contact', true);
+      const lblStr = `${lbl}: `;
+      const lblW = fontBold.widthOfTextAtSize(lblStr, 10);
+      drawSafeText(page, lblStr, { x: margin, y, size: 10, fontRegular, fontBold, fontGeist, color: charcoal, isBold: true });
+      drawSafeText(page, val, { x: margin + lblW + 4, y, size: 10, fontRegular, fontBold, fontGeist, color: charcoal });
+      y -= 15;
+    }
   }
+
   return pdfDoc.save();
 }
 
