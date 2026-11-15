@@ -209,10 +209,16 @@ export function CallModal() {
             )}
 
             {webPhoneStatus === 'ended' && (
-              <div className="p-3 bg-emerald-950/40 border border-emerald-800/60 rounded-xl text-emerald-300 text-xs flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Call completed successfully! Audio recording is now being transcribed for AI travel itinerary generation.</span>
-              </div>
+              webPhoneDuration > 0 ? (
+                <div className="p-3 bg-emerald-950/40 border border-emerald-800/60 rounded-xl text-emerald-300 text-xs flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>Call completed ({formatCallTimer(webPhoneDuration)})! Audio recording is now being transcribed for AI travel itinerary generation.</span>
+                </div>
+              ) : (
+                <div className="p-3 bg-zinc-900 border border-zinc-800 rounded-xl text-zinc-400 text-xs flex items-center gap-2">
+                  <span>Call ended. No audio recorded.</span>
+                </div>
+              )
             )}
 
             {/* From Line */}
@@ -359,7 +365,7 @@ export function CallModal() {
                 <button
                   type="button"
                   onClick={handleStartBrowserCall}
-                  disabled={webPhoneStatus !== 'idle' && webPhoneStatus !== 'ended' || !callDestination || contactsList.length === 0}
+                  disabled={webPhoneStatus === 'logging_in' || !callDestination || contactsList.length === 0}
                   className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-emerald-600/25 flex items-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Mic className="w-4 h-4" />

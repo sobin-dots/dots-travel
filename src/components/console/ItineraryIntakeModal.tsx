@@ -51,10 +51,85 @@ export function ItineraryIntakeModal() {
   const computeReturnDateStr = (depStr: string, days: string | number) => {
     const numDays = Number(days);
     if (!depStr || !numDays || numDays < 1) return '';
-    const d = new Date(depStr);
+    const parts = depStr.split('-').map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) return '';
+    const [year, month, day] = parts;
+    const d = new Date(Date.UTC(year, month - 1, day));
+    d.setUTCDate(d.getUTCDate() + Math.max(0, Math.round(numDays) - 1));
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dt = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${dt}`;
+  };
+
+  const computeDepartureDateStr = (retStr: string, days: string | number) => {
+    const numDays = Number(days);
+    if (!retStr || !numDays || numDays < 1) return '';
+    const parts = retStr.split('-').map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) return '';
+    const [year, month, day] = parts;
+    const d = new Date(Date.UTC(year, month - 1, day));
+    d.setUTCDate(d.getUTCDate() - Math.max(0, Math.round(numDays) - 1));
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dt = String(d.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${dt}`;
+  };
+
+  const computeDurationDays = (depStr: string, retStr: string) => {
+    if (!depStr || !retStr) return '';
+    const depParts = depStr.split('-').map(Number);
+    const retParts = retStr.split('-').map(Number);
+    if (depParts.length !== 3 || retParts.length !== 3 || depParts.some(isNaN) || retParts.some(isNaN)) return '';
+    const depDate = new Date(Date.UTC(depParts[0], depParts[1] - 1, depParts[2]));
+    const retDate = new Date(Date.UTC(retParts[0], retParts[1] - 1, retParts[2]));
+    const diffDays = Math.round((retDate.getTime() - depDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    if (diffDays >= 1 && diffDays <= 60) return String(diffDays);
+    return '';
+  };
+
+  const formatDatePreview = (dateStr: string) => {
+    if (!dateStr) return '';
+    const parts = dateStr.split('-').map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) return '';
+    const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
     if (isNaN(d.getTime())) return '';
-    d.setUTCDate(d.getUTCDate() + Math.max(0, numDays - 1));
-    return d.toISOString().split('T')[0];
+    return d.toLocaleDateString('en-IN', {
+      weekday: 'short',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'UTC',
+    });
+  };
+
+  const handleDepartureChange = (newDep: string) => {
+    setDepartureDate(newDep);
+    if (newDep && durationDays) {
+      setReturnDate(computeReturnDateStr(newDep, durationDays));
+    } else if (newDep && returnDate) {
+      const days = computeDurationDays(newDep, returnDate);
+      if (days) setDurationDays(days);
+    }
+  };
+
+  const handleDurationChange = (newDur: string) => {
+    setDurationDays(newDur);
+    if (departureDate && newDur) {
+      setReturnDate(computeReturnDateStr(departureDate, newDur));
+    } else if (returnDate && newDur && !departureDate) {
+      setDepartureDate(computeDepartureDateStr(returnDate, newDur));
+    }
+  };
+
+  const handleReturnChange = (newRet: string) => {
+    setReturnDate(newRet);
+    if (departureDate && newRet) {
+      const days = computeDurationDays(departureDate, newRet);
+      if (days) setDurationDays(days);
+    } else if (durationDays && newRet && !departureDate) {
+      setDepartureDate(computeDepartureDateStr(newRet, durationDays));
+    }
   };
 
   const runExtraction = async (callTarget: any, isMountedCheck: () => boolean = () => true) => {
@@ -74,10 +149,22 @@ export function ItineraryIntakeModal() {
         const p = data.params || {};
         const dep = p.departureDate || '';
         const dur = p.durationDays != null ? String(p.durationDays) : '';
+        const ret = p.returnDate || '';
+
         setDestination(p.destination || '');
-        setDepartureDate(dep);
         setDurationDays(dur);
-        setReturnDate(p.returnDate || (dep && dur ? computeReturnDateStr(dep, dur) : ''));
+
+        if (dep) {
+          setDepartureDate(dep);
+          setReturnDate(ret || (dur ? computeReturnDateStr(dep, dur) : ''));
+        } else if (ret && dur) {
+          setDepartureDate(computeDepartureDateStr(ret, dur));
+          setReturnDate(ret);
+        } else {
+          setDepartureDate('');
+          setReturnDate(ret);
+        }
+
         setHeadcountAdults(p.headcountAdults != null ? String(p.headcountAdults) : '');
         setHeadcountChildren(p.headcountChildren != null ? String(p.headcountChildren) : '');
         setHeadcountInfants(p.headcountInfants != null ? String(p.headcountInfants) : '');
@@ -214,7 +301,7 @@ export function ItineraryIntakeModal() {
 
         {/* Modal Form */}
         <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto max-h-[70vh]">
-          {/* Destination & Departure Date */}
+          {/* Destination & Accommodation Preference */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1.5">
@@ -230,48 +317,118 @@ export function ItineraryIntakeModal() {
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
               />
             </div>
+
             <div>
               <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-indigo-400" />
-                Target Departure Date
+                <Building2 className="w-3.5 h-3.5 text-indigo-400" />
+                Accommodation Preference
               </label>
-              <input
-                type="date"
-                value={departureDate}
-                onChange={(e) => {
-                  const nextDep = e.target.value;
-                  setDepartureDate(nextDep);
-                  if (nextDep && durationDays) {
-                    setReturnDate(computeReturnDateStr(nextDep, durationDays));
-                  }
-                }}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
-              />
+              <select
+                value={hotelTier}
+                onChange={(e) => setHotelTier(e.target.value)}
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 cursor-pointer"
+              >
+                <option value="">-- Select Accommodation Preference --</option>
+                <option value="luxury_5star">🌟 5-Star Luxury Resort & Suites</option>
+                <option value="boutique_4star">💎 4-Star Boutique & Heritage Hotel</option>
+                <option value="chalet_villa">🏡 Private Luxury Chalet / Villa</option>
+                <option value="standard_3star">🏨 3-Star Standard / Modern Comfort</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Trip Schedule & Dates: Target Departure Date, Duration, and Target Return Date */}
+          <div className="bg-zinc-950/70 p-4 rounded-xl border border-zinc-800/90 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
+                <Calendar className="w-4 h-4 text-indigo-400" />
+                <span>Trip Schedule & Dates</span>
+              </div>
+              {durationDays && (
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
+                  {durationDays} {Number(durationDays) === 1 ? 'Day' : 'Days'}
+                  {Number(durationDays) > 1 ? ` / ${Number(durationDays) - 1} Nights` : ''}
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+              {/* Target Departure Date */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[11px] font-medium text-zinc-300 flex items-center gap-1">
+                    <Calendar className="w-3 h-3 text-indigo-400" />
+                    Target Departure Date
+                  </label>
+                  {departureDate && returnDate && durationDays && (
+                    <span className="text-[9px] font-mono text-emerald-400">Linked</span>
+                  )}
+                </div>
+                <input
+                  type="date"
+                  value={departureDate}
+                  onChange={(e) => handleDepartureChange(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                />
+                {departureDate && (
+                  <p className="text-[10px] text-zinc-400 font-mono mt-1">
+                    {formatDatePreview(departureDate)}
+                  </p>
+                )}
+              </div>
+
+              {/* Duration (Days) */}
+              <div>
+                <label className="block text-[11px] font-medium text-zinc-300 mb-1.5 flex items-center gap-1">
+                  <Clock className="w-3 h-3 text-amber-400" />
+                  Duration (Days)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  value={durationDays}
+                  placeholder="e.g. 5"
+                  onChange={(e) => handleDurationChange(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
+                />
+                {durationDays && (
+                  <p className="text-[10px] text-zinc-400 font-mono mt-1">
+                    {Number(durationDays)} {Number(durationDays) === 1 ? 'day trip' : 'days trip'}
+                  </p>
+                )}
+              </div>
+
+              {/* Target Return Date */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[11px] font-medium text-zinc-300 flex items-center gap-1">
+                    <Calendar className="w-3 h-3 text-emerald-400" />
+                    Target Return Date
+                  </label>
+                  {departureDate && durationDays && returnDate && (
+                    <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/10 px-1 rounded border border-emerald-500/20">
+                      Auto-calculated
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="date"
+                  value={returnDate}
+                  onChange={(e) => handleReturnChange(e.target.value)}
+                  className="w-full bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                />
+                {returnDate && (
+                  <p className="text-[10px] text-zinc-400 font-mono mt-1">
+                    {formatDatePreview(returnDate)}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
 
           {/* Trip Duration & Headcount */}
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-zinc-950/60 p-3.5 rounded-xl border border-zinc-800/80">
-            <div>
-              <label className="block text-[11px] font-medium text-zinc-400 mb-1 flex items-center gap-1">
-                <Clock className="w-3 h-3 text-amber-400" /> Duration (Days)
-              </label>
-              <input
-                type="number"
-                min="1"
-                max="60"
-                value={durationDays}
-                placeholder="e.g. 5"
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setDurationDays(val);
-                  if (departureDate && val) {
-                    setReturnDate(computeReturnDateStr(departureDate, val));
-                  }
-                }}
-                className="w-full bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono"
-              />
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-zinc-950/60 p-3.5 rounded-xl border border-zinc-800/80">
             <div>
               <label className="block text-[11px] font-medium text-zinc-400 mb-1 flex items-center gap-1">
                 <Users className="w-3 h-3 text-emerald-400" /> Adults (18+)
@@ -313,47 +470,6 @@ export function ItineraryIntakeModal() {
                 onChange={(e) => setHeadcountInfants(e.target.value)}
                 className="w-full bg-zinc-900 border border-zinc-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono"
               />
-            </div>
-          </div>
-
-          {/* Return Date & Hotel Tier */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                Target Return Date
-              </label>
-              <input
-                type="date"
-                value={returnDate}
-                onChange={(e) => {
-                  const nextRet = e.target.value;
-                  setReturnDate(nextRet);
-                  if (departureDate && nextRet) {
-                    const diffDays = Math.round((new Date(nextRet).getTime() - new Date(departureDate).getTime()) / 86400000) + 1;
-                    if (diffDays >= 1 && diffDays <= 60) setDurationDays(String(diffDays));
-                  }
-                }}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-zinc-300 mb-1.5 flex items-center gap-1.5">
-                <Building2 className="w-3.5 h-3.5 text-indigo-400" />
-                Accommodation Preference
-              </label>
-              <select
-                value={hotelTier}
-                onChange={(e) => setHotelTier(e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 cursor-pointer"
-              >
-                <option value="">-- Select Accommodation Preference --</option>
-                <option value="luxury_5star">🌟 5-Star Luxury Resort & Suites</option>
-                <option value="boutique_4star">💎 4-Star Boutique & Heritage Hotel</option>
-                <option value="chalet_villa">🏡 Private Luxury Chalet / Villa</option>
-                <option value="standard_3star">🏨 3-Star Standard / Modern Comfort</option>
-              </select>
             </div>
           </div>
 

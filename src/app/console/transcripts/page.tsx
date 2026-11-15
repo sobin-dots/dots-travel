@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Search } from 'lucide-react';
+import { Search, Clock, Sparkles } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
 export default function TranscriptsPage() {
@@ -42,25 +42,68 @@ export default function TranscriptsPage() {
             {transcriptSearch ? 'No transcripts match your search.' : 'No transcripts available yet.'}
           </div>
         ) : (
-          filteredTranscripts.map((t) => (
-            <div key={t.id} className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 sm:p-5 space-y-3">
-              <div className="flex items-center justify-between text-xs flex-wrap gap-2">
-                <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-                  <span className="font-mono text-zinc-300 font-medium text-[11px] sm:text-xs">SID: {t.recordingSid}</span>
-                  <span className="text-zinc-500">•</span>
-                  <span className="text-zinc-400">{t.language || 'en-US'}</span>
-                  <span className="text-zinc-500">•</span>
-                  <span className="text-zinc-400">{t.wordCount || 18} words</span>
+          filteredTranscripts.map((t) => {
+            const rawDate = t.createdAt || t.updatedAt || t.call?.startedAt;
+            const dateObj = rawDate ? new Date(rawDate) : null;
+            const formattedDate = dateObj && !isNaN(dateObj.getTime())
+              ? dateObj.toLocaleDateString('en-IN', {
+                  day: '2-digit',
+                  month: 'short',
+                  year: 'numeric',
+                })
+              : null;
+            const formattedTime = dateObj && !isNaN(dateObj.getTime())
+              ? dateObj.toLocaleTimeString('en-IN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: true,
+                })
+              : null;
+
+            return (
+              <div key={t.id} className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4 sm:p-5 space-y-3">
+                <div className="flex items-center justify-between text-xs flex-wrap gap-2">
+                  <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                    {formattedDate && (
+                      <span className="flex items-center gap-1 text-zinc-200 font-mono text-[11px] sm:text-xs">
+                        <Clock className="w-3 h-3 text-indigo-400 shrink-0" />
+                        {formattedDate} at {formattedTime}
+                      </span>
+                    )}
+                    {formattedDate && <span className="text-zinc-600">•</span>}
+                    {t.call && (
+                      <>
+                        <span className="text-zinc-300 font-mono text-[11px] sm:text-xs">
+                          {t.call.from} → {t.call.to}
+                        </span>
+                        <span className="text-zinc-600">•</span>
+                      </>
+                    )}
+                    <span className="font-mono text-zinc-400 text-[11px] sm:text-xs">
+                      {t.recordingSid ? `SID: ${t.recordingSid}` : `ID: ${t.id.slice(0, 12)}...`}
+                    </span>
+                    <span className="text-zinc-600">•</span>
+                    <span className="text-zinc-400">{t.language || 'en-US'}</span>
+                    <span className="text-zinc-600">•</span>
+                    <span className="text-zinc-400">{t.wordCount || 0} words</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {t.rawPayload?.model && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-zinc-800 text-zinc-400 border border-zinc-700">
+                        {t.rawPayload.model}
+                      </span>
+                    )}
+                    <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase font-bold">
+                      {t.status}
+                    </span>
+                  </div>
                 </div>
-                <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 uppercase font-bold shrink-0">
-                  {t.status}
-                </span>
+                <p className="text-xs text-zinc-200 bg-zinc-950/60 p-3 sm:p-4 rounded-lg border border-zinc-800/80 leading-relaxed font-sans break-words">
+                  &ldquo;{t.text}&rdquo;
+                </p>
               </div>
-              <p className="text-xs text-zinc-200 bg-zinc-950/60 p-3 sm:p-4 rounded-lg border border-zinc-800/80 leading-relaxed font-sans break-words">
-                &ldquo;{t.text}&rdquo;
-              </p>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>

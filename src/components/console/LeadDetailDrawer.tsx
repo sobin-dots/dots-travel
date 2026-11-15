@@ -1442,10 +1442,25 @@ export function LeadDetailDrawer() {
                 {/* Call Audio Recording */}
                 {selectedLead.call?.recordings && selectedLead.call.recordings.length > 0 && (
                   <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800 space-y-2">
-                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <Mic className="w-3.5 h-3.5 text-emerald-400" />
-                      Source Call Audio
-                    </span>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                        Source Call Audio
+                      </span>
+                      {(selectedLead.call.startedAt || selectedLead.call.createdAt) && (
+                        <span className="text-[10px] text-zinc-400 font-mono flex items-center gap-1">
+                          <Clock className="w-2.5 h-2.5 text-indigo-400" />
+                          {new Date(selectedLead.call.startedAt || selectedLead.call.createdAt).toLocaleString('en-IN', {
+                            day: '2-digit',
+                            month: 'short',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: true,
+                          })}
+                        </span>
+                      )}
+                    </div>
                     <audio
                       controls
                       className="w-full h-8 rounded bg-zinc-900"
@@ -1456,10 +1471,29 @@ export function LeadDetailDrawer() {
 
                 {/* Call Speech Transcript */}
                 <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800 space-y-2">
-                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5 text-indigo-400" />
-                    Verbatim Call Transcript
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-indigo-400" />
+                      Verbatim Call Transcript
+                    </span>
+                    {(selectedLead.call?.transcriptions?.[0]?.createdAt || selectedLead.call?.startedAt || selectedLead.call?.createdAt) && (
+                      <span className="text-[10px] text-zinc-400 font-mono flex items-center gap-1">
+                        <Clock className="w-2.5 h-2.5 text-indigo-400" />
+                        {new Date(
+                          selectedLead.call.transcriptions?.[0]?.createdAt ||
+                          selectedLead.call.startedAt ||
+                          selectedLead.call.createdAt
+                        ).toLocaleString('en-IN', {
+                          day: '2-digit',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: true,
+                        })}
+                      </span>
+                    )}
+                  </div>
                   <div className="bg-zinc-900 p-3 rounded-lg border border-zinc-800 text-xs font-mono text-zinc-300 max-h-48 overflow-y-auto whitespace-pre-line leading-relaxed">
                     {selectedLead.call?.transcriptions?.[0]?.text || '(No transcript available)'}
                   </div>
