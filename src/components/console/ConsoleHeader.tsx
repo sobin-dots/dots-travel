@@ -66,7 +66,7 @@ export function ConsoleHeader() {
             TA
           </div>
           <div>
-            <span className="font-bold text-xs sm:text-sm tracking-tight text-white block">Travel Agent </span>
+            <span className="font-bold text-xs sm:text-sm tracking-tight text-white block">Travel Agent dev</span>
             <span className="text-[9px] sm:text-[10px] text-zinc-400 hidden xs:block -mt-0.5">Enterprise Operations Console</span>
           </div>
         </Link>
