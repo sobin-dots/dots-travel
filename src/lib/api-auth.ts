@@ -6,12 +6,13 @@ export interface AuthContext {
   userId: string;
   email: string;
   organizationId: string;
-  role: 'owner' | 'admin' | 'operator' | 'viewer';
+  role: 'owner' | 'admin' | 'operator' | 'sales' | 'viewer';
 }
 
 const ROLE_RANK: Record<string, number> = {
   viewer: 1,
   operator: 2,
+  sales: 2,
   admin: 3,
   owner: 4,
 };
@@ -87,6 +88,15 @@ export async function authenticateRequest(
         { status: 403 }
       ),
     };
+  }
+
+  // Apply ownership checks to every lead detail endpoint, including nested PDFs,
+  // quotations and stage updates. List endpoints apply the same scope in their queries.
+  const leadSegment = new URL(req.url).pathname.match(/^\/api\/v1\/leads\/([^/]+)(?:\/|$)/)?.[1];
+  const leadId = leadSegment && !['pipeline', 'generate', 'extract-params'].includes(leadSegment) ? decodeURIComponent(leadSegment) : undefined;
+  if (leadId && userRole !== 'owner' && userRole !== 'admin') {
+    const lead = await db.lead.findFirst({ where: { id: leadId, organizationId: payload.organizationId, assignedToId: payload.userId }, select: { id: true } });
+    if (!lead) return { errorResponse: NextResponse.json({ error: 'Lead not found' }, { status: 404 }) };
   }
 
   return {

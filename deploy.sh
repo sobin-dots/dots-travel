@@ -7,7 +7,7 @@ export PATH="/usr/bin:/usr/local/bin:$PATH"
 
 # Application configuration
 APP_DIR="/home/ubuntu/apps/dots-travel"
-BRANCH="master"
+BRANCH="ta-zowiz-ai"
 APP_NAME="nextjs-app"
 
 echo "===================================="

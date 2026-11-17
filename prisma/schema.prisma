@@ -61,6 +61,9 @@ model Organization {
   visaRequirements      VisaRequirement[]
   automationLogs        AutomationLog[]
   itineraryRules        ItineraryRule[]
+  leadConnections       LeadConnection[]
+  leadSubmissions       LeadSubmission[]
+  firstContactMinutes   Int @default(30)
 
   @@map("organizations")
 }
@@ -79,6 +82,7 @@ model User {
   updatedAt        DateTime  @updatedAt
 
   memberships Membership[]
+  assignedLeads Lead[] @relation("LeadAssignee")
   sessions    Session[]
   apiKeys     ApiKey[]
   auditLogs   AuditLog[]
@@ -91,6 +95,9 @@ model Membership {
   organizationId String
   userId         String
   role           String   @default("operator") // owner | admin | operator | viewer
+  receivesLeads  Boolean  @default(false)
+  availableForLeads Boolean @default(true)
+  lastLeadAssignedAt DateTime?
   createdAt      DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -471,7 +478,7 @@ model Contact {
   id             String   @id @default(uuid())
   organizationId String
   name           String
-  phone          String   // E.164
+  phone          String?  // E.164; email-only form enquiries may omit phone
   email          String?
   company        String?
   notes          String?
@@ -482,6 +489,7 @@ model Contact {
   leads        Lead[]
 
   @@unique([organizationId, phone])
+  @@index([organizationId, email])
   @@index([organizationId])
   @@map("contacts")
 }
@@ -493,6 +501,28 @@ model Lead {
   callId               String?
   title                String
   destination          String?
+  source               String @default("unknown")
+  formId               String?
+  formName             String?
+  temperature          String @default("warm")
+  tags                 String[] @default([])
+  assignedToId         String?
+  assignedAt           DateTime?
+  firstContactDueAt    DateTime?
+  firstContactAt       DateTime?
+  nextFollowUpAt       DateTime?
+  campaignId           String?
+  campaignName         String?
+  adId                 String?
+  adName               String?
+  adGroupId            String?
+  clickId              String?
+  utmSource            String?
+  utmMedium            String?
+  utmCampaign          String?
+  duplicateContactFlag Boolean @default(false)
+  assignedTo           User? @relation("LeadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  submissions          LeadSubmission[]
   status               String    @default("pending_approval") // draft | pending_approval | approved | sent_to_customer | sent_to_supplier
   stage                String    @default("new_inquiry") // new_inquiry | quote_prep | quote_sent | negotiation | confirmed | lost
   itinerary            String    @db.Text
@@ -529,7 +559,51 @@ model Lead {
 
   @@index([organizationId, status])
   @@index([organizationId, stage])
+  @@index([organizationId, assignedToId, createdAt])
+  @@index([organizationId, source, formId])
   @@map("leads")
+}
+
+model LeadConnection {
+  id String @id @default(uuid())
+  organizationId String
+  name String
+  provider String // meta | google_ads | website | generic
+  enabled Boolean @default(true)
+  credentials Json // encrypted AES-GCM envelope, never returned by the API
+  formNames Json @default("{}")
+  lastReceivedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  submissions LeadSubmission[]
+  @@index([organizationId])
+  @@map("lead_connections")
+}
+
+model LeadSubmission {
+  id String @id @default(uuid())
+  organizationId String
+  connectionId String
+  externalId String
+  payload Json
+  status String @default("pending") // pending | processing | processed | failed | ignored
+  attempts Int @default(0)
+  error String?
+  nextAttemptAt DateTime @default(now())
+  claimedAt DateTime?
+  claimToken String?
+  alertedAt DateTime?
+  leadId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connection LeadConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  lead Lead? @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  @@unique([connectionId, externalId])
+  @@index([status, nextAttemptAt])
+  @@index([organizationId, status])
+  @@map("lead_submissions")
 }
 
 model Supplier {

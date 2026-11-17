@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
 
     const existingDbSet = new Map<string, string>();
     for (const ex of existingInDb) {
-      existingDbSet.set(ex.phone, ex.name);
+      if (ex.phone) existingDbSet.set(ex.phone, ex.name);
     }
 
     // Step 3: Partition into to-insert vs skipped

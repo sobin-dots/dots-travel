@@ -96,7 +96,7 @@ export default function LandingPage() {
               P
             </div>
             <div>
-              <span className="font-bold text-sm tracking-tight text-white block">Travel Agent</span>
+              <span className="font-bold text-sm tracking-tight text-white block">Travel Agent demo</span>
               <span className="text-[10px] text-zinc-400 block -mt-0.5">Enterprise Operations & AI Concierge</span>
             </div>
           </Link>

@@ -3,6 +3,8 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { generateItineraryFromTranscript } from '@/lib/deepseek';
+import { lockAgency, pickAssignee } from '@/lib/lead-intake/service';
+import { managesLeads } from '@/lib/lead-access';
 
 import { ItineraryError, assertTripInput, assertItineraryReady } from '@/lib/itinerary-content';
 
@@ -38,7 +40,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ api_id: 'val_err', error: 'Missing required field: callId' }, { status: 400 });
     }
 
-    const dedupeKey = `${auth!.organizationId}:${callId}`;
+    const dedupeKey = `${auth!.organizationId}:${auth!.userId}:${callId}`;
     const signature = JSON.stringify(Object.fromEntries(Object.entries(body).sort(([a], [b]) => a.localeCompare(b))));
     const existingInFlight = inFlightLeadGenerationByKey.get(dedupeKey);
     if (existingInFlight) {
@@ -67,6 +69,14 @@ export async function POST(req: NextRequest) {
 
       if (!call) {
         throw new ItineraryError('Call not found', 404, 'not_found');
+      }
+
+      const existingLeadForCall = await db.lead.findFirst({
+        where: { organizationId: auth!.organizationId, callId: call.id },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (existingLeadForCall && !managesLeads(auth!) && existingLeadForCall.assignedToId !== auth!.userId) {
+        throw new ItineraryError('Lead not found or not assigned to you', 404, 'not_found');
       }
 
       // Resolve transcription text strictly from call transcriptions (no synthetic fallback text)
@@ -230,31 +240,34 @@ export async function POST(req: NextRequest) {
         },
       };
 
-      // Deduplicate: If a lead already exists for this call in this organization, update it instead of creating a duplicate
-      const existingLeadForCall = await db.lead.findFirst({
-        where: {
-          organizationId: auth!.organizationId,
-          callId: call.id,
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-
+      // Reuse the authorized lead, or serialize creation for this organization.
       const savedLead = existingLeadForCall
         ? await db.lead.update({
             where: { id: existingLeadForCall.id },
             data: leadDataPayload,
             include: leadInclude,
           })
-        : await db.lead.create({
+        : await db.$transaction(async tx => {
+          await lockAgency(tx, auth!.organizationId);
+          const concurrent = await tx.lead.findFirst({ where: { organizationId: auth!.organizationId, callId: call.id } });
+          if (concurrent) throw new ItineraryError('A lead was created for this call. Reload it before generating again.', 409, 'lead_conflict');
+          const assignedToId = await pickAssignee(tx, auth!.organizationId);
+          const organization = await tx.organization.findUniqueOrThrow({ where: { id: auth!.organizationId }, select: { firstContactMinutes: true } });
+          return tx.lead.create({
             data: {
               organizationId: auth!.organizationId,
               callId: call.id,
+              source: 'call',
+              assignedToId,
+              assignedAt: assignedToId ? new Date() : null,
+              firstContactDueAt: new Date(Date.now() + organization.firstContactMinutes * 60_000),
               status: 'pending_approval',
               stage: 'new_inquiry',
               ...leadDataPayload,
             },
             include: leadInclude,
           });
+        });
 
       await logAuditEvent({
         organizationId: auth!.organizationId,

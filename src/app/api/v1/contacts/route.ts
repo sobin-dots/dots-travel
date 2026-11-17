@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { CreateContactRequestSchema } from '@/lib/schemas';
+import { leadScope, managesLeads } from '@/lib/lead-access';
 
 export const runtime = 'nodejs';
 
@@ -12,7 +13,7 @@ export async function GET(req: NextRequest) {
   if (errorResponse) return errorResponse;
 
   const contacts = await db.contact.findMany({
-    where: { organizationId: auth!.organizationId },
+    where: { organizationId: auth!.organizationId, ...(!managesLeads(auth!) ? { leads: { some: leadScope(auth!) } } : {}) },
     orderBy: { name: 'asc' },
   });
 

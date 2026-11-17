@@ -9,7 +9,7 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { auth, errorResponse } = await authenticateRequest(req, 'operator');
+  const { auth, errorResponse } = await authenticateRequest(req, 'admin');
   if (errorResponse) return errorResponse;
 
   const { id } = await params;
