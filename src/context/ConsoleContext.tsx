@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { CallToneGenerator } from '@/lib/call-tones';
 import { assertItineraryReady } from '@/lib/itinerary-content';
+import { readItineraryResponse } from '@/lib/itinerary-response';
 import { patchPlivoSDK, createNoiseSuppressionShim, getLiveMicrophoneStream } from '@/lib/telephony/plivo-shim';
 
 interface ConsoleContextType {
@@ -117,7 +118,7 @@ interface ConsoleContextType {
   intakeCallTarget: any | null;
   setIntakeCallTarget: (call: any | null) => void;
   openItineraryIntakeModal: (call: any) => void;
-  handleGenerateItineraryWithParams: (callId: string, params: any) => Promise<void>;
+  handleGenerateItineraryWithParams: (callId: string, params: any) => Promise<string | null>;
 
   // Leads & AI Itinerary review drawer
   selectedLead: any | null;
@@ -168,7 +169,7 @@ interface ConsoleContextType {
   setStaffEmail: (email: string) => void;
   staffPassword: string;
   setStaffPassword: (pass: string) => void;
-  staffRole: 'operator' | 'admin' | 'viewer';
+  staffRole: 'operator' | 'sales' | 'admin' | 'viewer';
   setStaffRole: (role: any) => void;
   staffLoading: boolean;
   handleCreateStaff: (e: React.FormEvent) => Promise<void>;
@@ -357,7 +358,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [staffName, setStaffName] = useState('');
   const [staffEmail, setStaffEmail] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
-  const [staffRole, setStaffRole] = useState<'operator' | 'admin' | 'viewer'>('operator');
+  const [staffRole, setStaffRole] = useState<'operator' | 'sales' | 'admin' | 'viewer'>('operator');
   const [staffLoading, setStaffLoading] = useState(false);
 
   // Contact creation state
@@ -1676,7 +1677,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       const cleanTarget = customerPhone.replace(/\D/g, '');
       const matched = contacts.find((c: any) => {
         if (!c.phone) return false;
-        const cClean = c.phone.replace(/\D/g, '');
+        const cClean = (c.phone || '').replace(/\D/g, '');
         return c.phone === customerPhone || (cleanTarget && cClean === cleanTarget);
       });
       if (matched?.email && matched.email.includes('@')) {
@@ -1698,7 +1699,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           },
           body: JSON.stringify({ callId }),
         });
-        const data = await res.json();
+        const data = await readItineraryResponse<{ lead?: typeof selectedLead; error?: string }>(res);
         if (res.ok && data.lead) {
           setSelectedLead(data.lead);
           const resolved = resolveCustomerEmailForLead(data.lead, contactsList);
@@ -1720,6 +1721,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   // Generate Itinerary with Customized Intake Parameters
   const handleGenerateItineraryWithParams = async (callId: string, params: any) => {
+    let generationError: string | null = null;
     await runExclusive(`gen-itinerary:${callId}`, async () => {
       setGeneratingItineraryCallId(callId);
       try {
@@ -1730,7 +1732,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           },
           body: JSON.stringify({ callId, ...params }),
         });
-        const data = await res.json();
+        const data = await readItineraryResponse<{ lead?: typeof selectedLead; error?: string }>(res);
         if (res.ok && data.lead) {
           setShowItineraryIntakeModal(false);
           setIntakeCallTarget(null);
@@ -1742,14 +1744,15 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           setSelectedCallDetail(null);
           fetchData();
         } else {
-          alert(data.error || 'Failed to generate itinerary');
+          generationError = data.error || 'The itinerary service did not return an itinerary. Please retry.';
         }
       } catch (err: any) {
-        alert(err.message || 'Error communicating with itinerary service');
+        generationError = err.message || 'Unable to reach the itinerary service. Your inputs are still here; please retry.';
       } finally {
         setGeneratingItineraryCallId(null);
       }
     });
+    return generationError;
   };
 
   // Select Lead Details (Instant 0ms optimistic drawer open + background full load)

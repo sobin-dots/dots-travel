@@ -66,6 +66,9 @@ export async function PATCH(
 
   try {
     const body = await req.json();
+    if (body.expectedUpdatedAt !== undefined && body.expectedUpdatedAt !== lead.updatedAt.toISOString()) {
+      return NextResponse.json({ error: 'This itinerary has changed since you started editing. Copy your draft, reopen the lead, and apply your changes to the latest version.' }, { status: 409 });
+    }
     assertTripInput(body);
     const {
       status,

@@ -276,8 +276,8 @@ export function VisualItinerary({ itineraryText, destination: propDest, leadTitl
   return (
     <div className="space-y-4">
       {/* Top Controls: Visual vs Raw Switch */}
-      <div className="flex items-center justify-between pb-2 border-b border-zinc-800/80">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-zinc-800/80">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
             <Compass className="w-3.5 h-3.5 text-indigo-400" />
             Itinerary Presentation

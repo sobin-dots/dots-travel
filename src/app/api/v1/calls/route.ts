@@ -78,10 +78,11 @@ export async function GET(req: NextRequest) {
       .filter(
         (c) =>
           c.name.toLowerCase().includes(search.toLowerCase()) ||
-          c.phone.toLowerCase().includes(search.toLowerCase()) ||
-          (cleanDigits.length >= 4 && c.phone.replace(/\D/g, '').includes(cleanDigits))
+          (c.phone || '').toLowerCase().includes(search.toLowerCase()) ||
+          (cleanDigits.length >= 4 && (c.phone || '').replace(/\D/g, '').includes(cleanDigits))
       )
       .flatMap((c) => {
+        if (!c.phone) return [];
         const digits = c.phone.replace(/\D/g, '');
         const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
         return [c.phone, ...(last10 ? [last10] : [])];

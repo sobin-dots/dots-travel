@@ -47,6 +47,7 @@ export function ConsoleSidebar() {
       badge: calls.filter((c) => c.status === 'in-progress').length || undefined,
     },
     { href: '/console/leads', label: 'Leads & Itineraries', icon: Compass, count: leadsList.length },
+    { href: '/console/enquiries', label: 'Enquiry Inbox', icon: BookUser },
     { href: '/console/suppliers', label: 'Suppliers', icon: Building2, count: suppliersList.length },
     { href: '/console/contacts', label: 'Contacts', icon: BookUser, count: contactsList.length },
     { href: '/console/users', label: 'Staff Team', icon: Users, count: staffList.length },
@@ -59,6 +60,7 @@ export function ConsoleSidebar() {
       subItems: [
         { href: '/console/settings', label: 'Platform & BYOK', exact: true },
         { href: '/console/settings/itinerary-rules', label: 'Itinerary Rules', icon: Sparkles },
+        { href: '/console/settings/lead-intake', label: 'Lead Intake', icon: BookUser },
       ],
     },
     { href: '/console/audit', label: 'Audit Log', icon: Shield },

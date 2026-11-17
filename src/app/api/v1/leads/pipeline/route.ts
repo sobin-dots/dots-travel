@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
+import { leadScope } from '@/lib/lead-access';
 
 export const runtime = 'nodejs';
 
@@ -12,7 +13,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const leads = await db.lead.findMany({
-      where: { organizationId: auth!.organizationId },
+      where: leadScope(auth!),
       include: {
         contact: true,
         supplier: true,

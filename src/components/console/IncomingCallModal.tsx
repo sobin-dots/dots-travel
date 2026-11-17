@@ -18,7 +18,7 @@ export function IncomingCallModal() {
   const callerPhoneClean = (incomingCall.callerId || '').replace(/\D/g, '');
   const matchedContact = contactsList.find((c) => {
     if (!c.phone) return false;
-    const cClean = c.phone.replace(/\D/g, '');
+    const cClean = (c.phone || '').replace(/\D/g, '');
     return c.phone === incomingCall.callerId || (callerPhoneClean && cClean === callerPhoneClean);
   });
 

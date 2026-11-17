@@ -7,6 +7,7 @@ import { useConsole } from '@/context/ConsoleContext';
 export default function ContactsPage() {
   const {
     contactsList,
+    currentOrg,
     setShowContactModal,
     setShowBulkContactsModal,
     setCallDestination,
@@ -79,6 +80,8 @@ export default function ContactsPage() {
                     <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
                       <button
                         type="button"
+                        disabled={!contact.phone}
+                        title={contact.phone ? 'Call contact' : 'No phone number supplied'}
                         onClick={() => {
                           setCallDestination(contact.phone);
                           if (!callForwardTo) {
@@ -95,7 +98,7 @@ export default function ContactsPage() {
                       </button>
                       <button
                         type="button"
-                        disabled={deletingContactId === contact.id}
+                        disabled={deletingContactId === contact.id || !['owner', 'admin'].includes(currentOrg?.role)}
                         onClick={() => handleDeleteContact(contact.id)}
                         className="text-xs bg-zinc-800 hover:bg-rose-950 disabled:opacity-50 text-zinc-400 hover:text-rose-400 px-2 py-1 rounded border border-zinc-700 transition inline-flex items-center gap-1"
                         title="Delete Contact"
