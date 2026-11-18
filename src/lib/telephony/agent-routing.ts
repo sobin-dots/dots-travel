@@ -87,34 +87,48 @@ export async function releaseCallAgentInTransaction(tx: Prisma.TransactionClient
   if (!another) await tx.membership.updateMany({ where: { organizationId: call.organizationId, userId: call.assignedToId }, data: { voiceBusy: false } });
 }
 
+function isRetryableLockError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = (error as { code?: string } | null)?.code;
+  return code === 'P2034' || /deadlock detected|40P01|40001/i.test(message);
+}
+
 export async function reserveInboundCall(input: { organizationId: string; callUuid: string; from: string; to: string; phoneNumberId?: string; forwarded?: boolean }) {
-  return db.$transaction(async tx => {
-    await lockAgency(tx, input.organizationId);
-    const existing = await tx.call.findUnique({ where: { plivoCallUuid: input.callUuid } });
-    if (existing) {
-      if (existing.organizationId !== input.organizationId) throw new Error('Call organization mismatch');
-      return { call: existing, sipUri: callRoutingState(existing.requestedParams).routedSip };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await db.$transaction(async tx => {
+        await lockAgency(tx, input.organizationId);
+        const existing = await tx.call.findUnique({ where: { plivoCallUuid: input.callUuid } });
+        if (existing) {
+          if (existing.organizationId !== input.organizationId) throw new Error('Call organization mismatch');
+          return { call: existing, sipUri: callRoutingState(existing.requestedParams).routedSip };
+        }
+        const responsibleUserId = input.forwarded ? null : await responsibleSalesperson(tx, input.organizationId, input.from);
+        const eligible = availableAgentWhere(input.organizationId);
+        // Opting out of NEW lead rotation does not remove responsibility for existing contacts.
+        const owner = responsibleUserId ? await tx.membership.findFirst({ where: { ...eligible, userId: responsibleUserId } }) : null;
+        const agent = input.forwarded
+          ? null
+          : owner || (await pickNextCallAgent(tx, input.organizationId, responsibleUserId ? [responsibleUserId] : []));
+        const sipUri = await reserveAgent(tx, input.organizationId, agent);
+        const responsibleMember = responsibleUserId && !owner ? await tx.membership.findFirst({ where: { organizationId: input.organizationId, userId: responsibleUserId }, include: { user: { select: { status: true } } } }) : null;
+        const ownerUnavailableReason = responsibleUserId && !owner ? phoneUnavailableReason(responsibleMember) : null;
+        let routingReason = input.forwarded ? 'Number forwarding is configured' : owner ? 'Ringing the assigned enquiry owner' : sipUri ? 'Ringing an available team member in rotation' : 'No eligible staff browser was available';
+        if (ownerUnavailableReason) routingReason += `. Assigned owner: ${ownerUnavailableReason}`;
+        if (!agent && !input.forwarded) routingReason += '. Check staff availability, browser phone readiness and active calls';
+        const attemptedUserIds = [...new Set([responsibleUserId, agent?.userId].filter((id): id is string => !!id))];
+        const call = await tx.call.create({ data: { organizationId: input.organizationId, phoneNumberId: input.phoneNumberId, plivoCallUuid: input.callUuid,
+          from: input.from, to: input.to, direction: 'inbound', assignedToId: sipUri ? agent?.userId : null, status: sipUri || input.forwarded ? 'ringing' : 'missed',
+          agentOutcome: sipUri || input.forwarded ? 'ringing' : 'missed', requestedParams: { routedSip: sipUri, responsibleUserId, attemptedUserIds, dialAttempt: 0, routingReason, initialRoutingReason: routingReason,
+            route: input.forwarded ? 'forwarded' : owner ? 'assigned_contact' : sipUri ? 'round_robin' : 'no_available_agent' }, recordingEnabled: true, transcriptionEnabled: true } });
+        return { call, sipUri };
+      }, { timeout: 15_000 });
+    } catch (error) {
+      if (attempt === 0 && isRetryableLockError(error)) continue;
+      throw error;
     }
-    const responsibleUserId = input.forwarded ? null : await responsibleSalesperson(tx, input.organizationId, input.from);
-    const eligible = availableAgentWhere(input.organizationId);
-    // Opting out of NEW lead rotation does not remove responsibility for existing contacts.
-    const owner = responsibleUserId ? await tx.membership.findFirst({ where: { ...eligible, userId: responsibleUserId } }) : null;
-    const agent = input.forwarded
-      ? null
-      : owner || (await pickNextCallAgent(tx, input.organizationId, responsibleUserId ? [responsibleUserId] : []));
-    const sipUri = await reserveAgent(tx, input.organizationId, agent);
-    const responsibleMember = responsibleUserId && !owner ? await tx.membership.findFirst({ where: { organizationId: input.organizationId, userId: responsibleUserId }, include: { user: { select: { status: true } } } }) : null;
-    const ownerUnavailableReason = responsibleUserId && !owner ? phoneUnavailableReason(responsibleMember) : null;
-    let routingReason = input.forwarded ? 'Number forwarding is configured' : owner ? 'Ringing the assigned enquiry owner' : sipUri ? 'Ringing an available team member in rotation' : 'No eligible staff browser was available';
-    if (ownerUnavailableReason) routingReason += `. Assigned owner: ${ownerUnavailableReason}`;
-    if (!agent && !input.forwarded) routingReason += '. Check staff availability, browser phone readiness and active calls';
-    const attemptedUserIds = [...new Set([responsibleUserId, agent?.userId].filter((id): id is string => !!id))];
-    const call = await tx.call.create({ data: { organizationId: input.organizationId, phoneNumberId: input.phoneNumberId, plivoCallUuid: input.callUuid,
-      from: input.from, to: input.to, direction: 'inbound', assignedToId: sipUri ? agent?.userId : null, status: sipUri || input.forwarded ? 'ringing' : 'missed',
-      agentOutcome: sipUri || input.forwarded ? 'ringing' : 'missed', requestedParams: { routedSip: sipUri, responsibleUserId, attemptedUserIds, dialAttempt: 0, routingReason, initialRoutingReason: routingReason,
-        route: input.forwarded ? 'forwarded' : owner ? 'assigned_contact' : sipUri ? 'round_robin' : 'no_available_agent' }, recordingEnabled: true, transcriptionEnabled: true } });
-    return { call, sipUri };
-  }, { timeout: 15_000 });
+  }
+  throw new Error('Failed to reserve inbound call');
 }
 
 // The organization lock serializes retries with new calls and presence updates.
@@ -162,7 +176,7 @@ export async function recordInboundAnswer(input: { organizationId: string; callU
       endedAt, ...(input.durationSeconds !== undefined ? { durationSeconds: input.durationSeconds } : {}) } });
     // Also release calls already marked completed by a status callback.
     if (endedAt) await releaseCallAgentInTransaction(tx, call);
-  });
+  }, { timeout: 15_000 });
 }
 
 export function inboundFinalStatus(call: { direction: string; agentOutcome?: string | null; agentAnsweredAt?: Date | null; status: string }) {
@@ -172,5 +186,5 @@ export function inboundFinalStatus(call: { direction: string; agentOutcome?: str
 }
 export async function releaseCallAgent(call: { organizationId: string; assignedToId: string | null; id: string }) {
   if (!call.assignedToId) return;
-  await db.$transaction(async tx => { await lockAgency(tx, call.organizationId); await releaseCallAgentInTransaction(tx, call); });
+  await db.$transaction(async tx => { await lockAgency(tx, call.organizationId); await releaseCallAgentInTransaction(tx, call); }, { timeout: 15_000 });
 }

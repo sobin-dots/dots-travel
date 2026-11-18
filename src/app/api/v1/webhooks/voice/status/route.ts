@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
           webhookEventId,
         },
       });
-    });
+    }, { timeout: 15_000 });
 
     if (webhookEventId) {
       await db.webhookEvent.update({

@@ -3,7 +3,11 @@ import { db } from '@/lib/db';
 import { processIncomingWebhook } from '@/lib/webhook-helper';
 import { inboundFinalStatus, releaseCallAgentInTransaction } from '@/lib/telephony/agent-routing';
 import { lockAgency } from '@/lib/lead-intake/service';
-import { inferHangupTerminalStatus, recoverMissingHangupCallRecord } from '@/lib/telephony/plivo-call-sync';
+import {
+  createRecoveredHangupCallInTx,
+  inferHangupTerminalStatus,
+  resolveHangupOrganizationId,
+} from '@/lib/telephony/plivo-call-sync';
 
 export const runtime = 'nodejs';
 
@@ -47,16 +51,31 @@ export async function POST(req: NextRequest) {
 
   try {
     const orgId = req.nextUrl.searchParams.get('orgId');
-    let call = await db.call.findUnique({ where: { plivoCallUuid: callUuid }, select: { organizationId: true } });
-    if (!call) {
-      call = await recoverMissingHangupCallRecord({ callUuid, orgIdParam: orgId, params });
+    const existingLookup = await db.call.findUnique({
+      where: { plivoCallUuid: callUuid },
+      select: { organizationId: true },
+    });
+    const resolvedOrgId =
+      existingLookup?.organizationId ||
+      (await resolveHangupOrganizationId({ orgIdParam: orgId, params }));
+    if (!resolvedOrgId || (orgId && resolvedOrgId !== orgId)) {
+      return NextResponse.json({ status: 'ignored_unknown_call' });
     }
-    if (!call || (orgId && call.organizationId !== orgId)) return NextResponse.json({ status: 'ignored_unknown_call' });
-    const resolvedOrgId = call.organizationId;
+    let unknownRecovered = false;
     await db.$transaction(async tx => {
       await lockAgency(tx, resolvedOrgId);
-      const existingCall = await tx.call.findUnique({ where: { plivoCallUuid: callUuid } });
-      if (!existingCall) return null;
+      let existingCall = await tx.call.findUnique({ where: { plivoCallUuid: callUuid } });
+      if (!existingCall) {
+        existingCall = await createRecoveredHangupCallInTx(tx, {
+          organizationId: resolvedOrgId,
+          callUuid,
+          params,
+        });
+      }
+      if (!existingCall || (orgId && existingCall.organizationId !== orgId)) {
+        unknownRecovered = true;
+        return null;
+      }
       const reqParams = existingCall.requestedParams as Record<string, unknown> | null;
       const isRecoveredFromHangup = Boolean(reqParams?.recoveredFromHangup);
       const finalStatus = isRecoveredFromHangup
@@ -96,7 +115,10 @@ export async function POST(req: NextRequest) {
         },
       });
       await releaseCallAgentInTransaction(tx, existingCall);
-    });
+    }, { timeout: 15_000 });
+    if (unknownRecovered) {
+      return NextResponse.json({ status: 'ignored_unknown_call' });
+    }
 
     if (webhookEventId) {
       await db.webhookEvent.update({
