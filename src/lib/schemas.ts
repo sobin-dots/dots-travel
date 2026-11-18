@@ -84,13 +84,7 @@ export const CreateUserRequestSchema = z.object({
   role: z.enum(['admin', 'operator', 'sales', 'viewer']).default('operator'),
 });
 
-export const CreateContactRequestSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters').max(100),
-  phone: z.string().regex(/^\+[1-9]\d{1,14}$/, 'Phone must be a valid E.164 number (e.g. +14155550199)'),
-  email: z.string().email('Invalid email address').optional().or(z.literal('')),
-  company: z.string().max(100).optional().or(z.literal('')),
-  notes: z.string().max(500).optional().or(z.literal('')),
-});
+export { CreateContactSchema as CreateContactRequestSchema } from './contact-fields';
 
 export const CreateItineraryRuleSchema = z.object({
   title: z.string().min(2, 'Title must be at least 2 characters').max(150),

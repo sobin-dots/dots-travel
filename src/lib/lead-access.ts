@@ -7,3 +7,7 @@ export function managesLeads(auth: Pick<AuthContext, 'role'>) {
 export function leadScope(auth: AuthContext) {
   return { organizationId: auth.organizationId, ...(!managesLeads(auth) ? { assignedToId: auth.userId } : {}) };
 }
+
+export function contactScope(auth: AuthContext) {
+  return { organizationId: auth.organizationId, ...(!managesLeads(auth) ? { leads: { some: leadScope(auth) } } : {}) };
+}

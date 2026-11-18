@@ -61,6 +61,7 @@ model Organization {
   visaRequirements      VisaRequirement[]
   automationLogs        AutomationLog[]
   itineraryRules        ItineraryRule[]
+  itineraryOptions      ItineraryOption[]
   leadConnections       LeadConnection[]
   leadSubmissions       LeadSubmission[]
   firstContactMinutes   Int @default(30)
@@ -98,6 +99,10 @@ model Membership {
   receivesLeads  Boolean  @default(false)
   availableForLeads Boolean @default(true)
   lastLeadAssignedAt DateTime?
+  voiceEndpoint Json?
+  voicePresenceAt DateTime?
+  voiceBusy Boolean @default(false)
+  lastCallAssignedAt DateTime?
   createdAt      DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -252,6 +257,9 @@ model Call {
   id                   String    @id @default(uuid())
   organizationId       String
   phoneNumberId        String?
+  assignedToId         String?
+  agentOutcome         String?
+  agentAnsweredAt      DateTime?
   // provider truth
   plivoCallUuid        String    @unique
   parentCallUuid       String?
@@ -482,6 +490,11 @@ model Contact {
   email          String?
   company        String?
   notes          String?
+  preferredTravelMonth String?
+  tourType       String?
+  numberOfChildren Int?
+  specialRequirements String? @db.Text
+  city           String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -556,12 +569,33 @@ model Lead {
   paymentMilestones    PaymentMilestone[]
   visaRequirements     VisaRequirement[]
   automationLogs       AutomationLog[]
+  itineraryOptions     ItineraryOption[]
 
   @@index([organizationId, status])
   @@index([organizationId, stage])
   @@index([organizationId, assignedToId, createdAt])
   @@index([organizationId, source, formId])
   @@map("leads")
+}
+
+model ItineraryOption {
+  id String @id @default(uuid())
+  organizationId String
+  leadId String
+  label String
+  budget Decimal? @db.Decimal(12, 2)
+  currency String @default("INR")
+  itinerary String @db.Text
+  durationDays Int
+  departureDate DateTime?
+  destination String
+  revisionNotes String? @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  @@index([organizationId, leadId])
+  @@map("itinerary_options")
 }
 
 model LeadConnection {

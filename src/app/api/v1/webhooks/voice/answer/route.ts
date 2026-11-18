@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { processIncomingWebhook } from '@/lib/webhook-helper';
 import { PlivoXmlBuilder } from '@/lib/telephony/xml/builder';
+import { callRoutingState, dialAttemptUrl, reserveInboundCall } from '@/lib/telephony/agent-routing';
 import {
   resolveTenantPlivoIntegration,
   buildOrgWebhookUrls,
@@ -76,11 +77,8 @@ export async function handleAnswer(req: NextRequest) {
     }
   }
 
-  if (!resolvedOrg) {
-    resolvedOrg = await db.organization.findFirst();
-  }
-
   const effectiveOrgId = tenantPlivo?.organizationId || resolvedOrg?.id;
+  if (!effectiveOrgId) return NextResponse.json({ error: 'No organization matched this call' }, { status: 404 });
   const plivoCreds = tenantPlivo?.integration?.credentials || {};
   const plivoMeta = tenantPlivo?.integration?.metadata || {};
 
@@ -106,6 +104,8 @@ export async function handleAnswer(req: NextRequest) {
     `${effectiveBaseUrl}/api/v1/webhooks/voice/fallback${effectiveOrgId ? `?orgId=${effectiveOrgId}` : ''}`;
 
   const builder = new PlivoXmlBuilder();
+  let inboundCallHandled = false;
+  const dialCallbackUrl = `${effectiveBaseUrl}/api/v1/webhooks/voice/dial?orgId=${effectiveOrgId}`;
 
   const isSipEndpointCall = Boolean(
     rawFrom.startsWith('sip:') ||
@@ -193,6 +193,12 @@ export async function handleAnswer(req: NextRequest) {
   } else {
     // Inbound call from customer/client to the tenant's Plivo connected number
     const callerPhone = params.From || params.from || resolvedCallerId;
+    if (!callUuid) return NextResponse.json({ error: 'Call UUID required' }, { status: 400 });
+    const reservation = await reserveInboundCall({ organizationId: effectiveOrgId, callUuid, from: callerPhone,
+      to: destinationNumber || phoneRecord?.e164 || 'Unknown', phoneNumberId: phoneRecord?.id,
+      forwarded: !!(forwardTo || phoneRecord?.forwardTo) });
+    if (reservation.call.endedAt) return new NextResponse(new PlivoXmlBuilder().hangup().toXml(), { headers: { 'content-type': 'application/xml; charset=utf-8' } });
+    inboundCallHandled = true;
 
     if (forwardTo || phoneRecord?.forwardTo) {
       const targetForward = forwardTo || phoneRecord.forwardTo;
@@ -213,39 +219,15 @@ export async function handleAnswer(req: NextRequest) {
           action: dialActionUrl,
           method: 'POST',
           redirect: true,
+          callbackUrl: dialCallbackUrl,
+          callbackMethod: 'POST',
         });
     } else {
-      // Resolve tenant's WebRTC SIP endpoint from DB-configured Plivo credentials (or live Plivo API if not yet cached in DB)
-      let sipEndpoint: string | null =
-        plivoCreds.sipEndpoint ||
-        (plivoCreds.endpointUsername ? `sip:${plivoCreds.endpointUsername}@phone.plivo.com` : null);
-
-      if (!sipEndpoint && plivoCreds.authId && plivoCreds.authToken) {
-        try {
-          const plivoModule = await import('plivo');
-          const client = new (plivoModule as any).Client(plivoCreds.authId, plivoCreds.authToken);
-          const eps = await client.endpoints.list();
-          if (Array.isArray(eps) && eps.length > 0) {
-            const matchedEp =
-              eps.find((e: any) => plivoCreds.endpointUsername && e.username === plivoCreds.endpointUsername) ||
-              eps.find((e: any) => String(e.sipRegistered).toLowerCase() === 'true' || e.sipRegistered === true) ||
-              eps[0];
-
-            if (matchedEp?.username) {
-              sipEndpoint = matchedEp.sipUri || `sip:${matchedEp.username}@phone.plivo.com`;
-            }
-          }
-        } catch (err) {
-          console.warn('[VoiceAnswer] Failed to query tenant Plivo endpoint:', err);
-        }
-      }
+      const sipEndpoint = reservation.sipUri;
 
       if (sipEndpoint) {
-        // Always attempt to ring the tenant's WebRTC SIP endpoint first.
-        // Plivo's SIP registrar handles real-time availability:
-        // - If the user is logged into the Web Phone, it rings in the app immediately.
-        // - If the user is logged out, busy, or declines/ignores the call, Plivo immediately invokes
-        //   dialActionUrl (/api/v1/webhooks/voice/fallback) which connects the caller to the AI voicemail.
+        // Ring the responsible salesperson first. The Dial action retries available
+        // round-robin backups only after this attempt fails.
         builder
           .record({
             action: recordActionUrl,
@@ -260,9 +242,11 @@ export async function handleAnswer(req: NextRequest) {
             callerId: callerPhone,
             timeLimit: 3600,
             timeout: 25,
-            action: dialActionUrl,
+            action: dialAttemptUrl(dialActionUrl, callRoutingState(reservation.call.requestedParams).dialAttempt),
             method: 'POST',
             redirect: true,
+            callbackUrl: dialAttemptUrl(dialCallbackUrl, callRoutingState(reservation.call.requestedParams).dialAttempt),
+            callbackMethod: 'POST',
           });
       } else {
         // No WebRTC SIP endpoint configured -> connect to AI agent voicemail
@@ -292,6 +276,11 @@ export async function handleAnswer(req: NextRequest) {
       status: 200,
       headers: { 'content-type': 'application/xml; charset=utf-8' },
     });
+  }
+
+  if (inboundCallHandled) {
+    if (webhookEventId) await db.webhookEvent.update({ where: { id: webhookEventId }, data: { status: 'processed', processedAt: new Date() } });
+    return new NextResponse(xmlResponse, { headers: { 'content-type': 'application/xml; charset=utf-8' } });
   }
 
   // Update Call state in DB

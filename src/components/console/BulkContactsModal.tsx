@@ -122,6 +122,11 @@ export function BulkContactsModal() {
           email: r.email,
           company: r.company,
           notes: r.notes,
+          preferredTravelMonth: r.preferredTravelMonth,
+          tourType: r.tourType,
+          numberOfChildren: r.numberOfChildren,
+          specialRequirements: r.specialRequirements,
+          city: r.city,
         })),
       };
 
@@ -304,7 +309,7 @@ export function BulkContactsModal() {
                       Drop your contacts CSV file here, or <span className="text-emerald-400 underline">browse</span>
                     </p>
                     <p className="text-[11px] text-zinc-500">
-                      Supports columns: Name, Phone (or Mobile), Email, Company, Notes
+                      Supports full name, phone (or mobile), email, preferred month of travel (YYYY-MM), tour type, number of children, special requirements, city, company and notes.
                     </p>
                   </div>
                 )}

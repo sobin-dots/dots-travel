@@ -314,6 +314,7 @@ export default function CallsPage() {
               <option value="ringing">Ringing</option>
               <option value="queued">Queued</option>
               <option value="no-answer">No Answer</option>
+              <option value="missed">Missed</option>
               <option value="busy">Busy</option>
               <option value="failed">Failed</option>
             </select>
