@@ -22,6 +22,7 @@ export interface DialElement {
   record?: boolean | string;
   callbackUrl?: string;
   callbackMethod?: 'GET' | 'POST';
+  dialMusic?: string;
 }
 
 export interface RecordElement {
@@ -106,6 +107,7 @@ export class PlivoXmlBuilder {
       record?: boolean | string;
       callbackUrl?: string;
       callbackMethod?: 'GET' | 'POST';
+      dialMusic?: string;
     }
   ): this {
     this.elements.push({
@@ -120,6 +122,7 @@ export class PlivoXmlBuilder {
       record: options?.record,
       callbackUrl: options?.callbackUrl,
       callbackMethod: options?.callbackMethod,
+      dialMusic: options?.dialMusic,
     });
     return this;
   }
@@ -187,6 +190,7 @@ export class PlivoXmlBuilder {
           if (el.record !== undefined) attrs += ` record="${escapeXml(String(el.record))}"`;
           if (el.callbackUrl) attrs += ` callbackUrl="${escapeXml(el.callbackUrl)}"`;
           if (el.callbackMethod) attrs += ` callbackMethod="${el.callbackMethod}"`;
+          if (el.dialMusic) attrs += ` dialMusic="${escapeXml(el.dialMusic)}"`;
           parts.push(`  <Dial${attrs}>`);
           if (el.number.startsWith('sip:') || el.number.includes('@')) {
             parts.push(`    <User>${escapeXml(el.number)}</User>`);

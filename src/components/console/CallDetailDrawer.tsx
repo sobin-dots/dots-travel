@@ -10,8 +10,10 @@ import {
   Loader2,
   AlertCircle,
   Clock,
+  PhoneCall,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
+import { getCallbackPhone, isMissedOrUnansweredCall } from '@/lib/telephony/call-callback';
 
 export function CallDetailDrawer() {
   const {
@@ -30,6 +32,8 @@ export function CallDetailDrawer() {
     generatingItineraryCallId,
     openItineraryIntakeModal,
     integrationsSummary,
+    currentOrg,
+    openCallbackModal,
   } = useConsole();
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -38,6 +42,10 @@ export function CallDetailDrawer() {
   const configuredTranscriptionModel = openaiInteg?.metadata?.model || 'gpt-4o-transcribe';
 
   if (!selectedCallDetail) return null;
+
+  const callbackPhone = getCallbackPhone(selectedCallDetail);
+  const isMissedCall = isMissedOrUnansweredCall(selectedCallDetail);
+  const canCallBack = Boolean(currentOrg && currentOrg.role !== 'viewer' && callbackPhone && selectedCallDetail.status !== 'in-progress');
 
   // Select the single primary recording (preferring non-zero duration / transcribed recording) so only one audio player is shown
   const primaryRecording = (() => {
@@ -145,6 +153,11 @@ export function CallDetailDrawer() {
           <div>
             <span className="text-zinc-500 block text-[10px]">Hangup Explanation</span>
             <span className="text-amber-400 font-medium">{selectedCallDetail.hangupExplanation}</span>
+            {(selectedCallDetail.hangupCauseName || selectedCallDetail.hangupCauseCode) && (
+              <span className="block text-[10px] font-mono text-zinc-400 mt-0.5">
+                {[selectedCallDetail.hangupCauseName, selectedCallDetail.hangupCauseCode].filter(Boolean).join(' · ')}
+              </span>
+            )}
           </div>
           {selectedCallDetail.direction === 'inbound' && <div className="space-y-2 border-t border-zinc-800 pt-3">
             <div><span className="text-zinc-500 block text-[10px]">Browser call routing</span><span className="text-zinc-200">{
@@ -155,6 +168,25 @@ export function CallDetailDrawer() {
             {selectedCallDetail.requestedParams?.browserReservationExpiredAt && <p className="text-amber-300">An unanswered browser reservation expired and was released after the browser reported ready.</p>}
           </div>}
         </div>
+
+        {canCallBack && (
+          <button
+            type="button"
+            onClick={() => {
+              const target = selectedCallDetail;
+              setSelectedCallDetail(null);
+              openCallbackModal(target);
+            }}
+            className={`w-full py-2.5 px-4 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 border transition cursor-pointer ${
+              isMissedCall
+                ? 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border-emerald-500/40'
+                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border-zinc-700'
+            }`}
+          >
+            <PhoneCall className="w-3.5 h-3.5" />
+            <span>{isMissedCall ? `Call Back Missed Caller (${callbackPhone})` : `Call Back (${callbackPhone})`}</span>
+          </button>
+        )}
 
         {/* Live Controls if Call is in-progress */}
         {selectedCallDetail.status === 'in-progress' && (

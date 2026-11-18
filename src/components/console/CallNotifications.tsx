@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useConsole } from '@/context/ConsoleContext';
 
 export function CallNotifications() {
-  const { incomingCall, webPhoneStatus, authFetch, bearerToken, currentOrg } = useConsole();
+  const { incomingCall, webPhoneStatus, webPhoneError, initWebPhone, authFetch, bearerToken, currentOrg } = useConsole();
   const [permission, setPermission] = useState<string>('default');
   const [error, setError] = useState('');
   const [readiness, setReadiness] = useState<{ canReceiveAssignedCalls: boolean; canReceiveNewCalls: boolean; reason: string; busy: boolean } | null>(null);
@@ -54,7 +54,17 @@ export function CallNotifications() {
     : presenceError ? 'Incoming calls not confirmed' : !readiness ? 'Checking incoming calls…'
     : readiness.busy ? 'Incoming call reserved' : !readiness.canReceiveAssignedCalls ? 'Unavailable for incoming calls'
     : readiness.canReceiveNewCalls ? 'Ready for incoming calls' : 'Ready for assigned enquiries only';
-  return <div className="flex items-center gap-2 text-[11px] text-zinc-400"><span title={presenceError || readiness?.reason} role="status" className={`hidden lg:inline ${incomingBlocked ? 'text-amber-300' : ''}`}>{statusText}</span>
+  return <div className="flex items-center gap-2 text-[11px] text-zinc-400"><span title={webPhoneError || presenceError || readiness?.reason} role="status" className={`hidden lg:inline ${incomingBlocked || webPhoneStatus === 'error' ? 'text-amber-300' : ''}`}>{statusText}</span>
+    {webPhoneStatus === 'error' && (
+      <button
+        type="button"
+        onClick={() => void initWebPhone(true)}
+        title={webPhoneError || 'Reconnect browser phone'}
+        className="rounded border border-amber-500/40 bg-amber-950/40 px-2 py-0.5 text-amber-300 hover:bg-amber-900/50 cursor-pointer"
+      >
+        Retry phone
+      </button>
+    )}
     {phoneReady && presenceError && <span className="max-w-64 text-amber-300 lg:hidden" role="alert">{presenceError}</span>}
     {phoneReady && readiness && !readiness.canReceiveAssignedCalls && !readiness.busy && <span className="max-w-64 text-amber-300">{readiness.reason}</span>}
     {permission !== 'granted' && permission !== 'unsupported' && <button type="button" className="rounded border border-zinc-700 px-2 py-1 text-indigo-300" title="Allow desktop call alerts while the application is open in the background" onClick={async () => {

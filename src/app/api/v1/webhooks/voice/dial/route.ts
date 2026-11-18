@@ -4,6 +4,10 @@ import { processIncomingWebhook } from '@/lib/webhook-helper';
 import { recordInboundAnswer } from '@/lib/telephony/agent-routing';
 
 export const runtime = 'nodejs';
+export async function GET(req: NextRequest) {
+  return POST(req);
+}
+
 export async function POST(req: NextRequest) {
   const attempt = Number(req.nextUrl.searchParams.get('attempt') || '0');
   if (!Number.isSafeInteger(attempt) || attempt < 0) return NextResponse.json({ error: 'Invalid call attempt' }, { status: 400 });

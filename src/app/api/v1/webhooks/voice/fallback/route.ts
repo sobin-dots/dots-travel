@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { processIncomingWebhook } from '@/lib/webhook-helper';
+import { processIncomingWebhook, resolveRequestBaseUrl } from '@/lib/webhook-helper';
 import { PlivoXmlBuilder } from '@/lib/telephony/xml/builder';
 import {
   resolveTenantPlivoIntegration,
-  buildOrgWebhookUrls,
+  resolveOrgWebhookUrls,
 } from '@/lib/integrations/credentials-manager';
 import { handleAnswer } from '../answer/route';
 import { callRoutingState, dialAttemptUrl, recordInboundAnswer, retryInboundCall } from '@/lib/telephony/agent-routing';
@@ -62,24 +62,13 @@ async function handleFallbackOrDialAction(req: NextRequest) {
 
   const effectiveOrgId = tenantPlivo?.organizationId || queryOrgId;
   const plivoMeta = tenantPlivo?.integration?.metadata || {};
-  const requestBase = `${req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http')}://${
-    req.headers.get('x-forwarded-host') || req.headers.get('host') || urlObj.host
-  }`
-    .trim()
-    .replace(/\/+$/, '');
+  const requestBase = resolveRequestBaseUrl(req, urlObj.host);
 
-  const effectiveBaseUrl = (
-    (!requestBase.includes('localhost') ? requestBase : plivoMeta.webhookBaseUrl) ||
-    requestBase
-  )
-    .trim()
-    .replace(/\/+$/, '');
-
-  const orgWebhookUrls = effectiveOrgId
-    ? plivoMeta.webhookUrls && plivoMeta.webhookUrls.voiceRecord?.includes(effectiveOrgId)
-      ? plivoMeta.webhookUrls
-      : buildOrgWebhookUrls(effectiveBaseUrl, effectiveOrgId)
+  const resolved = effectiveOrgId
+    ? resolveOrgWebhookUrls(effectiveOrgId, requestBase, plivoMeta)
     : null;
+  const effectiveBaseUrl = resolved?.effectiveBaseUrl || requestBase.trim().replace(/\/+$/, '');
+  const orgWebhookUrls = resolved?.webhookUrls || null;
 
   const recordActionUrl =
     orgWebhookUrls?.voiceRecord ||
@@ -116,7 +105,7 @@ async function handleFallbackOrDialAction(req: NextRequest) {
     } else if (next.sipUri) {
       const nextAttempt = callRoutingState(next.call.requestedParams).dialAttempt;
       const actionUrl = orgWebhookUrls?.voiceFallback || `${effectiveBaseUrl}/api/v1/webhooks/voice/fallback?orgId=${effectiveOrgId}`;
-      builder.dial(next.sipUri, { callerId: next.call.from, timeLimit: 3600, timeout: 25,
+      builder.dial(next.sipUri, { callerId: next.call.from, timeLimit: 3600, timeout: 25, dialMusic: 'real',
         action: dialAttemptUrl(actionUrl, nextAttempt), method: 'POST', redirect: true,
         callbackUrl: dialAttemptUrl(`${effectiveBaseUrl}/api/v1/webhooks/voice/dial?orgId=${effectiveOrgId}`, nextAttempt), callbackMethod: 'POST' });
     } else {

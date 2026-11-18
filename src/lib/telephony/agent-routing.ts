@@ -14,6 +14,7 @@ export function callRoutingState(value: unknown) {
   return {
     ...data,
     routedSip: typeof data.routedSip === 'string' ? data.routedSip : null,
+    route: typeof data.route === 'string' ? data.route : null,
     responsibleUserId: typeof data.responsibleUserId === 'string' ? data.responsibleUserId : null,
     attemptedUserIds: Array.isArray(data.attemptedUserIds) ? data.attemptedUserIds.filter((id): id is string => typeof id === 'string') : [],
     dialAttempt: typeof data.dialAttempt === 'number' ? data.dialAttempt : 0,
@@ -53,6 +54,25 @@ async function responsibleSalesperson(tx: Prisma.TransactionClient, organization
   return lead?.assignedToId || null;
 }
 
+async function pickNextCallAgent(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  excludeUserIds: string[] = []
+) {
+  const baseWhere: Prisma.MembershipWhereInput = {
+    ...availableAgentWhere(organizationId),
+    ...(excludeUserIds.length ? { userId: { notIn: excludeUserIds } } : {}),
+  };
+  const orderBy: Prisma.MembershipOrderByWithRelationInput[] = [
+    { lastCallAssignedAt: { sort: 'asc', nulls: 'first' } },
+    { id: 'asc' },
+  ];
+  const enrolled = await tx.membership.findFirst({ where: { ...baseWhere, receivesLeads: true }, orderBy });
+  if (enrolled) return enrolled;
+  // All active available call-capable roles (including owner/admin) can pick up calls when enrolled staff are unavailable.
+  return tx.membership.findFirst({ where: baseWhere, orderBy });
+}
+
 async function reserveAgent(tx: Prisma.TransactionClient, organizationId: string, agent: Membership | null) {
   if (!agent?.voiceEndpoint) return null;
   const sipUri = decryptAgentEndpoint(agent.voiceEndpoint).sipUri;
@@ -79,16 +99,15 @@ export async function reserveInboundCall(input: { organizationId: string; callUu
     const eligible = availableAgentWhere(input.organizationId);
     // Opting out of NEW lead rotation does not remove responsibility for existing contacts.
     const owner = responsibleUserId ? await tx.membership.findFirst({ where: { ...eligible, userId: responsibleUserId } }) : null;
-    const agent = input.forwarded ? null : owner || await tx.membership.findFirst({ where: { ...eligible,
-      receivesLeads: true, ...(responsibleUserId ? { userId: { not: responsibleUserId } } : {}) },
-      orderBy: [{ lastCallAssignedAt: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }],
-    });
+    const agent = input.forwarded
+      ? null
+      : owner || (await pickNextCallAgent(tx, input.organizationId, responsibleUserId ? [responsibleUserId] : []));
     const sipUri = await reserveAgent(tx, input.organizationId, agent);
     const responsibleMember = responsibleUserId && !owner ? await tx.membership.findFirst({ where: { organizationId: input.organizationId, userId: responsibleUserId }, include: { user: { select: { status: true } } } }) : null;
     const ownerUnavailableReason = responsibleUserId && !owner ? phoneUnavailableReason(responsibleMember) : null;
-    let routingReason = input.forwarded ? 'Number forwarding is configured' : owner ? 'Ringing the assigned enquiry owner' : sipUri ? 'Ringing an available salesperson in rotation' : 'No eligible staff browser was available';
+    let routingReason = input.forwarded ? 'Number forwarding is configured' : owner ? 'Ringing the assigned enquiry owner' : sipUri ? 'Ringing an available team member in rotation' : 'No eligible staff browser was available';
     if (ownerUnavailableReason) routingReason += `. Assigned owner: ${ownerUnavailableReason}`;
-    if (!agent && !input.forwarded) routingReason += '. Check Sales rotation availability, Receives leads for backups, browser phone readiness and active calls';
+    if (!agent && !input.forwarded) routingReason += '. Check staff availability, browser phone readiness and active calls';
     const attemptedUserIds = [...new Set([responsibleUserId, agent?.userId].filter((id): id is string => !!id))];
     const call = await tx.call.create({ data: { organizationId: input.organizationId, phoneNumberId: input.phoneNumberId, plivoCallUuid: input.callUuid,
       from: input.from, to: input.to, direction: 'inbound', assignedToId: sipUri ? agent?.userId : null, status: sipUri || input.forwarded ? 'ringing' : 'missed',
@@ -113,12 +132,10 @@ export async function retryInboundCall(input: { organizationId: string; callUuid
       await releaseCallAgentInTransaction(tx, call);
       return { call, sipUri: null, hangup: true };
     }
-    if (!state.routedSip && call.agentOutcome !== 'ringing') return { call, sipUri: null, hangup: false };
+    if (state.route === 'forwarded' || (!state.routedSip && call.agentOutcome !== 'ringing')) return { call, sipUri: null, hangup: false };
     const attempted = [...new Set([...state.attemptedUserIds, ...(call.assignedToId ? [call.assignedToId] : [])])];
-    // Preserve unassigned-contact and explicit-forwarding behavior. Only known
-    // contact ownership adds the salesperson-first, then round-robin retry chain.
-    const next = state.responsibleUserId ? await tx.membership.findFirst({ where: { ...availableAgentWhere(input.organizationId), receivesLeads: true, userId: { notIn: attempted } },
-      orderBy: [{ lastCallAssignedAt: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }] }) : null;
+    // Retry next available active member across all call-capable roles in round-robin order for both assigned and unassigned calls.
+    const next = await pickNextCallAgent(tx, input.organizationId, attempted);
     const sipUri = await reserveAgent(tx, input.organizationId, next);
     const updated = await tx.call.update({ where: { id: call.id }, data: {
       ...(sipUri ? { assignedToId: next!.userId } : {}),

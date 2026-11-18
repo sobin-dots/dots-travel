@@ -6,6 +6,10 @@ import { inboundFinalStatus, releaseCallAgentInTransaction } from '@/lib/telepho
 
 export const runtime = 'nodejs';
 
+export async function GET(req: NextRequest) {
+  return POST(req);
+}
+
 export async function POST(req: NextRequest) {
   const result = await processIncomingWebhook(req, 'voice', (p) => {
     return `${p.CallUUID || p.call_uuid || 'unknown'}_${p.CallStatus || p.call_status || 'status'}`;

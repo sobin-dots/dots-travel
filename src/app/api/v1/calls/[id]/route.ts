@@ -2,16 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
-import { getTenantIntegration } from '@/lib/integrations/credentials-manager';
+import { getOrgPlivoClient, syncSingleCallStatusWithPlivo } from '@/lib/telephony/plivo-call-sync';
 import { transcribeAudioFromUrl } from '@/lib/openai-transcribe';
-
-import * as plivo from 'plivo';
 
 export const runtime = 'nodejs';
 
 const inFlightCallSyncs = new Map<string, Promise<void>>();
 
 interface CallSyncState {
+  callStatusChecked?: boolean;
   recordingChecked: boolean;
   recordingError?: string;
   transcriptionAttempted: boolean;
@@ -21,15 +20,32 @@ interface CallSyncState {
 
 const callSyncStateByCallId = new Map<string, CallSyncState>();
 
-function getHangupExplanation(code?: number | null): string {
-  if (!code) return 'Call ended or not yet completed';
-  if (code >= 4000 && code < 4100) return 'Normal Call Completion: The call was cleanly terminated by caller or callee.';
-  if (code === 5030) return 'Concurrency Limit Exceeded: Account reached maximum concurrent call channels.';
-  if (code === 8011) return 'Invalid Answer XML: The answer URL returned invalid or unparseable Plivo XML.';
-  if (code >= 1000 && code < 2000) return 'Account / Billing: Insufficient credits or account permissions.';
-  if (code >= 2000 && code < 3000) return 'Invalid Destination: The destination number is unallocated, invalid, or barred.';
-  if (code >= 3000 && code < 4000) return 'User Busy / No Answer: The recipient declined or did not answer within timeout.';
-  return `Plivo Hangup Code ${code}`;
+function getHangupExplanation(code?: number | null, causeName?: string | null): string {
+  const causeLabel = causeName ? ` (${causeName})` : '';
+  if (code === 4590 || code === 2070 || /media_anchoring|domestic_anchored/i.test(causeName || '')) {
+    return `India Media Anchoring / Region Violation${causeLabel}: Verify your Plivo organization uses the India Data Region and approved India KYC.`;
+  }
+  if ((code && code >= 1000 && code < 2000) || /credit|balance/i.test(causeName || '')) {
+    return `Account / Billing${causeLabel}: Insufficient Plivo credits or account permissions.`;
+  }
+  if (code === 7011) {
+    return `Webhook Unreachable${causeLabel}: Plivo could not reach your Answer or Fallback webhook URL.`;
+  }
+  if (code === 8011) {
+    return `Invalid Answer XML${causeLabel}: The answer URL returned invalid or unparseable Plivo XML.`;
+  }
+  if (code === 3030) {
+    return `Invalid Caller ID${causeLabel}: Plivo rejected the Caller ID used for this call.`;
+  }
+  if (/USER_NOT_REGISTERED|NO_USER_RESPONSE|CALL_REJECTED|UNALLOCATED_NUMBER/i.test(causeName || '')) {
+    return `User Busy / No Answer${causeLabel}: The browser phone was unregistered, offline, declined, or unreachable.`;
+  }
+  if (!code) return causeName || 'Call ended or not yet completed';
+  if (code >= 4000 && code < 4100) return `Normal Call Completion${causeLabel}: The call was cleanly terminated by caller or callee.`;
+  if (code === 5030) return `Concurrency Limit Exceeded${causeLabel}: Account reached maximum concurrent call channels.`;
+  if (code >= 2000 && code < 3000) return `Invalid Destination${causeLabel}: The destination number is unallocated, invalid, or barred.`;
+  if (code >= 3000 && code < 4000) return `User Busy / No Answer${causeLabel}: The recipient declined or did not answer within timeout.`;
+  return `Plivo Hangup Code ${code}${causeLabel}`;
 }
 
 function selectPrimaryRecording(recordings: any[]): any | null {
@@ -112,27 +128,61 @@ export async function GET(
     const state = getOrInitSyncState(currentCall.id);
     state.updatedAt = Date.now();
 
+    const needsCallStatusSync =
+      Boolean(currentCall.plivoCallUuid) &&
+      !currentCall.plivoCallUuid.startsWith('temp_') &&
+      (!currentCall.endedAt ||
+        ['ringing', 'queued', 'in-progress'].includes(currentCall.status) ||
+        currentCall.hangupCauseCode == null) &&
+      (retryMode || !state.callStatusChecked);
+
+    const needsRecordingSync =
+      currentCall.recordings.length === 0 &&
+      Boolean(currentCall.plivoCallUuid) &&
+      (retryMode || currentCall.status === 'in-progress' || !state.recordingChecked);
+
+    const { client: plivoClient } =
+      needsCallStatusSync || needsRecordingSync
+        ? await getOrgPlivoClient(currentCall.organizationId)
+        : { client: null };
+
+    // Carrier Call Status & Hangup Cause Sync (recovers stuck ringing calls and missing hangup diagnostics)
+    if (needsCallStatusSync) {
+      if (!plivoClient) {
+        state.callStatusChecked = true;
+      } else {
+        try {
+          const updated = await syncSingleCallStatusWithPlivo(currentCall, plivoClient);
+          if (updated) {
+            currentCall = await db.call.findFirst({
+              where: { id: currentCall.id },
+              include: {
+                phoneNumber: true,
+                events: { orderBy: { occurredAt: 'asc' } },
+                recordings: { include: { transcriptions: true } },
+                transcriptions: true,
+              },
+            });
+            state.callStatusChecked = true;
+          }
+        } catch (callSyncErr: unknown) {
+          const message = callSyncErr instanceof Error ? callSyncErr.message : String(callSyncErr);
+          console.warn('Live call status sync notice:', message);
+          state.callStatusChecked = true;
+        }
+      }
+    }
+
     // Carrier Realtime Sync: If call has no recordings yet, query Plivo API once (or when in-progress / manual retry)
     if (
+      currentCall &&
       currentCall.recordings.length === 0 &&
       currentCall.plivoCallUuid &&
       (retryMode || currentCall.status === 'in-progress' || !state.recordingChecked)
     ) {
-      let plivoAuthId = process.env.PLIVO_AUTH_ID;
-      let plivoAuthToken = process.env.PLIVO_AUTH_TOKEN;
-
-      try {
-        const tenantPlivo = await getTenantIntegration(currentCall.organizationId, 'plivo');
-        if (tenantPlivo?.credentials?.authId && tenantPlivo?.credentials?.authToken) {
-          plivoAuthId = tenantPlivo.credentials.authId;
-          plivoAuthToken = tenantPlivo.credentials.authToken;
-        }
-      } catch {}
-
-      if (plivoAuthId && plivoAuthToken) {
+      if (plivoClient) {
         try {
-          const client = new (plivo as any).Client(plivoAuthId, plivoAuthToken);
-          const plivoRecs = await client.recordings.list({
+          const plivoRecs = await plivoClient.recordings.list({
             call_uuid: currentCall.plivoCallUuid,
             callUuid: currentCall.plivoCallUuid,
           });
@@ -198,7 +248,7 @@ export async function GET(
       } else {
         state.recordingChecked = true;
       }
-    } else if (currentCall.recordings.length === 0 && !currentCall.plivoCallUuid) {
+    } else if (currentCall && currentCall.recordings.length === 0 && !currentCall.plivoCallUuid) {
       state.recordingChecked = true;
     }
 
@@ -271,6 +321,14 @@ export async function GET(
   };
 
   const currentSyncState = callSyncStateByCallId.get(call.id);
+  const shouldSyncCallStatus =
+    Boolean(call.plivoCallUuid) &&
+    !call.plivoCallUuid.startsWith('temp_') &&
+    (!call.endedAt ||
+      ['ringing', 'queued', 'in-progress'].includes(call.status) ||
+      call.hangupCauseCode == null) &&
+    (retryMode || !currentSyncState?.callStatusChecked);
+
   const shouldSyncRecording =
     call.recordings.length === 0 &&
     Boolean(call.plivoCallUuid) &&
@@ -283,7 +341,7 @@ export async function GET(
     ) &&
     (retryMode || !currentSyncState?.transcriptionAttempted);
 
-  const needsSync = shouldSyncRecording || shouldSyncTranscription;
+  const needsSync = shouldSyncCallStatus || shouldSyncRecording || shouldSyncTranscription;
 
   if (needsSync) {
     let syncPromise = inFlightCallSyncs.get(call.id);
@@ -345,7 +403,7 @@ export async function GET(
       isTranscriptionProcessing,
       recordingError: finalSyncState?.recordingError || null,
       transcriptionError: finalSyncState?.transcriptionError || null,
-      hangupExplanation: getHangupExplanation(call.hangupCauseCode),
+      hangupExplanation: getHangupExplanation(call.hangupCauseCode, call.hangupCauseName),
     },
   });
 }

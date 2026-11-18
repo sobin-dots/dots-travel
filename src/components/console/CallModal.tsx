@@ -48,16 +48,19 @@ export function CallModal() {
     setReturnToCallModal,
   } = useConsole();
 
-  // Automatically ensure a destination contact is selected if contacts exist
+  // Default to the first verified contact only when no destination (e.g. a callback number) is already set
   useEffect(() => {
-    if (showCallModal && contactsList.length > 0) {
-      if (!callDestination || !contactsList.some((c: any) => c.phone === callDestination)) {
-        setCallDestination(contactsList[0].phone);
-      }
+    if (showCallModal && !callDestination && contactsList.length > 0) {
+      setCallDestination(contactsList[0].phone);
     }
   }, [showCallModal, contactsList, callDestination, setCallDestination]);
 
   if (!showCallModal) return null;
+
+  const isSavedContactDestination =
+    Boolean(callDestination) &&
+    contactsList.some((c: { phone?: string | null }) => c.phone === callDestination);
+  const isUnsavedCallbackDestination = Boolean(callDestination) && !isSavedContactDestination;
 
   return (
     <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -85,7 +88,9 @@ export function CallModal() {
                 handleHangupBrowserCall();
               }
               setShowCallModal(false);
-              setWebPhoneStatus('idle');
+              setWebPhoneStatus((prev: string) =>
+                prev === 'idle' || prev === 'logging_in' ? prev : 'ready'
+              );
               setWebPhoneError(null);
             }}
             className="text-zinc-500 hover:text-zinc-300 p-1 rounded-lg"
@@ -253,7 +258,7 @@ export function CallModal() {
                   <Plus className="w-3 h-3" /> Add Contact
                 </button>
               </div>
-              {contactsList.length === 0 ? (
+              {contactsList.length === 0 && !isUnsavedCallbackDestination ? (
                 <div className="p-3 bg-amber-950/40 border border-amber-800/60 rounded-lg text-amber-300 text-xs space-y-2">
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
@@ -275,18 +280,30 @@ export function CallModal() {
                   </button>
                 </div>
               ) : (
-                <select
-                  value={callDestination}
-                  onChange={(e) => setCallDestination(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200"
-                >
-                  <option value="">-- Select Contact to Call --</option>
-                  {contactsList.map((c) => (
-                    <option key={c.id} value={c.phone}>
-                      {c.name} ({c.phone}) {c.company ? `— ${c.company}` : ''}
-                    </option>
-                  ))}
-                </select>
+                <div className="space-y-1.5">
+                  <select
+                    value={callDestination}
+                    onChange={(e) => setCallDestination(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200"
+                  >
+                    <option value="">-- Select Contact to Call --</option>
+                    {isUnsavedCallbackDestination && (
+                      <option value={callDestination}>
+                        {callDestination} — Callback Number (Unsaved Caller)
+                      </option>
+                    )}
+                    {contactsList.map((c) => (
+                      <option key={c.id} value={c.phone}>
+                        {c.name} ({c.phone}) {c.company ? `— ${c.company}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {isUnsavedCallbackDestination && (
+                    <p className="text-[11px] text-amber-300/90">
+                      Calling back unsaved number <span className="font-mono">{callDestination}</span>. You can save them as an enquiry anytime from Calls or + Add Contact.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 
@@ -365,7 +382,7 @@ export function CallModal() {
                 <button
                   type="button"
                   onClick={handleStartBrowserCall}
-                  disabled={webPhoneStatus === 'logging_in' || !callDestination || contactsList.length === 0}
+                  disabled={webPhoneStatus === 'logging_in' || !callDestination}
                   className="px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-emerald-600/25 flex items-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Mic className="w-4 h-4" />
@@ -375,7 +392,7 @@ export function CallModal() {
                 <button
                   type="button"
                   onClick={handlePlaceCall}
-                  disabled={callLoading || !callDestination || !callForwardTo || contactsList.length === 0}
+                  disabled={callLoading || !callDestination || !callForwardTo}
                   className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-indigo-600/25 flex items-center gap-2 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <PhoneCall className={`w-4 h-4 ${callLoading ? 'animate-pulse' : ''}`} />
