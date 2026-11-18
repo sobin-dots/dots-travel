@@ -696,4 +696,26 @@ suite('Itinerary alternatives, exports and inbound call routing', () => {
     });
     expect(releasedMember.voiceBusy).toBe(false);
   });
+  it('handles concurrent answer, hangup, and presence heartbeats without 40P01 deadlocks', async () => {
+    await db.phoneNumber.create({ data: { organizationId, e164: '+918065531234', countryIso: 'IN' } });
+    const callUuid = randomUUID();
+    const token1 = await signAccessToken({ organizationId, userId: users[1], email: 'sales1@example.test', role: 'sales' });
+    const token2 = await signAccessToken({ organizationId, userId: users[2], email: 'sales2@example.test', role: 'sales' });
+
+    const [ansRes, hangRes, pres1Res, pres2Res] = await Promise.all([
+      answer(signed('answer', { CallUUID: callUuid, From: '+919626333162', To: '+918065531234', Direction: 'inbound' })),
+      hangup(signed('hangup', { CallUUID: callUuid, From: '+919626333162', To: '+918065531234', Direction: 'inbound', HangupCause: 'NORMAL_CLEARING', HangupCauseName: 'Normal Hangup', Duration: '0', BillDuration: '0' })),
+      presence(request('telephony/presence', { ready: true, busy: false }, 'POST', token1)),
+      presence(request('telephony/presence', { ready: true, busy: false }, 'POST', token2)),
+    ]);
+
+    expect(ansRes.status).toBe(200);
+    expect(hangRes.status).toBe(200);
+    expect(pres1Res.status).toBe(200);
+    expect(pres2Res.status).toBe(200);
+    expect(await hangRes.json()).toEqual({ status: 'ok' });
+
+    const saved = await db.call.findUniqueOrThrow({ where: { plivoCallUuid: callUuid } });
+    expect(saved.organizationId).toBe(organizationId);
+  });
 });

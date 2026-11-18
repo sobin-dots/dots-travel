@@ -147,6 +147,8 @@ export default function CallsPage() {
     setPage(1);
   };
 
+  const didInitialSyncRef = useRef(false);
+
   const fetchFilteredCalls = useCallback(async (forceSync = false) => {
     if (!bearerToken) return;
     setFetchingCalls(true);
@@ -194,7 +196,9 @@ export default function CallsPage() {
   ]);
 
   useEffect(() => {
-    fetchFilteredCalls();
+    const shouldSync = !didInitialSyncRef.current;
+    didInitialSyncRef.current = true;
+    fetchFilteredCalls(shouldSync);
   }, [fetchFilteredCalls, contextCalls]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));

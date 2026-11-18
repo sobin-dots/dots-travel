@@ -192,7 +192,7 @@ export async function applyCarrierCallUpdate(
     if (!latest.endedAt) {
       await releaseCallAgentInTransaction(tx, latest);
     }
-  });
+  }, { timeout: 15_000 });
 
   return true;
 }
@@ -270,16 +270,21 @@ export async function syncRecentOrgCallsFromPlivo(
       },
       select: { id: true, organizationId: true, plivoCallUuid: true },
       orderBy: { startedAt: 'desc' },
-      take: 10,
+      take: 5,
     });
 
     if (typeof callsApi.get === 'function' && activeCalls.length > 0) {
-      const results = await Promise.allSettled(
-        activeCalls.map((call) => syncSingleCallStatusWithPlivo(call, { calls: callsApi }))
-      );
-      for (const res of results) {
-        if (res.status === 'fulfilled' && res.value) {
-          reconciled += 1;
+      // Process active call reconciliations sequentially to avoid queueing parallel agency-lock transactions.
+      for (const activeCall of activeCalls) {
+        try {
+          if (await syncSingleCallStatusWithPlivo(activeCall, { calls: callsApi })) {
+            reconciled += 1;
+          }
+        } catch (activeSyncErr) {
+          console.warn(
+            'Active call status sync notice:',
+            activeSyncErr instanceof Error ? activeSyncErr.message : String(activeSyncErr)
+          );
         }
       }
     }
@@ -337,6 +342,8 @@ export async function syncRecentOrgCallsFromPlivo(
           orgRowByUuid.set(row.plivoCallUuid, row);
         }
       }
+
+      const missingCallsToCreate: Prisma.CallCreateManyInput[] = [];
 
       for (const item of items) {
         const callUuid = item.callUuid;
@@ -396,36 +403,37 @@ export async function syncRecentOrgCallsFromPlivo(
           }
         }
 
-        try {
-          await db.call.create({
-            data: {
-              organizationId,
-              phoneNumberId: matchedPhone.id,
-              plivoCallUuid: callUuid,
-              direction,
-              from: fromNumber || 'Unknown',
-              to: toNumber || matchedPhone.e164,
-              status: finalStatus,
-              startedAt,
-              ...(answeredAt ? { answeredAt } : {}),
-              ...(endedAt ? { endedAt } : {}),
-              durationSeconds: Math.trunc(durationSeconds),
-              billDurationSeconds: Math.trunc(billDurationSeconds),
-              totalCost,
-              ...(causeCode !== undefined ? { hangupCauseCode: causeCode } : {}),
-              hangupCauseName: isTerminal ? causeName : undefined,
-              requestedParams: {
-                syncedFromPlivo: true,
-                hangupSource: item.hangupSource || null,
-                sipCallState: item.callState || null,
-              } as Prisma.InputJsonValue,
-            },
-          });
-          imported += 1;
-          allKnownUuids.add(callUuid);
-        } catch {
-          // Ignore unique conflicts under concurrent syncs
-        }
+        missingCallsToCreate.push({
+          organizationId,
+          phoneNumberId: matchedPhone.id,
+          plivoCallUuid: callUuid,
+          direction,
+          from: fromNumber || 'Unknown',
+          to: toNumber || matchedPhone.e164,
+          status: finalStatus,
+          startedAt,
+          ...(answeredAt ? { answeredAt } : {}),
+          ...(endedAt ? { endedAt } : {}),
+          durationSeconds: Math.trunc(durationSeconds),
+          billDurationSeconds: Math.trunc(billDurationSeconds),
+          totalCost,
+          ...(causeCode !== undefined ? { hangupCauseCode: causeCode } : {}),
+          hangupCauseName: isTerminal ? causeName : undefined,
+          requestedParams: {
+            syncedFromPlivo: true,
+            hangupSource: item.hangupSource || null,
+            sipCallState: item.callState || null,
+          } as Prisma.InputJsonValue,
+        });
+        allKnownUuids.add(callUuid);
+      }
+
+      if (missingCallsToCreate.length > 0) {
+        const created = await db.call.createMany({
+          data: missingCallsToCreate,
+          skipDuplicates: true,
+        });
+        imported += created.count;
       }
     } catch (err) {
       console.warn('Plivo call history sync notice:', err instanceof Error ? err.message : String(err));
@@ -465,15 +473,13 @@ export function inferHangupTerminalStatus(options: {
 }
 
 /**
- * Recovers a primary call record if Plivo delivers a hangup webhook before an answer
- * webhook ever persisted the call (for instance if Answer URL errored or timed out).
+ * Resolves which organization owns a Plivo hangup webhook when no Call row exists yet.
  */
-export async function recoverMissingHangupCallRecord(options: {
-  callUuid: string;
+export async function resolveHangupOrganizationId(options: {
   orgIdParam?: string | null;
   params: Record<string, unknown>;
-}): Promise<{ organizationId: string } | null> {
-  const { callUuid, orgIdParam, params } = options;
+}): Promise<string | null> {
+  const { orgIdParam, params } = options;
   if (params.ParentCallUUID || params.parent_call_uuid) {
     return null;
   }
@@ -500,8 +506,33 @@ export async function recoverMissingHangupCallRecord(options: {
   if (!organizationId || (orgIdParam && organizationId !== orgIdParam)) {
     return null;
   }
+  return organizationId;
+}
 
-  const orgNumbers = await db.phoneNumber.findMany({
+/**
+ * Inserts a recovered primary call record inside an active agency-locked transaction,
+ * avoiding FK/unique-index lock cycles and duplicate-key log errors.
+ */
+export async function createRecoveredHangupCallInTx(
+  tx: Prisma.TransactionClient,
+  options: {
+    organizationId: string;
+    callUuid: string;
+    params: Record<string, unknown>;
+  }
+) {
+  const { organizationId, callUuid, params } = options;
+  if (params.ParentCallUUID || params.parent_call_uuid) {
+    return null;
+  }
+
+  const from = String(params.From || params.from || '').trim();
+  const to = String(params.To || params.to || '').trim();
+  if (!from && !to) {
+    return null;
+  }
+
+  const orgNumbers = await tx.phoneNumber.findMany({
     where: { organizationId },
     select: { id: true, e164: true },
   });
@@ -514,9 +545,9 @@ export async function recoverMissingHangupCallRecord(options: {
       ? 'outbound'
       : 'inbound';
 
-  try {
-    const created = await db.call.create({
-      data: {
+  await tx.call.createMany({
+    data: [
+      {
         organizationId,
         phoneNumberId: matchedPhone?.id || null,
         plivoCallUuid: callUuid,
@@ -530,13 +561,9 @@ export async function recoverMissingHangupCallRecord(options: {
           rawParams: params,
         } as Prisma.InputJsonValue,
       },
-      select: { organizationId: true },
-    });
-    return created;
-  } catch {
-    return db.call.findUnique({
-      where: { plivoCallUuid: callUuid },
-      select: { organizationId: true },
-    });
-  }
+    ],
+    skipDuplicates: true,
+  });
+
+  return tx.call.findUnique({ where: { plivoCallUuid: callUuid } });
 }

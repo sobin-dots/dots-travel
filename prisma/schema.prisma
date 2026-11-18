@@ -111,6 +111,7 @@ model Membership {
 
   @@unique([organizationId, userId])
   @@index([organizationId])
+  @@index([organizationId, availableForLeads, voiceBusy, lastCallAssignedAt])
   @@map("memberships")
 }
 
@@ -249,6 +250,7 @@ model PhoneNumber {
 
   @@unique([organizationId, e164])
   @@index([organizationId, status])
+  @@index([e164])
   @@map("phone_numbers")
 }
 
@@ -307,6 +309,8 @@ model Call {
   @@index([organizationId, status])
   @@index([organizationId, direction])
   @@index([organizationId, enquiryContactId])
+  @@index([organizationId, assignedToId, endedAt, status])
+  @@index([organizationId, endedAt, status, startedAt])
   @@map("calls")
 }
 

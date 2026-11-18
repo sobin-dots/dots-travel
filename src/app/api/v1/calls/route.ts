@@ -27,8 +27,8 @@ export async function GET(req: NextRequest) {
   const offset = Math.max(Number(url.searchParams.get('offset') || '0'), 0);
 
   const orgId = auth!.organizationId;
-  if (syncParam === '1' || (offset === 0 && !search && syncParam !== '0')) {
-    await syncRecentOrgCallsFromPlivo(orgId, { force: syncParam === '1' });
+  if (syncParam === '1') {
+    await syncRecentOrgCallsFromPlivo(orgId, { force: true });
   }
   const andConditions: any[] = [{ organizationId: orgId }];
 

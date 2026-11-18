@@ -304,70 +304,80 @@ export async function handleAnswer(req: NextRequest) {
         const actorUserId = params['X-PH-actorUserId'] || params['x-ph-actoruserid'] || undefined;
         const actorName = params['X-PH-actorName'] || params['x-ph-actorname'] || undefined;
         const actorEmail = params['X-PH-actorEmail'] || params['x-ph-actoremail'] || undefined;
-        const newCall = await db.call.create({
-          data: {
-            organizationId: effectiveOrgId,
-            phoneNumberId: phoneRecord?.id || null,
-            plivoCallUuid: callUuid,
-            from: resolvedCallerId || 'Unknown',
-            to: destinationNumber || 'Unknown',
-            direction: 'outbound',
-            status: 'in-progress',
-            recordingEnabled: true,
-            transcriptionEnabled: true,
-            transcriptionLanguage: 'en-US',
-            answeredAt: new Date(),
-            requestedMode: 'browser',
-            requestedParams: actorUserId || actorName || actorEmail
-              ? { actorUserId, actorName, actorEmail }
-              : undefined,
-          },
+        await db.call.createMany({
+          data: [
+            {
+              organizationId: effectiveOrgId,
+              phoneNumberId: phoneRecord?.id || null,
+              plivoCallUuid: callUuid,
+              from: resolvedCallerId || 'Unknown',
+              to: destinationNumber || 'Unknown',
+              direction: 'outbound',
+              status: 'in-progress',
+              recordingEnabled: true,
+              transcriptionEnabled: true,
+              transcriptionLanguage: 'en-US',
+              answeredAt: new Date(),
+              requestedMode: 'browser',
+              requestedParams: actorUserId || actorName || actorEmail
+                ? { actorUserId, actorName, actorEmail }
+                : undefined,
+            },
+          ],
+          skipDuplicates: true,
         });
-
-        await db.callEvent.create({
-          data: {
-            organizationId: effectiveOrgId,
-            callId: newCall.id,
-            eventType: 'answer',
-            status: 'in-progress',
-            payload: params,
-            occurredAt: new Date(),
-            webhookEventId,
-          },
-        });
+        const savedCall = await db.call.findUnique({ where: { plivoCallUuid: callUuid } });
+        if (savedCall) {
+          await db.callEvent.create({
+            data: {
+              organizationId: effectiveOrgId,
+              callId: savedCall.id,
+              eventType: 'answer',
+              status: 'in-progress',
+              payload: params,
+              occurredAt: new Date(),
+              webhookEventId,
+            },
+          });
+        }
       }
     } else {
       // Inbound call from customer to virtual number
       if (effectiveOrgId) {
         const callerPhone = params.From || params.from || 'Unknown Caller';
         const calledNumber = destinationNumber || phoneRecord?.e164 || resolvedCallerId || 'Unknown';
-        const newCall = await db.call.create({
-          data: {
-            organizationId: effectiveOrgId,
-            phoneNumberId: phoneRecord?.id || null,
-            plivoCallUuid: callUuid,
-            from: callerPhone,
-            to: calledNumber,
-            direction: 'inbound',
-            status: 'in-progress',
-            recordingEnabled: true,
-            transcriptionEnabled: true,
-            transcriptionLanguage: 'en-US',
-            answeredAt: new Date(),
-          },
+        await db.call.createMany({
+          data: [
+            {
+              organizationId: effectiveOrgId,
+              phoneNumberId: phoneRecord?.id || null,
+              plivoCallUuid: callUuid,
+              from: callerPhone,
+              to: calledNumber,
+              direction: 'inbound',
+              status: 'in-progress',
+              recordingEnabled: true,
+              transcriptionEnabled: true,
+              transcriptionLanguage: 'en-US',
+              answeredAt: new Date(),
+            },
+          ],
+          skipDuplicates: true,
         });
-
-        await db.callEvent.create({
-          data: {
-            organizationId: effectiveOrgId,
-            callId: newCall.id,
-            eventType: 'answer',
-            status: 'in-progress',
-            payload: params,
-            occurredAt: new Date(),
-            webhookEventId,
-          },
-        });
+        const savedCall = await db.call.findUnique({ where: { plivoCallUuid: callUuid } });
+        if (savedCall) {
+          await db.callEvent.create({
+            data: {
+              organizationId: effectiveOrgId,
+              callId: savedCall.id,
+              eventType: 'answer',
+              status: 'in-progress',
+              payload: params,
+              occurredAt: new Date(),
+              webhookEventId,
+            },
+          });
+        }
       }
     }
 

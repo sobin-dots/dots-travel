@@ -10,7 +10,7 @@ export function connectionSecrets(credentials: unknown): ConnectionSecrets {
 }
 
 export async function lockAgency(tx: Prisma.TransactionClient, organizationId: string) {
-  await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;
+  await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR NO KEY UPDATE`;
 }
 
 export async function pickAssignee(tx: Prisma.TransactionClient, organizationId: string) {
