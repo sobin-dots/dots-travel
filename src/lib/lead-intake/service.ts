@@ -33,17 +33,23 @@ export async function createEnquiry(tx: Prisma.TransactionClient, organizationId
   const ambiguous = emailMatches.length > 1 || (!!phoneMatch && emailMatches.some(c => c.id !== phoneMatch.id));
   let contact = phoneMatch || (!ambiguous ? emailMatches[0] : null);
   const repeat = contact ? await tx.lead.count({ where: { organizationId, contactId: contact.id } }) > 0 : false;
-  if (!contact && !ambiguous) contact = await tx.contact.create({ data: { organizationId, name: input.name, phone: input.phone, email: input.email } });
+  const { preferredTravelMonth, tourType, numberOfChildren, specialRequirements, city } = input;
+  if (!contact && !ambiguous) contact = await tx.contact.create({ data: { organizationId, name: input.name, phone: input.phone, email: input.email,
+    preferredTravelMonth, tourType, numberOfChildren, specialRequirements, city } });
   const assignedToId = await pickAssignee(tx, organizationId);
   const organization = await tx.organization.findUniqueOrThrow({ where: { id: organizationId }, select: { firstContactMinutes: true } });
-  const { submissionId: _submissionId, name, phone, email, notes, title, answers, ...fields } = input;
+  const { submissionId: _submissionId, name, phone, email, notes, title, answers,
+    preferredTravelMonth: _month, tourType: _tour, numberOfChildren: _children, specialRequirements: _requirements, city: _city, ...fields } = input;
   return tx.lead.create({ data: {
     ...fields, organizationId, source, title: title || `${name} — ${input.destination || 'Travel enquiry'}`,
     contactId: contact?.id, customerEmail: email || contact?.email, itinerary: '', status: 'draft', createdAt: receivedAt,
+    headcountChildren: numberOfChildren ?? 0,
+    specialRequests: specialRequirements,
     assignedToId, assignedAt: assignedToId ? new Date() : null,
     firstContactDueAt: new Date(receivedAt.getTime() + organization.firstContactMinutes * 60_000),
     duplicateContactFlag: ambiguous || repeat,
-    metadata: { customerName: name, customerPhone: phone || null, enquiryNotes: notes || null, formAnswers: answers || {}, contactMatchNeedsReview: ambiguous },
+    metadata: { customerName: name, customerPhone: phone || null, enquiryNotes: notes || null, formAnswers: answers || {}, contactMatchNeedsReview: ambiguous,
+      contactTravelPreferences: { preferredTravelMonth: preferredTravelMonth ?? null, tourType: tourType ?? null, numberOfChildren: numberOfChildren ?? null, specialRequirements: specialRequirements ?? null, city: city ?? null } },
   } });
 }
 

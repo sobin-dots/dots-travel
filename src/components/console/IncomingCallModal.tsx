@@ -7,6 +7,8 @@ import { useConsole } from '@/context/ConsoleContext';
 export function IncomingCallModal() {
   const {
     incomingCall,
+    answeringIncomingCall,
+    webPhoneError,
     handleAnswerIncomingCall,
     handleRejectIncomingCall,
     contactsList,
@@ -70,6 +72,7 @@ export function IncomingCallModal() {
         <div className="grid grid-cols-2 gap-3 pt-2 relative z-10">
           <button
             type="button"
+            disabled={answeringIncomingCall}
             onClick={handleRejectIncomingCall}
             className="w-full py-3 px-4 rounded-xl bg-zinc-800 hover:bg-rose-950/70 border border-zinc-700 hover:border-rose-700 text-zinc-200 hover:text-rose-300 font-semibold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
           >
@@ -79,16 +82,18 @@ export function IncomingCallModal() {
 
           <button
             type="button"
+            disabled={answeringIncomingCall}
             onClick={handleAnswerIncomingCall}
             className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 transition hover:scale-[1.02] cursor-pointer"
           >
             <Phone className="w-4 h-4" />
-            <span>Answer Call</span>
+            <span>{answeringIncomingCall ? 'Connecting…' : 'Answer Call'}</span>
           </button>
         </div>
 
+        {webPhoneError && <p role="alert" className="relative z-10 text-xs text-red-300">{webPhoneError}</p>}
         <p className="text-[11px] text-zinc-500 relative z-10">
-          Answering connects microphone audio immediately via WebRTC. Two-way call audio will be recorded and transcribed.
+          Answer in your browser using your microphone. Recording and transcription follow your agency settings.
         </p>
       </div>
     </div>

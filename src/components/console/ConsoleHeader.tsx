@@ -17,6 +17,7 @@ import {
   Radio,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
+import { CallNotifications } from './CallNotifications';
 
 export function ConsoleHeader() {
   const {
@@ -176,6 +177,7 @@ export function ConsoleHeader() {
           )}
         </div>
 
+        <CallNotifications />
         {/* User Account / Profile */}
         <Link
           href="/console/users"

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { ContactTravelFieldsSchema } from '@/lib/contact-fields';
 
 export const providers = ['meta', 'google_ads', 'google_forms', 'website', 'generic'] as const;
 export type LeadProvider = typeof providers[number];
@@ -20,6 +21,7 @@ export const enquirySchema = z.object({
   adId: z.string().max(200).optional(), adName: z.string().max(200).optional(),
   adGroupId: z.string().max(200).optional(), clickId: z.string().max(500).optional(),
   utmSource: z.string().max(200).optional(), utmMedium: z.string().max(200).optional(), utmCampaign: z.string().max(200).optional(),
+  ...ContactTravelFieldsSchema.shape,
 }).refine(v => v.phone || v.email, { message: 'A phone number or email is required' });
 export type Enquiry = z.infer<typeof enquirySchema>;
 

@@ -3,10 +3,11 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { normalizePhoneNumber } from '@/lib/csv-parser';
+import { ContactTravelFieldsSchema, type ContactTravelFields } from '@/lib/contact-fields';
 
 export const runtime = 'nodejs';
 
-interface IncomingBulkContact {
+interface IncomingBulkContact extends ContactTravelFields {
   name: string;
   phone: string;
   email?: string;
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
 
     const seenInBatch = new Set<string>();
     const batchDuplicates: Array<{ name: string; phone: string; reason: string }> = [];
-    const normalizedBatch: Array<{
+    const normalizedBatch: Array<ContactTravelFields & {
       name: string;
       phone: string;
       email: string | null;
@@ -83,6 +84,8 @@ export async function POST(req: NextRequest) {
       // Validate email format if provided
       const trimmedEmail = (item.email || '').trim();
       const validEmail = trimmedEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail) ? trimmedEmail : null;
+      const travel = ContactTravelFieldsSchema.safeParse(item);
+      if (!travel.success) { batchDuplicates.push({ name: trimmedName, phone: normalizedPhone, reason: travel.error.issues[0]?.message || 'Invalid travel preferences' }); continue; }
 
       normalizedBatch.push({
         name: trimmedName.slice(0, 100),
@@ -90,6 +93,7 @@ export async function POST(req: NextRequest) {
         email: validEmail,
         company: (item.company || '').trim().slice(0, 100) || null,
         notes: (item.notes || '').trim().slice(0, 500) || null,
+        ...travel.data,
       });
     }
 
@@ -112,7 +116,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Step 3: Partition into to-insert vs skipped
-    const toInsert: Array<{
+    const toInsert: Array<ContactTravelFields & {
       id: string;
       organizationId: string;
       name: string;
@@ -141,6 +145,11 @@ export async function POST(req: NextRequest) {
           email: contact.email,
           company: contact.company,
           notes: contact.notes,
+          preferredTravelMonth: contact.preferredTravelMonth,
+          tourType: contact.tourType,
+          numberOfChildren: contact.numberOfChildren,
+          specialRequirements: contact.specialRequirements,
+          city: contact.city,
         });
       }
     }

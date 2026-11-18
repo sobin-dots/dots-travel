@@ -125,6 +125,7 @@ export async function GET(req: NextRequest) {
     andConditions.push({
       OR: [
         ...(auditedCallIds.length > 0 ? [{ id: { in: auditedCallIds } }] : []),
+        { assignedToId: staffUserId },
         {
           requestedParams: {
             path: ['actorUserId'],
@@ -223,7 +224,7 @@ export async function GET(req: NextRequest) {
     });
 
     const reqParams = (c.requestedParams && typeof c.requestedParams === 'object' ? c.requestedParams : {}) as any;
-    const resolvedActorId = reqParams.actorUserId || actorByCallId.get(c.id);
+    const resolvedActorId = c.assignedToId || reqParams.actorUserId || actorByCallId.get(c.id);
     const matchedStaff = resolvedActorId ? userById.get(resolvedActorId) : null;
 
     // Deduplicate recordings per call to at most 1 primary recording

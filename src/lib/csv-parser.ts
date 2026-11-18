@@ -4,7 +4,9 @@
  * flexible header matching, and E.164 phone normalization.
  */
 
-export interface ParsedContactRow {
+import { ContactTravelFieldsSchema, type ContactTravelFields } from './contact-fields';
+
+export interface ParsedContactRow extends Partial<ContactTravelFields> {
   rowIndex: number;
   rawName: string;
   rawPhone: string;
@@ -199,6 +201,11 @@ export function parseContactsCSV(csvText: string, defaultCountryCode = '+91'): C
   const emailIdx = findColumnIndex(rawHeaders, ['email', 'emailaddress', 'mail']);
   const companyIdx = findColumnIndex(rawHeaders, ['company', 'organization', 'agency', 'business', 'corp']);
   const notesIdx = findColumnIndex(rawHeaders, ['notes', 'remarks', 'comment', 'comments', 'description']);
+  const monthIdx = findColumnIndex(rawHeaders, ['preferredtravelmonth', 'preferredmonthoftravel', 'travelmonth']);
+  const tourIdx = findColumnIndex(rawHeaders, ['tourtype', 'typeoftour']);
+  const childrenIdx = findColumnIndex(rawHeaders, ['numberofchildren', 'children', 'childrencount']);
+  const requirementsIdx = findColumnIndex(rawHeaders, ['specialrequirements', 'specialrequests']);
+  const cityIdx = findColumnIndex(rawHeaders, ['city', 'cityofresidence']);
 
   const rows: ParsedContactRow[] = [];
 
@@ -215,6 +222,10 @@ export function parseContactsCSV(csvText: string, defaultCountryCode = '+91'): C
     const rawNotes = notesIdx !== -1 && row[notesIdx] ? row[notesIdx].trim() : '';
 
     const normalizedPhone = normalizePhoneNumber(rawPhone, defaultCountryCode);
+    const cell = (column: number) => column < 0 ? undefined : row[column]?.trim() || '';
+    const children = cell(childrenIdx);
+    const travel = ContactTravelFieldsSchema.safeParse({ preferredTravelMonth: cell(monthIdx), tourType: cell(tourIdx),
+      numberOfChildren: children == null ? undefined : children === '' ? null : Number(children), specialRequirements: cell(requirementsIdx), city: cell(cityIdx) });
 
     let isValid = true;
     let error: string | undefined = undefined;
@@ -231,6 +242,9 @@ export function parseContactsCSV(csvText: string, defaultCountryCode = '+91'): C
     } else if (rawEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
       isValid = false;
       error = `Invalid email address: "${rawEmail}"`;
+    } else if (!travel.success) {
+      isValid = false;
+      error = travel.error.issues[0]?.message || 'Invalid travel preferences';
     }
 
     rows.push({
@@ -245,6 +259,7 @@ export function parseContactsCSV(csvText: string, defaultCountryCode = '+91'): C
       email: rawEmail || undefined,
       company: rawCompany || undefined,
       notes: rawNotes || undefined,
+      ...(travel.success ? travel.data : {}),
       isValid,
       error,
     });
@@ -267,11 +282,11 @@ export function parseContactsCSV(csvText: string, defaultCountryCode = '+91'): C
  */
 export function getSampleContactsCSV(): string {
   return [
-    'Name,Phone,Email,Company,Notes',
-    'Aarav Sharma,+919876543210,aarav.sharma@example.com,Sharma Tours,VIP Customer - Enquired for Maldives package',
-    'Priya Patel,9823456789,priya.patel@outlook.com,Patel & Co,Interested in Singapore & Malaysia 5-day tour',
-    'Vikram Malhotra,+919123456780,,Malhotra Enterprises,Family holiday enquiry for Pongal vacation',
-    'Sneha Menon,09447123456,sneha.menon@gmail.com,,Wants 4-star boutique hotel quotes',
+    'Name,Phone,Email,Company,Notes,Preferred month of travel,Tour type,Number of children,Special requirements,City',
+    'Aarav Sharma,+919876543210,aarav.sharma@example.com,Sharma Tours,Maldives enquiry,2027-04,Family,2,Vegetarian meals,Chennai',
+    'Priya Patel,9823456789,priya.patel@outlook.com,Patel & Co,Singapore enquiry,2027-05,Honeymoon,0,Private transfers,Ahmedabad',
+    'Vikram Malhotra,+919123456780,,Malhotra Enterprises,Family holiday,2027-01,Family,1,Accessible room,Delhi',
+    'Sneha Menon,09447123456,sneha.menon@gmail.com,,Boutique hotels,,Solo,0,,Kochi',
   ].join('\r\n');
 }
 

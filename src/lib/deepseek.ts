@@ -1391,4 +1391,19 @@ Provide the complete updated and polished itinerary adhering to the corrections 
   return content;
 }
 
+export async function generateBudgetItineraryOption(input: {
+  organizationId: string; itinerary: string; destination: string; durationDays: number;
+  budget: number; currency: string; instructions: string; transcript?: string;
+}): Promise<string> {
+  const rules = await getActiveItineraryRulesForOrg(input.organizationId);
+  const result = await callLlmText({ organizationId: input.organizationId, required: true, timeoutMs: 90_000, temperature: 0.5,
+    messages: [
+      { role: 'system', content: `Create one complete alternative travel itinerary for the same destination and dates as the source. Adapt accommodation, pace, activities, and transfers to the requested budget target. The budget is a planning target, not a verified selling price. Never invent supplier rates, availability, confirmed bookings or a cost breakdown. Preserve all traveller requirements, party size, and the exact number of days. Provide a concrete recommended programme for every day. Label recommendations as proposed. Use Markdown headings Day 1: ..., Day 2: ... in sequence, with substantial programme paragraphs and explicit Location:, Overnight:, Meals:, Transfers: lines for each day. Do not use pipe tables: the application renders comparisons from the saved days. Retain inclusions, exclusions and travel notes. ${rules.promptText}` },
+      { role: 'user', content: `Destination: ${input.destination}\nDays: ${input.durationDays}\nBudget target for the whole trip: ${input.currency} ${input.budget}\nStaff instructions: ${input.instructions}\nCustomer requirement call transcript:\n${input.transcript || '(No transcript attached)'}\nOriginal itinerary:\n${input.itinerary}` },
+    ], validate: value => assertItineraryReady(value, input.durationDays),
+  });
+  if (!result) throw new ItineraryError('No budget alternative was returned. Please retry.', 502);
+  return result;
+}
+
 

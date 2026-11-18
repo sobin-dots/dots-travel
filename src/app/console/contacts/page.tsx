@@ -1,10 +1,13 @@
 'use client';
 
-import React from 'react';
-import { BookUser, Loader2, Plus, PhoneCall, Trash2, Upload } from 'lucide-react';
+import React, { useState } from 'react';
+import { BookUser, Edit3, Loader2, Plus, PhoneCall, Trash2, Upload } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
+import { EditContactModal } from '@/components/console/EditContactModal';
+import { formatTravelMonth } from '@/lib/contact-fields';
 
 export default function ContactsPage() {
+  const [editingContact, setEditingContact] = useState<Record<string, any> | null>(null);
   const {
     contactsList,
     currentOrg,
@@ -24,7 +27,7 @@ export default function ContactsPage() {
         <div>
           <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white flex items-center gap-2">
             <BookUser className="w-5 h-5 text-emerald-400 shrink-0" />
-            Verified Contact Directory
+            Contact directory
           </h2>
           <p className="text-xs sm:text-sm text-zinc-400 mt-1">
             Manage recipient contacts. Staff can only place calls to saved contacts in this directory.
@@ -50,21 +53,24 @@ export default function ContactsPage() {
 
       <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[700px] text-left text-xs">
+          <table className="w-full min-w-[1300px] text-left text-xs">
             <thead className="bg-zinc-900/80 border-b border-zinc-800 text-zinc-400 font-medium">
               <tr>
-                <th className="py-3 px-4">Contact Name</th>
-                <th className="py-3 px-4">Phone Number</th>
-                <th className="py-3 px-4">Company</th>
-                <th className="py-3 px-4">Email</th>
-                <th className="py-3 px-4">Notes</th>
+                <th className="py-3 px-4">Full name</th>
+                <th className="py-3 px-4">Preferred month of travel</th>
+                <th className="py-3 px-4">Tour type</th>
+                <th className="py-3 px-4">Number of children</th>
+                <th className="py-3 px-4">Special requirements</th>
+                <th className="py-3 px-4">Phone number</th>
+                <th className="py-3 px-4">Email address</th>
+                <th className="py-3 px-4">City</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
               {contactsList.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-10 text-center text-zinc-500">
+                  <td colSpan={9} className="py-10 text-center text-zinc-500">
                     <BookUser className="w-8 h-8 mx-auto mb-2 text-zinc-600 opacity-50" />
                     No contacts registered yet. Click &quot;Add Contact&quot; or &quot;Import CSV&quot; to allow staff to place calls.
                   </td>
@@ -72,12 +78,16 @@ export default function ContactsPage() {
               ) : (
                 contactsList.map((contact) => (
                   <tr key={contact.id} className="hover:bg-zinc-800/30 transition">
-                    <td className="py-3.5 px-4 font-semibold text-zinc-100">{contact.name}</td>
-                    <td className="py-3.5 px-4 font-mono text-emerald-400 font-medium">{contact.phone}</td>
-                    <td className="py-3.5 px-4 text-zinc-400">{contact.company || '—'}</td>
+                    <td className="py-3.5 px-4 font-semibold text-zinc-100">{contact.name}{(contact.company || contact.notes) && <details className="mt-1 text-[11px] font-normal text-zinc-400"><summary className="cursor-pointer">Other details</summary>{contact.company && <p>{contact.company}</p>}{contact.notes && <p className="whitespace-pre-wrap">{contact.notes}</p>}</details>}</td>
+                    <td className="py-3.5 px-4 text-zinc-400 whitespace-nowrap">{formatTravelMonth(contact.preferredTravelMonth)}</td>
+                    <td className="py-3.5 px-4 text-zinc-400">{contact.tourType || '—'}</td>
+                    <td className="py-3.5 px-4 text-zinc-400">{contact.numberOfChildren ?? '—'}</td>
+                    <td className="py-3.5 px-4 text-zinc-400 max-w-xs">{contact.specialRequirements ? <details><summary className="cursor-pointer">{contact.specialRequirements.length > 55 ? `${contact.specialRequirements.slice(0, 55)}…` : contact.specialRequirements}</summary><p className="whitespace-pre-wrap mt-1">{contact.specialRequirements}</p></details> : '—'}</td>
+                    <td className="py-3.5 px-4 font-mono text-emerald-400 font-medium">{contact.phone || '—'}</td>
                     <td className="py-3.5 px-4 text-zinc-400">{contact.email || '—'}</td>
-                    <td className="py-3.5 px-4 text-zinc-500 max-w-xs truncate">{contact.notes || '—'}</td>
+                    <td className="py-3.5 px-4 text-zinc-400">{contact.city || '—'}</td>
                     <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
+                      <button type="button" onClick={() => setEditingContact(contact)} className="inline-flex items-center gap-1 rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-indigo-300"><Edit3 className="w-3 h-3" /> Edit</button>
                       <button
                         type="button"
                         disabled={!contact.phone}
@@ -117,6 +127,7 @@ export default function ContactsPage() {
           </table>
         </div>
       </div>
+      {editingContact && <EditContactModal key={editingContact.id} contact={editingContact} onClose={() => setEditingContact(null)} />}
     </div>
   );
 }
