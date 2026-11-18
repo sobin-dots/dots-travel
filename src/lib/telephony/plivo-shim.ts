@@ -81,6 +81,41 @@ export function createNoiseSuppressionShim(clientInstance?: any) {
   };
 }
 
+export interface SpeechRecognitionShim {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onstart: ((event?: unknown) => void) | null;
+  onend: ((event?: unknown) => void) | null;
+  onerror: ((event?: unknown) => void) | null;
+  onresult: ((event?: unknown) => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  __isPlivoShim: true;
+}
+
+/**
+ * Provides a silent no-op Web Speech API stand-in so Plivo Browser SDK's
+ * mute-speaking detector does not activate Chrome's webkitSpeechRecognition
+ * or flood the console with "Error in Recognizing speech : no-speech".
+ */
+export function createSpeechRecognitionShim(): SpeechRecognitionShim {
+  return {
+    continuous: true,
+    interimResults: true,
+    lang: 'en-US',
+    onstart: null,
+    onend: null,
+    onerror: null,
+    onresult: null,
+    start: () => {},
+    stop: () => {},
+    abort: () => {},
+    __isPlivoShim: true,
+  };
+}
+
 export function patchPlivoSDK(PlivoClass?: any, instance?: any) {
   if (typeof window === 'undefined') return;
 
@@ -121,5 +156,45 @@ export function patchPlivoSDK(PlivoClass?: any, instance?: any) {
         } catch {}
       }
     });
+
+    try {
+      const srDesc = Object.getOwnPropertyDescriptor(target, 'speechRecognition');
+      const existingSr =
+        srDesc && 'value' in srDesc
+          ? (srDesc.value as { abort?: () => void; __isPlivoShim?: boolean } | undefined)
+          : undefined;
+      if (existingSr && !existingSr.__isPlivoShim && typeof existingSr.abort === 'function') {
+        try {
+          existingSr.abort();
+        } catch {}
+      }
+      if (!srDesc || srDesc.configurable) {
+        Object.defineProperty(target, 'speechRecognition', {
+          get() {
+            const store = this as Record<string, unknown>;
+            if (!store._speechRecognition_shim) {
+              store._speechRecognition_shim = createSpeechRecognitionShim();
+            }
+            return store._speechRecognition_shim;
+          },
+          set(val: unknown) {
+            const candidate = val as { abort?: () => void; __isPlivoShim?: boolean } | null | undefined;
+            if (candidate && !candidate.__isPlivoShim && typeof candidate.abort === 'function') {
+              try {
+                candidate.abort();
+              } catch {}
+            }
+            const store = this as Record<string, unknown>;
+            store._speechRecognition_shim = candidate?.__isPlivoShim
+              ? candidate
+              : createSpeechRecognitionShim();
+          },
+          configurable: true,
+          enumerable: true,
+        });
+      } else {
+        target.speechRecognition = createSpeechRecognitionShim();
+      }
+    } catch {}
   });
 }

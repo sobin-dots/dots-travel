@@ -17,6 +17,7 @@ import { POST as answer } from '@/app/api/v1/webhooks/voice/answer/route';
 import { GET as endpoint } from '@/app/api/v1/telephony/endpoint/route';
 import { POST as presence } from '@/app/api/v1/telephony/presence/route';
 import { GET as organizationSettings } from '@/app/api/v1/settings/route';
+import { GET as intakeSettings } from '@/app/api/v1/lead-intake/route';
 
 const providerMock = vi.hoisted(() => ({ createEndpoint: vi.fn(), listEndpoints: vi.fn(), updateEndpoint: vi.fn() }));
 vi.mock('plivo', async original => {
@@ -274,5 +275,59 @@ suite('Itinerary alternatives, exports and inbound call routing', () => {
       await recordInboundAnswer({ organizationId: otherOrg.id, callUuid: call.plivoCallUuid, attempt: 0, completed: true });
       expect(await db.call.findUnique({ where: { id: call.id } })).toMatchObject({ status: 'ringing', endedAt: null });
     } finally { await db.organization.delete({ where: { id: otherOrg.id } }); }
+  });
+  it('recovers an expired unanswered ring only when its own browser reports ready, and ignores late retries', async () => {
+    await assignContact(); const { call } = await reserve();
+    await db.call.update({ where: { id: call.id }, data: { updatedAt: new Date(Date.now() - 120_000) } });
+    const staffToken = await signAccessToken({ organizationId, userId: users[1], email: 'sales@example.test', role: 'sales' });
+    const response = await presence(request('telephony/presence', { ready: true, busy: false }, 'POST', staffToken));
+    expect((await response.json()).readiness).toMatchObject({ canReceiveAssignedCalls: true, canReceiveNewCalls: true, busy: false });
+    const expired = await db.call.findUniqueOrThrow({ where: { id: call.id } });
+    expect(expired).toMatchObject({ status: 'missed', agentOutcome: 'missed', endedAt: null });
+    expect(callRoutingState(expired.requestedParams).browserReservationExpiredAt).toEqual(expect.any(String));
+    const next = await reserve(); expect(next.call.assignedToId).toBe(users[1]);
+    const late = await retryInboundCall({ organizationId, callUuid: call.plivoCallUuid, attempt: 0, outcome: 'missed' });
+    expect(late?.hangup).toBe(true); expect(late?.sipUri).toBeNull();
+    await recordInboundAnswer({ organizationId, callUuid: call.plivoCallUuid, attempt: 0 });
+    expect(await db.call.findUnique({ where: { id: call.id } })).toMatchObject({ status: 'completed', endedAt: expect.any(Date) });
+    expect((await db.membership.findFirstOrThrow({ where: { organizationId, userId: users[1] } })).voiceBusy).toBe(true);
+  });
+  it('never expires an answered browser call or a browser that reports busy', async () => {
+    const { call } = await reserve();
+    await db.call.update({ where: { id: call.id }, data: { updatedAt: new Date(Date.now() - 120_000) } });
+    const staffToken = await signAccessToken({ organizationId, userId: call.assignedToId!, email: 'sales@example.test', role: 'sales' });
+    await presence(request('telephony/presence', { ready: true, busy: true }, 'POST', staffToken));
+    expect(await db.call.findUnique({ where: { id: call.id } })).toMatchObject({ status: 'ringing', agentOutcome: 'ringing' });
+    await db.call.update({ where: { id: call.id }, data: { status: 'in-progress', agentOutcome: 'answered', agentAnsweredAt: new Date(), updatedAt: new Date(Date.now() - 120_000) } });
+    const response = await presence(request('telephony/presence', { ready: true, busy: false }, 'POST', staffToken));
+    expect((await response.json()).readiness).toMatchObject({ canReceiveAssignedCalls: false, busy: true });
+    expect(await db.call.findUnique({ where: { id: call.id } })).toMatchObject({ status: 'in-progress', endedAt: null });
+  });
+  it('does not expire another user reservation when a different phone sends a ready heartbeat', async () => {
+    const first = await reserve(); const second = await reserve();
+    for (const call of [first.call, second.call]) await db.call.update({ where: { id: call.id }, data: { updatedAt: new Date(Date.now() - 120_000) } });
+    const firstToken = await signAccessToken({ organizationId, userId: first.call.assignedToId!, email: 'sales@example.test', role: 'sales' });
+    await presence(request('telephony/presence', { ready: true, busy: false }, 'POST', firstToken));
+    expect(await db.call.findUnique({ where: { id: first.call.id } })).toMatchObject({ status: 'missed' });
+    expect(await db.call.findUnique({ where: { id: second.call.id } })).toMatchObject({ status: 'ringing' });
+    expect((await db.membership.findFirstOrThrow({ where: { organizationId, userId: second.call.assignedToId! } })).voiceBusy).toBe(true);
+  });
+  it('reports server-side phone eligibility and keeps endpoint credentials out of admin readiness responses', async () => {
+    await db.membership.updateMany({ where: { organizationId, userId: users[1] }, data: { receivesLeads: false } });
+    const staffToken = await signAccessToken({ organizationId, userId: users[1], email: 'sales@example.test', role: 'sales' });
+    const response = await presence(request('telephony/presence', { ready: true, busy: false }, 'POST', staffToken));
+    expect((await response.json()).readiness).toMatchObject({ canReceiveAssignedCalls: true, canReceiveNewCalls: false, reason: expect.stringContaining('assigned enquiries only') });
+    await db.membership.updateMany({ where: { organizationId, userId: users[1] }, data: { availableForLeads: false } });
+    const unavailable = await presence(request('telephony/presence', { ready: true, busy: false }, 'POST', staffToken));
+    expect((await unavailable.json()).readiness).toMatchObject({ canReceiveAssignedCalls: false, reason: expect.stringContaining('Available is switched off') });
+    const adminData = await (await intakeSettings(request('lead-intake'))).json();
+    expect(JSON.stringify(adminData)).not.toMatch(/voiceEndpoint|ciphertext|test-password/);
+    expect(adminData.members.find((m: any) => m.userId === users[1]).phoneReadiness.canReceiveAssignedCalls).toBe(false);
+  });
+  it('preserves the provider Dial failure reason for diagnosing a selected but non-ringing endpoint', async () => {
+    const { call } = await reserve();
+    await fallback(signed('fallback', { DialALegUUID: call.plivoCallUuid, DialStatus: 'failed', DialHangupCause: 'USER_NOT_REGISTERED' }, 0));
+    const saved = await db.call.findUniqueOrThrow({ where: { id: call.id } });
+    expect(saved.requestedParams).toMatchObject({ lastDialStatus: 'failed', lastDialHangupCause: 'USER_NOT_REGISTERED', initialRoutingReason: expect.stringContaining('Ringing'), routingReason: expect.stringContaining('voicemail') });
   });
 });

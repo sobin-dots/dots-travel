@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { encryptData } from '@/lib/crypto';
 import { providers } from '@/lib/lead-intake/normalize';
+import { phoneReadiness } from '@/lib/telephony/phone-readiness';
 
 export const runtime = 'nodejs';
 const connectionSchema = z.object({
@@ -24,11 +25,12 @@ export async function GET(req: NextRequest) {
   const [connections, submissions, members, organization, failedCount] = await Promise.all([
     db.leadConnection.findMany({ where: { organizationId }, select: { id: true, name: true, provider: true, enabled: true, formNames: true, lastReceivedAt: true }, orderBy: { createdAt: 'desc' } }),
     db.leadSubmission.findMany({ where: { organizationId }, select: { id: true, externalId: true, connectionId: true, status: true, attempts: true, error: true, leadId: true, createdAt: true }, orderBy: { createdAt: 'desc' }, take: 50 }),
-    db.membership.findMany({ where: { organizationId }, select: { id: true, userId: true, role: true, receivesLeads: true, availableForLeads: true, user: { select: { name: true, status: true } } } }),
+    db.membership.findMany({ where: { organizationId }, select: { id: true, userId: true, role: true, receivesLeads: true, availableForLeads: true, voiceBusy: true, voicePresenceAt: true, voiceEndpoint: true, user: { select: { name: true, status: true } } } }),
     db.organization.findUniqueOrThrow({ where: { id: organizationId }, select: { firstContactMinutes: true } }),
     db.leadSubmission.count({ where: { organizationId, status: 'failed' } }),
   ]);
-  return NextResponse.json({ connections, submissions, members, failedCount, ...organization, workerConfigured: !!process.env.LEAD_INTAKE_WORKER_SECRET, emailAlertsConfigured: !!process.env.RESEND_API_KEY && !!process.env.RESEND_FROM_EMAIL });
+  const publicMembers = members.map(({ voiceEndpoint, ...member }) => ({ ...member, phoneReadiness: phoneReadiness({ ...member, voiceEndpoint }) }));
+  return NextResponse.json({ connections, submissions, members: publicMembers, failedCount, ...organization, workerConfigured: !!process.env.LEAD_INTAKE_WORKER_SECRET, emailAlertsConfigured: !!process.env.RESEND_API_KEY && !!process.env.RESEND_FROM_EMAIL }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
 export async function POST(req: NextRequest) {

@@ -10,6 +10,7 @@ import { reserveInboundCall } from '@/lib/telephony/agent-routing';
 import { GET as listEnquiries, POST as addEnquiry } from '@/app/api/v1/enquiries/route';
 import { GET as readEnquiry, PATCH as updateEnquiry } from '@/app/api/v1/enquiries/[id]/route';
 import { GET as callDefaults, POST as convertCall } from '@/app/api/v1/calls/[id]/enquiry/route';
+import { GET as listCalls } from '@/app/api/v1/calls/route';
 
 const suite = process.env.LEAD_INTAKE_DATABASE_TESTS === '1' ? describe : describe.skip;
 
@@ -230,5 +231,84 @@ suite('Contact-centered enquiry ownership and call conversion', () => {
   it('denies viewer enquiry management', async () => {
     expect((await listEnquiries(request('enquiries', undefined, 3))).status).toBe(403);
     expect((await addEnquiry(request('enquiries', profile, 3))).status).toBe(403);
+  });
+
+  it('shows the current enquiry owner on linked and repeat calls without replacing their historical answering staff', async () => {
+    await db.user.update({ where: { id: userIds[1] }, data: { name: 'Arun Sales' } });
+    await db.user.update({ where: { id: userIds[2] }, data: { name: 'New Sales Owner' } });
+    const contact = await savedContact();
+    const converted = await savedCall({ enquiryContactId: contact.id, assignedToId: userIds[0] });
+    const repeat = await savedCall({ assignedToId: userIds[1] });
+
+    const initialResponse = await listCalls(request('calls'));
+    expect(initialResponse.status).toBe(200);
+    const initial = (await initialResponse.json()).objects;
+    for (const call of [converted, repeat]) {
+      expect(initial.find((row: any) => row.id === call.id).enquiry).toEqual({
+        id: contact.id, assignedTo: { id: userIds[1], name: 'Arun Sales' }, canOpen: true,
+      });
+    }
+    expect(initial.find((row: any) => row.id === converted.id).staffUser.id).toBe(userIds[0]);
+
+    expect((await patch(contact.id, { assignedToId: userIds[2] })).status).toBe(200);
+    const reassigned = (await (await listCalls(request('calls'))).json()).objects;
+    for (const call of [converted, repeat]) {
+      expect(reassigned.find((row: any) => row.id === call.id).enquiry).toEqual({
+        id: contact.id, assignedTo: { id: userIds[2], name: 'New Sales Owner' }, canOpen: true,
+      });
+      expect(reassigned.find((row: any) => row.id === call.id).staffUser.id).toBe(call.assignedToId);
+    }
+    expect(await db.call.findUnique({ where: { id: repeat.id } })).toMatchObject({ enquiryContactId: null, assignedToId: userIds[1] });
+  });
+
+  it('distinguishes an existing unassigned enquiry from an unknown caller and never matches the agency called number', async () => {
+    const contact = await savedContact({ assignedToId: null });
+    await db.contact.create({ data: { organizationId, name: 'Agency own number', phone: '+12025550999', assignedToId: userIds[1] } });
+    const known = await savedCall();
+    const unknown = await savedCall({ from: '+12025550124' });
+    const rows = (await (await listCalls(request('calls'))).json()).objects;
+    expect(rows.find((row: any) => row.id === known.id).enquiry).toEqual({ id: contact.id, assignedTo: null, canOpen: true });
+    expect(rows.find((row: any) => row.id === unknown.id).enquiry).toBeNull();
+  });
+
+  it('matches the full international customer phone in the correct direction, never a shared country-independent suffix', async () => {
+    const contact = await savedContact();
+    const agencyPhone = '+12025550999';
+    await db.contact.create({ data: { organizationId, name: 'Agency own number', phone: agencyPhone, assignedToId: userIds[2] } });
+    const formattedInbound = await savedCall({ from: '+1 (202) 555-0123' });
+    const outbound = await savedCall({ direction: 'outbound', from: agencyPhone, to: '12025550123' });
+    const otherCountry = await savedCall({ from: '+442025550123' });
+    const rows = (await (await listCalls(request('calls'))).json()).objects;
+    for (const call of [formattedInbound, outbound]) {
+      expect(rows.find((row: any) => row.id === call.id).enquiry).toMatchObject({ id: contact.id, assignedTo: { id: userIds[1] } });
+    }
+    expect(rows.find((row: any) => row.id === otherCountry.id).enquiry).toBeNull();
+  });
+
+  it('honours the explicit enquiry link after a phone change and never exposes a foreign-agency link', async () => {
+    const contact = await savedContact();
+    const linked = await savedCall({ enquiryContactId: contact.id });
+    await db.contact.update({ where: { id: contact.id }, data: { phone: '+12025550126' } });
+    await savedContact({ assignedToId: userIds[2] });
+    const foreign = await db.contact.create({ data: { organizationId: otherOrganizationId, name: 'Private foreign contact', phone: '+12025550127', assignedToId: userIds[2] } });
+    const foreignLinked = await savedCall({ from: '+12025550128', enquiryContactId: foreign.id });
+    const rows = (await (await listCalls(request('calls'))).json()).objects;
+    expect(rows.find((row: any) => row.id === linked.id).enquiry).toMatchObject({ id: contact.id, assignedTo: { id: userIds[1] } });
+    expect(rows.find((row: any) => row.id === foreignLinked.id).enquiry).toBeNull();
+    expect(JSON.stringify(rows)).not.toContain(foreign.name);
+  });
+
+  it('allows only the responsible salesperson or agency managers to open an enquiry from a call row', async () => {
+    const contact = await savedContact();
+    const call = await savedCall({ enquiryContactId: contact.id });
+    for (const [userIndex, canOpen] of [[0, true], [1, true], [2, false], [3, false]] as const) {
+      const response = await listCalls(request('calls', undefined, userIndex));
+      expect(response.status).toBe(200);
+      const row = (await response.json()).objects.find((entry: any) => entry.id === call.id);
+      expect(row.enquiry).toMatchObject({ id: contact.id, canOpen });
+    }
+    await db.membership.update({ where: { organizationId_userId: { organizationId, userId: userIds[2] } }, data: { role: 'admin' } });
+    const adminRows = (await (await listCalls(request('calls', undefined, 2))).json()).objects;
+    expect(adminRows.find((row: any) => row.id === call.id).enquiry.canOpen).toBe(true);
   });
 });

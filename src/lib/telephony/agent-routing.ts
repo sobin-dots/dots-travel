@@ -2,6 +2,7 @@ import { db } from '@/lib/db';
 import { Prisma, type Call, type Membership } from '@prisma/client';
 import { decryptData } from '@/lib/crypto';
 import { lockAgency } from '@/lib/lead-intake/service';
+import { phoneUnavailableReason } from './phone-readiness';
 
 export interface AgentEndpoint { username: string; password: string; sipUri: string; authId: string; endpointId: string; }
 export function decryptAgentEndpoint(value: unknown): AgentEndpoint {
@@ -16,6 +17,7 @@ export function callRoutingState(value: unknown) {
     responsibleUserId: typeof data.responsibleUserId === 'string' ? data.responsibleUserId : null,
     attemptedUserIds: Array.isArray(data.attemptedUserIds) ? data.attemptedUserIds.filter((id): id is string => typeof id === 'string') : [],
     dialAttempt: typeof data.dialAttempt === 'number' ? data.dialAttempt : 0,
+    browserReservationExpiredAt: typeof data.browserReservationExpiredAt === 'string' ? data.browserReservationExpiredAt : null,
   };
 }
 
@@ -82,10 +84,15 @@ export async function reserveInboundCall(input: { organizationId: string; callUu
       orderBy: [{ lastCallAssignedAt: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }],
     });
     const sipUri = await reserveAgent(tx, input.organizationId, agent);
+    const responsibleMember = responsibleUserId && !owner ? await tx.membership.findFirst({ where: { organizationId: input.organizationId, userId: responsibleUserId }, include: { user: { select: { status: true } } } }) : null;
+    const ownerUnavailableReason = responsibleUserId && !owner ? phoneUnavailableReason(responsibleMember) : null;
+    let routingReason = input.forwarded ? 'Number forwarding is configured' : owner ? 'Ringing the assigned enquiry owner' : sipUri ? 'Ringing an available salesperson in rotation' : 'No eligible staff browser was available';
+    if (ownerUnavailableReason) routingReason += `. Assigned owner: ${ownerUnavailableReason}`;
+    if (!agent && !input.forwarded) routingReason += '. Check Sales rotation availability, Receives leads for backups, browser phone readiness and active calls';
     const attemptedUserIds = [...new Set([responsibleUserId, agent?.userId].filter((id): id is string => !!id))];
     const call = await tx.call.create({ data: { organizationId: input.organizationId, phoneNumberId: input.phoneNumberId, plivoCallUuid: input.callUuid,
       from: input.from, to: input.to, direction: 'inbound', assignedToId: sipUri ? agent?.userId : null, status: sipUri || input.forwarded ? 'ringing' : 'missed',
-      agentOutcome: sipUri || input.forwarded ? 'ringing' : 'missed', requestedParams: { routedSip: sipUri, responsibleUserId, attemptedUserIds, dialAttempt: 0,
+      agentOutcome: sipUri || input.forwarded ? 'ringing' : 'missed', requestedParams: { routedSip: sipUri, responsibleUserId, attemptedUserIds, dialAttempt: 0, routingReason, initialRoutingReason: routingReason,
         route: input.forwarded ? 'forwarded' : owner ? 'assigned_contact' : sipUri ? 'round_robin' : 'no_available_agent' }, recordingEnabled: true, transcriptionEnabled: true } });
     return { call, sipUri };
   }, { timeout: 15_000 });
@@ -93,13 +100,13 @@ export async function reserveInboundCall(input: { organizationId: string; callUu
 
 // The organization lock serializes retries with new calls and presence updates.
 // A retry of an older Dial action returns the current reservation without advancing it.
-export async function retryInboundCall(input: { organizationId: string; callUuid: string; attempt: number; outcome: 'missed' | 'declined'; callerEnded?: boolean }) {
+export async function retryInboundCall(input: { organizationId: string; callUuid: string; attempt: number; outcome: 'missed' | 'declined'; callerEnded?: boolean; dialStatus?: string; hangupCause?: string }) {
   return db.$transaction(async tx => {
     await lockAgency(tx, input.organizationId);
     const call = await tx.call.findUnique({ where: { plivoCallUuid: input.callUuid } });
     if (!call || call.organizationId !== input.organizationId) return null;
     const state = callRoutingState(call.requestedParams);
-    if (call.endedAt || call.agentAnsweredAt || input.attempt > state.dialAttempt) return { call, sipUri: null, hangup: true };
+    if (call.endedAt || call.agentAnsweredAt || state.browserReservationExpiredAt || input.attempt > state.dialAttempt) return { call, sipUri: null, hangup: true };
     if (input.attempt < state.dialAttempt) return { call, sipUri: state.routedSip, hangup: false };
     if (input.callerEnded) {
       await tx.call.update({ where: { id: call.id }, data: { status: 'missed', agentOutcome: input.outcome, endedAt: new Date() } });
@@ -117,6 +124,8 @@ export async function retryInboundCall(input: { organizationId: string; callUuid
       ...(sipUri ? { assignedToId: next!.userId } : {}),
       status: sipUri ? 'ringing' : 'missed', agentOutcome: sipUri ? 'ringing' : input.outcome,
       requestedParams: { ...state, routedSip: sipUri, dialAttempt: state.dialAttempt + 1,
+        routingReason: sipUri ? 'Previous browser attempt did not connect; ringing an available backup in rotation' : 'No staff browser connected; voicemail offered',
+        lastDialStatus: input.dialStatus || input.outcome, lastDialHangupCause: input.hangupCause || null,
         attemptedUserIds: [...attempted, ...(next ? [next.userId] : [])], route: sipUri ? 'round_robin' : 'no_available_agent' },
     } });
     await releaseCallAgentInTransaction(tx, call);
@@ -129,9 +138,10 @@ export async function recordInboundAnswer(input: { organizationId: string; callU
     await lockAgency(tx, input.organizationId);
     const call = await tx.call.findUnique({ where: { plivoCallUuid: input.callUuid } });
     if (!call || call.organizationId !== input.organizationId || input.attempt !== callRoutingState(call.requestedParams).dialAttempt) return;
-    const endedAt = call.endedAt || (input.completed ? new Date() : null);
+    const endedAt = call.endedAt || (input.completed || callRoutingState(call.requestedParams).browserReservationExpiredAt ? new Date() : null);
     await tx.call.update({ where: { id: call.id }, data: { status: endedAt ? 'completed' : 'in-progress',
       agentOutcome: 'answered', agentAnsweredAt: call.agentAnsweredAt || new Date(), answeredAt: call.answeredAt || new Date(),
+      requestedParams: { ...callRoutingState(call.requestedParams), routingReason: endedAt ? 'Browser conversation completed' : 'Salesperson connected in the browser' },
       endedAt, ...(input.durationSeconds !== undefined ? { durationSeconds: input.durationSeconds } : {}) } });
     // Also release calls already marked completed by a status callback.
     if (endedAt) await releaseCallAgentInTransaction(tx, call);

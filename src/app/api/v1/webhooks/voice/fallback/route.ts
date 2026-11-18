@@ -109,7 +109,8 @@ async function handleFallbackOrDialAction(req: NextRequest) {
   } else {
     const outcome = /reject|declin|call_rejected/i.test(String(params.DialHangupCause || params.DialBLegHangupCauseName || dialStatus)) ? 'declined' : 'missed';
     const callerEnded = ['cancel', 'canceled', 'cancelled'].includes(dialStatus) && /ORIGINATOR_CANCEL/i.test(String(params.DialHangupCause || params.DialBLegHangupCauseName || ''));
-    const next = await retryInboundCall({ organizationId: effectiveOrgId, callUuid, attempt, outcome, callerEnded });
+    const next = await retryInboundCall({ organizationId: effectiveOrgId, callUuid, attempt, outcome, callerEnded,
+      dialStatus, hangupCause: String(params.DialHangupCause || params.DialBLegHangupCauseName || '') });
     if (!next || next.hangup) {
       builder.hangup();
     } else if (next.sipUri) {

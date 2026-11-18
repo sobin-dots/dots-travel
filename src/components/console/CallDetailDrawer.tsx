@@ -146,6 +146,14 @@ export function CallDetailDrawer() {
             <span className="text-zinc-500 block text-[10px]">Hangup Explanation</span>
             <span className="text-amber-400 font-medium">{selectedCallDetail.hangupExplanation}</span>
           </div>
+          {selectedCallDetail.direction === 'inbound' && <div className="space-y-2 border-t border-zinc-800 pt-3">
+            <div><span className="text-zinc-500 block text-[10px]">Browser call routing</span><span className="text-zinc-200">{
+              selectedCallDetail.requestedParams?.routingReason || ({ assigned_contact: 'Assigned enquiry owner selected', round_robin: 'Available salesperson selected in rotation', no_available_agent: 'No eligible staff browser was available', forwarded: 'Number forwarding configured' } as Record<string, string>)[selectedCallDetail.requestedParams?.route] || 'Routing details are unavailable for this older call'
+            }</span></div>
+            {selectedCallDetail.requestedParams?.initialRoutingReason && selectedCallDetail.requestedParams.initialRoutingReason !== selectedCallDetail.requestedParams.routingReason && <div><span className="text-zinc-500 block text-[10px]">Initial selection</span><span className="text-zinc-300">{selectedCallDetail.requestedParams.initialRoutingReason}</span></div>}
+            {selectedCallDetail.requestedParams?.lastDialStatus && <div><span className="text-zinc-500 block text-[10px]">Last unsuccessful browser attempt</span><span className="text-amber-300">{selectedCallDetail.requestedParams.lastDialStatus}{selectedCallDetail.requestedParams.lastDialHangupCause ? ` · ${selectedCallDetail.requestedParams.lastDialHangupCause}` : ''}</span></div>}
+            {selectedCallDetail.requestedParams?.browserReservationExpiredAt && <p className="text-amber-300">An unanswered browser reservation expired and was released after the browser reported ready.</p>}
+          </div>}
         </div>
 
         {/* Live Controls if Call is in-progress */}

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Loader2,
   Phone,
@@ -48,6 +48,27 @@ export default function CallsPage() {
   const [openingDetailId, setOpeningDetailId] = useState<string | null>(null);
   const [openingItineraryId, setOpeningItineraryId] = useState<string | null>(null);
   const [enquiryCallId, setEnquiryCallId] = useState<string | null>(null);
+  const [enquiryToEdit, setEnquiryToEdit] = useState<Record<string, any> | null>(null);
+  const [openingEnquiryId, setOpeningEnquiryId] = useState<string | null>(null);
+  const [enquiryError, setEnquiryError] = useState('');
+  const activeOrgRef = useRef(currentOrg?.id);
+  activeOrgRef.current = currentOrg?.id;
+
+  useEffect(() => { setEnquiryToEdit(null); setEnquiryCallId(null); setEnquiryError(''); }, [currentOrg?.id]);
+
+  async function openEnquiry(contactId: string) {
+    const orgId = currentOrg?.id;
+    setOpeningEnquiryId(contactId); setEnquiryError('');
+    try {
+      const response = await authFetch(`/api/v1/enquiries/${contactId}`);
+      const data = await response.json();
+      if (activeOrgRef.current !== orgId) return;
+      if (!response.ok || !data.contact) throw new Error(data.error || 'Could not open the enquiry');
+      setEnquiryToEdit(data.contact);
+    } catch (error) {
+      if (activeOrgRef.current === orgId) setEnquiryError(error instanceof Error ? error.message : 'Could not open the enquiry');
+    } finally { if (activeOrgRef.current === orgId) setOpeningEnquiryId(null); }
+  }
 
   // Filter & Pagination state
   const [searchQuery, setSearchQuery] = useState('');
@@ -188,6 +209,7 @@ export default function CallsPage() {
 
   return (
     <div className="space-y-5 max-w-6xl">
+      {enquiryError && <p role="alert" className="rounded-lg border border-red-800/50 bg-red-950/30 p-3 text-sm text-red-300">{enquiryError}</p>}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">Call Logs & Live Control</h2>
@@ -507,7 +529,18 @@ export default function CallsPage() {
                         </div>
                       </td>
                       <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
-                        {currentOrg && currentOrg.role !== 'viewer' && (
+                        {call.enquiry ? (
+                          <button
+                            type="button"
+                            disabled={!call.enquiry.canOpen || openingEnquiryId === call.enquiry.id}
+                            onClick={() => void openEnquiry(call.enquiry.id)}
+                            className="text-xs bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 inline-flex items-center gap-1 disabled:cursor-default disabled:hover:bg-emerald-600/10 transition"
+                            title={call.enquiry.canOpen ? 'Open the existing enquiry' : 'This enquiry is handled by another staff member or is read-only for your role'}
+                          >
+                            {openingEnquiryId === call.enquiry.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <BookUser className="w-3 h-3" />}
+                            <span>{call.enquiry.assignedTo ? `${call.enquiry.assignedTo.name || 'Assigned staff'} is handling` : 'Enquiry unassigned'}</span>
+                          </button>
+                        ) : currentOrg && currentOrg.role !== 'viewer' && (
                           <button
                             type="button"
                             onClick={() => setEnquiryCallId(call.id)}
@@ -662,6 +695,14 @@ export default function CallsPage() {
             setEnquiryCallId(null);
             void fetchFilteredCalls();
           }}
+        />
+      )}
+      {enquiryToEdit && (
+        <EnquiryFormModal
+          key={enquiryToEdit.id}
+          contact={enquiryToEdit}
+          onClose={() => setEnquiryToEdit(null)}
+          onSaved={() => { setEnquiryToEdit(null); void fetchFilteredCalls(); }}
         />
       )}
     </div>
