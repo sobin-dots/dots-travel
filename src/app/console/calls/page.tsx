@@ -16,9 +16,11 @@ import {
   Clock,
   X,
   BookUser,
+  PhoneCall,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { EnquiryFormModal } from '@/components/console/EnquiryFormModal';
+import { getCallbackPhone, isMissedOrUnansweredCall } from '@/lib/telephony/call-callback';
 
 type DatePreset = 'all' | 'today' | 'yesterday' | '7d' | '30d' | 'custom';
 
@@ -35,6 +37,7 @@ export default function CallsPage() {
     bearerToken,
     currentOrg,
     setShowCallModal,
+    openCallbackModal,
     authFetch,
     setSelectedCallDetail,
     refreshCallDetail,
@@ -144,13 +147,14 @@ export default function CallsPage() {
     setPage(1);
   };
 
-  const fetchFilteredCalls = useCallback(async () => {
+  const fetchFilteredCalls = useCallback(async (forceSync = false) => {
     if (!bearerToken) return;
     setFetchingCalls(true);
     try {
       const params = new URLSearchParams();
       params.set('limit', String(pageSize));
       params.set('offset', String((page - 1) * pageSize));
+      if (forceSync) params.set('sync', '1');
 
       if (debouncedSearch) params.set('search', debouncedSearch);
       if (selectedContactPhone) params.set('contactPhone', selectedContactPhone);
@@ -220,7 +224,7 @@ export default function CallsPage() {
         <div className="flex items-center gap-2 self-start sm:self-auto">
           <button
             type="button"
-            onClick={() => fetchFilteredCalls()}
+            onClick={() => fetchFilteredCalls(true)}
             disabled={fetchingCalls}
             className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5 border border-zinc-700 transition cursor-pointer disabled:opacity-50"
             title="Refresh call logs"
@@ -465,6 +469,15 @@ export default function CallsPage() {
                         hour12: true,
                       })
                     : '';
+                  const callbackPhone = getCallbackPhone(call);
+                  const isMissedCall = isMissedOrUnansweredCall(call);
+                  const showCallBack = Boolean(
+                    currentOrg &&
+                    currentOrg.role !== 'viewer' &&
+                    callbackPhone &&
+                    call.status !== 'in-progress' &&
+                    (isMissedCall || call.direction === 'inbound')
+                  );
 
                   return (
                     <tr key={call.id} className="hover:bg-zinc-800/30 transition">
@@ -529,6 +542,21 @@ export default function CallsPage() {
                         </div>
                       </td>
                       <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
+                        {showCallBack && (
+                          <button
+                            type="button"
+                            onClick={() => openCallbackModal(call)}
+                            className={`text-xs px-2.5 py-1 rounded border inline-flex items-center gap-1 cursor-pointer transition ${
+                              isMissedCall
+                                ? 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border-amber-500/35'
+                                : 'bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-300 border-emerald-500/30'
+                            }`}
+                            title={`Call back ${callbackPhone}`}
+                          >
+                            <PhoneCall className="w-3 h-3" />
+                            <span>Call Back</span>
+                          </button>
+                        )}
                         {call.enquiry ? (
                           <button
                             type="button"

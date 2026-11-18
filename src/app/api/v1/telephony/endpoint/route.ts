@@ -10,27 +10,34 @@ import { decryptAgentEndpoint, type AgentEndpoint } from '@/lib/telephony/agent-
 export const runtime = 'nodejs';
 export async function GET(req: NextRequest) {
   const { auth, errorResponse } = await authenticateRequest(req, 'operator'); if (errorResponse) return errorResponse;
+  const forceRefresh = ['1', 'true'].includes(req.nextUrl.searchParams.get('refresh') || '');
   const integration = await getTenantIntegration(auth!.organizationId, 'plivo');
   const { authId, authToken } = integration?.credentials || {};
   if (!authId || !authToken) return NextResponse.json({ error: 'Configure Plivo in Settings → Platform & BYOK first.' }, { status: 400 });
   try {
     const member = await db.membership.findUniqueOrThrow({ where: { organizationId_userId: { organizationId: auth!.organizationId, userId: auth!.userId } } });
-    let endpoint = member.voiceEndpoint ? decryptAgentEndpoint(member.voiceEndpoint) : null;
+    let endpoint = !forceRefresh && member.voiceEndpoint ? decryptAgentEndpoint(member.voiceEndpoint) : null;
     if (endpoint?.authId !== authId) endpoint = null;
     if (!endpoint) {
       endpoint = await db.$transaction(async tx => {
         await tx.$queryRaw`SELECT id FROM memberships WHERE id = ${member.id} FOR UPDATE`;
         const locked = await tx.membership.findUniqueOrThrow({ where: { id: member.id } });
-        if (locked.voiceEndpoint) { const saved = decryptAgentEndpoint(locked.voiceEndpoint); if (saved.authId === authId) return saved; }
+        if (!forceRefresh && locked.voiceEndpoint) { const saved = decryptAgentEndpoint(locked.voiceEndpoint); if (saved.authId === authId) return saved; }
         const client = new (plivo as any).Client(authId, authToken);
         const identity = createHash('sha256').update(`${auth!.organizationId}:${auth!.userId}`).digest('hex').slice(0, 16);
         const password = `P${randomBytes(12).toString('hex')}9a`;
         const applications = await client.applications.list();
-        const appId = integration?.credentials?.appId || applications.find((a: any) => a.appId === integration?.metadata?.applicationId)?.appId || applications.find((a: any) => a.defaultEndpointApp)?.appId;
+        const appId = integration?.credentials?.appId || applications.find((a: any) => a.appId === integration?.metadata?.applicationId)?.appId || applications.find((a: any) => a.defaultEndpointApp)?.appId || applications[0]?.appId;
         if (!appId) throw new Error('Set a Plivo application for browser endpoints before receiving calls.');
         const alias = `Agent-${identity}`;
-        const existingEndpoints = await client.endpoints.list();
-        const recovered = existingEndpoints.find((e: any) => e.alias === alias);
+        const expectedPrefix = `a${identity}`;
+        let recovered: { username?: string; endpointId?: string; id?: string; sipUri?: string; alias?: string } | null = null;
+        for (let offset = 0; offset < 200; offset += 20) {
+          const page = await client.endpoints.list({ limit: 20, offset });
+          if (!Array.isArray(page) || page.length === 0) break;
+          recovered = page.find((e: { alias?: string; username?: string }) => e.alias === alias || e.username === expectedPrefix) || null;
+          if (recovered || page.length < 20) break;
+        }
         let created;
         if (recovered) {
           await client.endpoints.update(recovered.endpointId || recovered.id, { password, appId });

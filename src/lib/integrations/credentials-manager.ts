@@ -225,6 +225,51 @@ export function buildOrgWebhookUrls(baseUrl: string, organizationId: string) {
 }
 
 /**
+ * Returns true when the URL points to a local development host rather than a public webhook origin.
+ */
+export function isLocalWebhookBase(url?: string | null): boolean {
+  const normalized = (url || '').trim();
+  if (!normalized) return true;
+  return (
+    /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i.test(normalized) ||
+    normalized.includes('localhost')
+  );
+}
+
+/**
+ * Resolves the effective public webhook base and per-endpoint URLs for an organization.
+ * Non-local live request origins always override stale DB-persisted webhook URLs (e.g. old ngrok URLs).
+ */
+export function resolveOrgWebhookUrls(
+  organizationId: string,
+  requestBaseUrl?: string | null,
+  metadata?: Record<string, unknown> | null
+) {
+  const cleanRequestBase = (requestBaseUrl || '').trim().replace(/\/+$/, '');
+  const cleanMetaBase =
+    typeof metadata?.webhookBaseUrl === 'string'
+      ? metadata.webhookBaseUrl.trim().replace(/\/+$/, '')
+      : '';
+  const isRequestLocal = isLocalWebhookBase(cleanRequestBase);
+  const effectiveBaseUrl =
+    (!isRequestLocal ? cleanRequestBase : cleanMetaBase) || cleanRequestBase || 'http://localhost:3000';
+
+  const storedUrls = metadata?.webhookUrls as Record<string, string> | undefined;
+  const useStoredUrls =
+    isRequestLocal &&
+    storedUrls &&
+    typeof storedUrls.voiceAnswer === 'string' &&
+    storedUrls.voiceAnswer.includes(organizationId) &&
+    typeof storedUrls.voiceFallback === 'string' &&
+    storedUrls.voiceFallback.includes(organizationId);
+
+  return {
+    effectiveBaseUrl,
+    webhookUrls: useStoredUrls ? storedUrls : buildOrgWebhookUrls(effectiveBaseUrl, organizationId),
+  };
+}
+
+/**
  * Resolves a tenant's DB-stored Plivo integration by organizationId, Plivo ParentAuthID, or called phone number.
  * Never reads from environment variables.
  */
@@ -397,9 +442,9 @@ export async function saveTenantIntegration(
 
       const webhookUrls = mergedMetadata.webhookUrls;
       const isPublicHttps =
-        mergedMetadata.webhookBaseUrl &&
+        Boolean(mergedMetadata.webhookBaseUrl) &&
         mergedMetadata.webhookBaseUrl.startsWith('https://') &&
-        !mergedMetadata.webhookBaseUrl.includes('localhost');
+        !isLocalWebhookBase(mergedMetadata.webhookBaseUrl);
 
       if (app && isPublicHttps && webhookUrls) {
         try {
@@ -420,23 +465,24 @@ export async function saveTenantIntegration(
         credentials.appId = String(app.appId);
       }
 
-      // Sync or provision WebRTC SIP Endpoint
+      // Sync or provision fallback org WebRTC SIP Endpoint without overwriting per-member agent passwords
       const endpoints = await client.endpoints.list();
+      const cleanAuthId = String(credentials.authId).replace(/[^a-zA-Z0-9]/g, '').slice(-4).toLowerCase() || 'agent';
+      const cleanOrg = organizationId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase() || 'line';
+      const orgAlias = `Agent-${cleanOrg}`;
       let endpoint =
-        endpoints.find((e: any) => credentials.endpointUsername && e.username === credentials.endpointUsername) ||
-        endpoints[0];
+        endpoints.find((e: { username?: string; alias?: string }) => credentials.endpointUsername && e.username === credentials.endpointUsername) ||
+        endpoints.find((e: { username?: string; alias?: string }) => e.alias === orgAlias);
 
       if (!endpoint) {
-        const cleanAuthId = String(credentials.authId).replace(/[^a-zA-Z0-9]/g, '').slice(-4).toLowerCase() || 'agent';
-        const cleanOrg = organizationId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase() || 'line';
         const username = `agent${cleanOrg}${cleanAuthId}`;
         try {
-          endpoint = await client.endpoints.create(username, endpointPassword, `Agent-${cleanOrg}`, app?.appId);
+          endpoint = await client.endpoints.create(username, endpointPassword, orgAlias, app?.appId);
         } catch (epCreateErr) {
           console.warn('[CredentialsManager] Plivo endpoint auto-create notice:', epCreateErr);
         }
       } else if (endpoint.endpointId) {
-        // Ensure the endpoint password and appId on Plivo match our stored endpointPassword so WebRTC SIP login always succeeds
+        // Only sync password/appId on this matched org/credential endpoint so staff endpoints stay intact
         try {
           await client.endpoints.update(endpoint.endpointId, {
             password: endpointPassword,
@@ -660,18 +706,14 @@ export async function getTenantIntegrationsSummary(organizationId: string, reque
 
   const plivoRow = rows.find((r) => r.provider === 'plivo');
   const plivoMeta = (plivoRow?.metadata as Record<string, any>) || {};
-  const dbBaseUrl = plivoMeta.webhookBaseUrl as string | undefined;
+  const { effectiveBaseUrl: effectiveBase, webhookUrls } = resolveOrgWebhookUrls(
+    organizationId,
+    requestBaseUrl,
+    plivoMeta
+  );
 
-  const effectiveBase = (
-    requestBaseUrl ||
-    dbBaseUrl ||
-    'http://localhost:3000'
-  ).trim().replace(/\/+$/, '');
-
-  const webhookUrls = buildOrgWebhookUrls(effectiveBase, organizationId);
-
-  // If Plivo row exists in DB and doesn't yet have webhookUrls persisted for this base, persist it in DB
-  if (plivoRow && (!plivoMeta.webhookUrls || (requestBaseUrl && !requestBaseUrl.includes('localhost') && plivoMeta.webhookBaseUrl !== effectiveBase))) {
+  // If Plivo row exists in DB and doesn't yet have webhookUrls persisted for this public base, persist it in DB
+  if (plivoRow && (!plivoMeta.webhookUrls || (requestBaseUrl && !isLocalWebhookBase(requestBaseUrl) && plivoMeta.webhookBaseUrl !== effectiveBase))) {
     try {
       await db.tenantIntegration.update({
         where: { id: plivoRow.id },
@@ -690,8 +732,6 @@ export async function getTenantIntegrationsSummary(organizationId: string, reque
     organizationId,
     primaryTelephonyProvider: org?.primaryTelephonyProvider || 'plivo',
     integrations: rows,
-    webhookUrls: (plivoMeta.webhookUrls && (!requestBaseUrl || requestBaseUrl.includes('localhost')))
-      ? plivoMeta.webhookUrls
-      : webhookUrls,
+    webhookUrls,
   };
 }

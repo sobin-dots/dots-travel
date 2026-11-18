@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { processIncomingWebhook } from '@/lib/webhook-helper';
+import { processIncomingWebhook, resolveRequestBaseUrl } from '@/lib/webhook-helper';
 import { PlivoXmlBuilder } from '@/lib/telephony/xml/builder';
 import { callRoutingState, dialAttemptUrl, reserveInboundCall } from '@/lib/telephony/agent-routing';
 import {
   resolveTenantPlivoIntegration,
-  buildOrgWebhookUrls,
+  resolveOrgWebhookUrls,
 } from '@/lib/integrations/credentials-manager';
 
 export const runtime = 'nodejs';
@@ -25,11 +25,7 @@ export async function handleAnswer(req: NextRequest) {
   const forwardTo = urlObj.searchParams.get('forwardTo') || params.forwardTo;
   const connectTo = urlObj.searchParams.get('connectTo') || params.connectTo;
 
-  const requestBase = `${req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http')}://${
-    req.headers.get('x-forwarded-host') || req.headers.get('host') || urlObj.host
-  }`
-    .trim()
-    .replace(/\/+$/, '');
+  const requestBase = resolveRequestBaseUrl(req, urlObj.host);
 
   const queryOrgId = urlObj.searchParams.get('orgId') || params.orgId;
   const destinationNumber = params.To || params.to;
@@ -82,19 +78,12 @@ export async function handleAnswer(req: NextRequest) {
   const plivoCreds = tenantPlivo?.integration?.credentials || {};
   const plivoMeta = tenantPlivo?.integration?.metadata || {};
 
-  // Use DB-stored webhook URLs generated in Settings -> Platform & BYOK (falling back to request origin if not yet saved)
-  const effectiveBaseUrl = (
-    (!requestBase.includes('localhost') ? requestBase : plivoMeta.webhookBaseUrl) ||
-    requestBase
-  )
-    .trim()
-    .replace(/\/+$/, '');
-
-  const orgWebhookUrls = effectiveOrgId
-    ? plivoMeta.webhookUrls && plivoMeta.webhookUrls.voiceRecord?.includes(effectiveOrgId)
-      ? plivoMeta.webhookUrls
-      : buildOrgWebhookUrls(effectiveBaseUrl, effectiveOrgId)
+  // Resolve live request origin over stale DB webhook URLs (e.g. old local/ngrok tunnels)
+  const resolved = effectiveOrgId
+    ? resolveOrgWebhookUrls(effectiveOrgId, requestBase, plivoMeta)
     : null;
+  const effectiveBaseUrl = resolved?.effectiveBaseUrl || requestBase.trim().replace(/\/+$/, '');
+  const orgWebhookUrls = resolved?.webhookUrls || null;
 
   const recordActionUrl =
     orgWebhookUrls?.voiceRecord ||
@@ -109,7 +98,7 @@ export async function handleAnswer(req: NextRequest) {
 
   const isSipEndpointCall = Boolean(
     rawFrom.startsWith('sip:') ||
-      rawFrom.includes('agent') ||
+      /^(?:agent_|a[0-9a-f]{16})/i.test(rawFrom) ||
       params.Direction === 'outbound' ||
       params.direction === 'outbound' ||
       params.CallDirection === 'outbound' ||
@@ -242,6 +231,7 @@ export async function handleAnswer(req: NextRequest) {
             callerId: callerPhone,
             timeLimit: 3600,
             timeout: 25,
+            dialMusic: 'real',
             action: dialAttemptUrl(dialActionUrl, callRoutingState(reservation.call.requestedParams).dialAttempt),
             method: 'POST',
             redirect: true,

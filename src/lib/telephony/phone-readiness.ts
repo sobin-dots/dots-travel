@@ -17,7 +17,19 @@ export function phoneUnavailableReason(member: PhoneMember | null, requireRotati
 
 export function phoneReadiness(member: PhoneMember) {
   const reason = phoneUnavailableReason(member);
-  return { canReceiveAssignedCalls: !reason, canReceiveNewCalls: !reason && member.receivesLeads,
-    reason: reason || (member.receivesLeads ? 'Ready for incoming calls' : 'Ready for assigned enquiries only; Receives leads is switched off'),
-    available: member.availableForLeads, receivesLeads: member.receivesLeads, busy: member.voiceBusy };
+  const canReceiveRotationCalls = member.receivesLeads || member.role === 'owner' || member.role === 'admin';
+  return {
+    canReceiveAssignedCalls: !reason,
+    canReceiveNewCalls: !reason && canReceiveRotationCalls,
+    reason:
+      reason ||
+      (member.receivesLeads
+        ? 'Ready for incoming calls'
+        : member.role === 'owner' || member.role === 'admin'
+        ? 'Ready for incoming calls (all-role backup rotation)'
+        : 'Ready for assigned enquiries only; Receives leads is switched off'),
+    available: member.availableForLeads,
+    receivesLeads: member.receivesLeads,
+    busy: member.voiceBusy,
+  };
 }

@@ -1,15 +1,17 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { db } from '@/lib/db';
 import { encryptData } from '@/lib/crypto';
 import { signAccessToken } from '@/lib/auth-tokens';
 import { reserveInboundCall, releaseCallAgent, inboundFinalStatus, callRoutingState, retryInboundCall, recordInboundAnswer } from '@/lib/telephony/agent-routing';
 import { computeV3Signature } from '@/lib/telephony/webhook-validator';
+import { GET as getCallDetail } from '@/app/api/v1/calls/[id]/route';
+import { GET as listCalls } from '@/app/api/v1/calls/route';
 import { POST as generate, GET as listOptions } from '@/app/api/v1/leads/[id]/options/route';
 import { PATCH as changeOption } from '@/app/api/v1/leads/[id]/options/[optionId]/route';
 import { GET as download } from '@/app/api/v1/leads/[id]/export/route';
-import { POST as hangup } from '@/app/api/v1/webhooks/voice/hangup/route';
+import { GET as getHangup, POST as hangup } from '@/app/api/v1/webhooks/voice/hangup/route';
 import { POST as dial } from '@/app/api/v1/webhooks/voice/dial/route';
 import { POST as ringStatus } from '@/app/api/v1/webhooks/voice/status/route';
 import { POST as fallback } from '@/app/api/v1/webhooks/voice/fallback/route';
@@ -19,10 +21,10 @@ import { POST as presence } from '@/app/api/v1/telephony/presence/route';
 import { GET as organizationSettings } from '@/app/api/v1/settings/route';
 import { GET as intakeSettings } from '@/app/api/v1/lead-intake/route';
 
-const providerMock = vi.hoisted(() => ({ createEndpoint: vi.fn(), listEndpoints: vi.fn(), updateEndpoint: vi.fn() }));
+const providerMock = vi.hoisted(() => ({ createEndpoint: vi.fn(), listEndpoints: vi.fn(), updateEndpoint: vi.fn(), getCall: vi.fn(), listCalls: vi.fn() }));
 vi.mock('plivo', async original => {
   const actual = await original<typeof import('plivo')>();
-  return { ...actual, default: actual, Client: class { applications = { list: async () => [{ appId: 'test-app', defaultEndpointApp: true }] }; endpoints = { create: providerMock.createEndpoint, list: providerMock.listEndpoints, update: providerMock.updateEndpoint }; } };
+  return { ...actual, default: actual, Client: class { applications = { list: async () => [{ appId: 'test-app', defaultEndpointApp: true }] }; endpoints = { create: providerMock.createEndpoint, list: providerMock.listEndpoints, update: providerMock.updateEndpoint }; calls = { get: providerMock.getCall, list: providerMock.listCalls }; recordings = { list: async () => [] }; } };
 });
 
 vi.mock('@/lib/deepseek', () => ({ generateBudgetItineraryOption: vi.fn(), reviseItineraryWithDeepSeek: vi.fn() }));
@@ -59,6 +61,7 @@ suite('Itinerary alternatives, exports and inbound call routing', () => {
     vi.mocked(generateBudgetItineraryOption).mockImplementation(async input => `${itinerary}\nNotes: Alternative budget ${input.budget}`);
     vi.mocked(reviseItineraryWithDeepSeek).mockResolvedValue(`${itinerary}\nNotes: RevisedAlternative`);
     providerMock.listEndpoints.mockResolvedValue([]);
+    providerMock.listCalls.mockResolvedValue([]);
     providerMock.createEndpoint.mockImplementation(async (username: string) => ({ username: `${username}123`, endpointId: randomUUID() }));
   });
   afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); await db.organization.delete({ where: { id: organizationId } }); await db.user.deleteMany({ where: { id: { in: users } } }); });
@@ -143,6 +146,7 @@ suite('Itinerary alternatives, exports and inbound call routing', () => {
     expect(await db.call.findUnique({ where: { id: call.id } })).toMatchObject({ status: 'completed', agentOutcome: 'answered', agentAnsweredAt: expect.any(Date) });
   });
   it('classifies a rejected call as missed and does not overwrite it with provider completion', async () => {
+    await db.membership.updateMany({ where: { organizationId, userId: users[2] }, data: { voicePresenceAt: new Date(Date.now() - 120_000) } });
     const { call } = await reserve();
     const response = await fallback(signed('fallback', { CallUUID: call.plivoCallUuid, DialALegUUID: call.plivoCallUuid, DialStatus: 'no-answer', DialHangupCause: 'CALL_REJECTED' }));
     expect(response.status).toBe(200); expect(await response.text()).toContain('<Record');
@@ -327,7 +331,369 @@ suite('Itinerary alternatives, exports and inbound call routing', () => {
   it('preserves the provider Dial failure reason for diagnosing a selected but non-ringing endpoint', async () => {
     const { call } = await reserve();
     await fallback(signed('fallback', { DialALegUUID: call.plivoCallUuid, DialStatus: 'failed', DialHangupCause: 'USER_NOT_REGISTERED' }, 0));
+    const retried = await db.call.findUniqueOrThrow({ where: { id: call.id } });
+    expect(retried.requestedParams).toMatchObject({ lastDialStatus: 'failed', lastDialHangupCause: 'USER_NOT_REGISTERED', initialRoutingReason: expect.stringContaining('Ringing'), routingReason: expect.stringContaining('backup in rotation') });
+    await fallback(signed('fallback', { DialALegUUID: call.plivoCallUuid, DialStatus: 'failed', DialHangupCause: 'USER_NOT_REGISTERED' }, 1));
     const saved = await db.call.findUniqueOrThrow({ where: { id: call.id } });
-    expect(saved.requestedParams).toMatchObject({ lastDialStatus: 'failed', lastDialHangupCause: 'USER_NOT_REGISTERED', initialRoutingReason: expect.stringContaining('Ringing'), routingReason: expect.stringContaining('voicemail') });
+    expect(saved.requestedParams).toMatchObject({ lastDialStatus: 'failed', lastDialHangupCause: 'USER_NOT_REGISTERED', routingReason: expect.stringContaining('voicemail') });
+  });
+  it('prefers live HTTPS request origin over stale ngrok webhookUrls in answer and fallback XML', async () => {
+    const encrypted = encryptData(JSON.stringify({ authId: 'test-auth', authToken: webhookToken, appId: 'test-app' }));
+    await db.tenantIntegration.create({
+      data: {
+        organizationId,
+        provider: 'plivo',
+        category: 'telephony',
+        credentialsEncrypted: encrypted.ciphertext,
+        encIv: encrypted.iv,
+        encAuthTag: encrypted.authTag,
+        metadata: {
+          webhookBaseUrl: 'https://stale-tunnel.ngrok-free.dev',
+          webhookUrls: {
+            voiceAnswer: `https://stale-tunnel.ngrok-free.dev/api/v1/webhooks/voice/answer?orgId=${organizationId}`,
+            voiceFallback: `https://stale-tunnel.ngrok-free.dev/api/v1/webhooks/voice/fallback?orgId=${organizationId}`,
+            voiceRecord: `https://stale-tunnel.ngrok-free.dev/api/v1/webhooks/voice/record?orgId=${organizationId}`,
+          },
+        },
+      },
+    });
+
+    const signedPublic = (route: string, body: Record<string, string>, attempt?: number) => {
+      const url = `https://ta.zowiz.ai/api/v1/webhooks/voice/${route}?orgId=${organizationId}${attempt === undefined ? '' : `&attempt=${attempt}`}`;
+      const nonce = randomUUID();
+      return new NextRequest(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'x-forwarded-proto': 'https',
+          'x-forwarded-host': 'ta.zowiz.ai',
+          'X-Plivo-Signature-V3-Nonce': nonce,
+          'X-Plivo-Signature-V3': computeV3Signature('POST', url, nonce, webhookToken, body),
+        },
+        body: new URLSearchParams(body),
+      });
+    };
+
+    const callUuid = randomUUID();
+    const answerRes = await answer(signedPublic('answer', { CallUUID: callUuid, From: '+919876543210', To: '+918065493333', Direction: 'inbound' }));
+    expect(answerRes.status).toBe(200);
+    const answerXml = await answerRes.text();
+    expect(answerXml).toContain(`https://ta.zowiz.ai/api/v1/webhooks/voice/fallback?orgId=${organizationId}&amp;attempt=0`);
+    expect(answerXml).toContain(`https://ta.zowiz.ai/api/v1/webhooks/voice/record?orgId=${organizationId}`);
+    expect(answerXml).not.toContain('stale-tunnel.ngrok-free.dev');
+
+    const fallbackRes = await fallback(signedPublic('fallback', { CallUUID: callUuid, DialALegUUID: callUuid, DialStatus: 'no-answer', DialHangupCause: 'NO_ANSWER' }, 0));
+    expect(fallbackRes.status).toBe(200);
+    const fallbackXml = await fallbackRes.text();
+    expect(fallbackXml).toContain('https://ta.zowiz.ai/api/v1/webhooks/voice/');
+    expect(fallbackXml).not.toContain('stale-tunnel.ngrok-free.dev');
+  });
+  it('handles non-numeric HangupCause values without crashing or leaving calls stuck ringing', async () => {
+    const { call } = await reserve();
+    const res = await hangup(signed('hangup', { CallUUID: call.plivoCallUuid, HangupCause: 'INSUFFICIENT_CREDITS', Duration: '0' }));
+    expect(res.status).toBe(200);
+    expect(await db.call.findUnique({ where: { id: call.id } })).toMatchObject({
+      status: 'missed',
+      agentOutcome: 'missed',
+      hangupCauseCode: null,
+      hangupCauseName: 'INSUFFICIENT_CREDITS',
+      endedAt: expect.any(Date),
+    });
+    expect((await db.membership.findFirstOrThrow({ where: { organizationId, userId: call.assignedToId! } })).voiceBusy).toBe(false);
+  });
+  it('syncs stuck ringing call status and India media anchoring explanation from Plivo on call detail fetch', async () => {
+    const encrypted = encryptData(JSON.stringify({ authId: 'test-auth', authToken: webhookToken, appId: 'test-app' }));
+    await db.tenantIntegration.create({
+      data: {
+        organizationId,
+        provider: 'plivo',
+        category: 'telephony',
+        credentialsEncrypted: encrypted.ciphertext,
+        encIv: encrypted.iv,
+        encAuthTag: encrypted.authTag,
+      },
+    });
+    const { call } = await reserve();
+    providerMock.getCall.mockResolvedValueOnce({
+      callUuid: call.plivoCallUuid,
+      callState: 'failed',
+      hangupCauseCode: 4590,
+      hangupCauseName: 'VIOLATES_MEDIA_ANCHORING',
+      callDuration: 0,
+      billDuration: 0,
+      totalAmount: '0.00000',
+      endTime: new Date().toISOString(),
+    });
+    const detailRes = await getCallDetail(request(`calls/${call.id}`), { params: Promise.resolve({ id: call.id }) });
+    expect(detailRes.status).toBe(200);
+    const detailJson = await detailRes.json();
+    expect(detailJson.call).toMatchObject({
+      status: 'missed',
+      hangupCauseCode: 4590,
+      hangupCauseName: 'VIOLATES_MEDIA_ANCHORING',
+      hangupExplanation: expect.stringContaining('India Media Anchoring'),
+    });
+    expect((await db.membership.findFirstOrThrow({ where: { organizationId, userId: call.assignedToId! } })).voiceBusy).toBe(false);
+  });
+  it('paginates Plivo endpoints when recovering an existing agent endpoint beyond page 1', async () => {
+    const encrypted = encryptData(JSON.stringify({ authId: 'test-auth', authToken: 'test-token', appId: 'test-app' }));
+    await db.tenantIntegration.create({
+      data: { organizationId, provider: 'plivo', category: 'telephony', credentialsEncrypted: encrypted.ciphertext, encIv: encrypted.iv, encAuthTag: encrypted.authTag },
+    });
+    await db.membership.updateMany({ where: { organizationId }, data: { voiceEndpoint: (await import('@prisma/client')).Prisma.DbNull } });
+    const identity = createHash('sha256').update(`${organizationId}:${ownerId}`).digest('hex').slice(0, 16);
+    providerMock.listEndpoints
+      .mockResolvedValueOnce(Array.from({ length: 20 }, (_, i) => ({ username: `other${i}`, alias: `Other-${i}`, endpointId: `ep-${i}` })))
+      .mockResolvedValueOnce([{ username: `a${identity}99`, alias: `Agent-${identity}`, endpointId: 'ep-paged' }]);
+    const res = await endpoint(request('telephony/endpoint'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.username).toBe(`a${identity}99`);
+    expect(providerMock.createEndpoint).not.toHaveBeenCalled();
+    expect(providerMock.updateEndpoint).toHaveBeenCalledWith('ep-paged', expect.objectContaining({ appId: 'test-app' }));
+  });
+  it('routes unassigned inbound calls in round-robin across all online call-capable roles, including admin and owner', async () => {
+    const adminUser = await db.user.create({ data: { name: 'Admin backup', email: `${randomUUID()}@example.test`, passwordHash: 'unused' } });
+    users.push(adminUser.id);
+    await db.membership.create({
+      data: {
+        organizationId,
+        userId: adminUser.id,
+        role: 'admin',
+        receivesLeads: false,
+        availableForLeads: true,
+        voicePresenceAt: new Date(),
+        voiceEndpoint: { ...encryptData(JSON.stringify({ username: adminUser.id, sipUri: `sip:${adminUser.id}@phone.plivo.com`, password: 'test-password', endpointId: adminUser.id, authId: 'test' })) },
+      },
+    });
+    await db.membership.updateMany({
+      where: { organizationId, userId: ownerId },
+      data: {
+        receivesLeads: false,
+        availableForLeads: true,
+        voicePresenceAt: new Date(),
+        voiceEndpoint: { ...encryptData(JSON.stringify({ username: ownerId, sipUri: `sip:${ownerId}@phone.plivo.com`, password: 'test-password', endpointId: ownerId, authId: 'test' })) },
+      },
+    });
+
+    const staffToken = await signAccessToken({ organizationId, userId: adminUser.id, email: 'admin@example.test', role: 'admin' });
+    const presenceRes = await presence(request('telephony/presence', { ready: true, busy: false }, 'POST', staffToken));
+    expect((await presenceRes.json()).readiness).toMatchObject({
+      canReceiveAssignedCalls: true,
+      canReceiveNewCalls: true,
+      reason: expect.stringContaining('Ready for incoming calls'),
+    });
+
+    const uuid = randomUUID();
+    const initialRes = await answer(signed('answer', { CallUUID: uuid, From: '+919626493392', To: '+918065531234', Direction: 'inbound' }));
+    expect(initialRes.status).toBe(200);
+    const firstXml = await initialRes.text();
+    const call = await db.call.findUniqueOrThrow({ where: { plivoCallUuid: uuid } });
+    const visited = new Set<string>([call.assignedToId!]);
+    expect(firstXml).toContain(`sip:${call.assignedToId}@phone.plivo.com`);
+
+    const failure = { CallUUID: uuid, DialALegUUID: uuid, DialStatus: 'no-answer', DialHangupCause: 'NO_ANSWER' };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const retryRes = await fallback(signed('fallback', failure, attempt));
+      expect(retryRes.status).toBe(200);
+      const xml = await retryRes.text();
+      expect(xml).toContain(`attempt=${attempt + 1}`);
+      const updated = await db.call.findUniqueOrThrow({ where: { id: call.id } });
+      visited.add(updated.assignedToId!);
+      expect(xml).toContain(`sip:${updated.assignedToId}@phone.plivo.com`);
+    }
+    expect(visited).toEqual(new Set([users[1], users[2], adminUser.id, ownerId]));
+
+    const finalRes = await fallback(signed('fallback', failure, 3));
+    expect(finalRes.status).toBe(200);
+    expect(await finalRes.text()).toContain('<Speak');
+  });
+  it('refreshes and recovers a desynced browser endpoint password when refresh=1 is requested', async () => {
+    const encrypted = encryptData(JSON.stringify({ authId: 'test-auth', authToken: 'test-token', appId: 'test-app' }));
+    await db.tenantIntegration.create({
+      data: { organizationId, provider: 'plivo', category: 'telephony', credentialsEncrypted: encrypted.ciphertext, encIv: encrypted.iv, encAuthTag: encrypted.authTag },
+    });
+    await db.membership.updateMany({
+      where: { organizationId, userId: ownerId },
+      data: {
+        voiceEndpoint: { ...encryptData(JSON.stringify({ username: 'stale-user', password: 'old-password', authId: 'test-auth', endpointId: 'ep-owner', sipUri: 'sip:stale-user@phone.plivo.com' })) },
+      },
+    });
+    const identity = createHash('sha256').update(`${organizationId}:${ownerId}`).digest('hex').slice(0, 16);
+    providerMock.listEndpoints.mockResolvedValueOnce([{ username: `a${identity}01`, alias: `Agent-${identity}`, endpointId: 'ep-owner' }]);
+    const res = await endpoint(request('telephony/endpoint?refresh=1'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.username).toBe(`a${identity}01`);
+    expect(body.password).not.toBe('old-password');
+    expect(providerMock.updateEndpoint).toHaveBeenCalledWith('ep-owner', expect.objectContaining({ password: body.password, appId: 'test-app' }));
+  });
+  it('emits dialMusic="real" on inbound Dial XML and normalizes multi-value forwarded headers', async () => {
+    const proxyUrl = `https://ta.zowiz.ai/api/v1/webhooks/voice/answer?orgId=${organizationId}`;
+    const body = { CallUUID: randomUUID(), From: '+919626333162', To: '+918065531234', Direction: 'inbound' };
+    const nonce = randomUUID();
+    const sig = computeV3Signature('POST', proxyUrl, nonce, webhookToken, body);
+    const req = new NextRequest(`http://localhost/api/v1/webhooks/voice/answer?orgId=${organizationId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Forwarded-Proto': 'https, http',
+        'X-Forwarded-Host': 'ta.zowiz.ai, internal-proxy',
+        'X-Plivo-Signature-V3-Nonce': nonce,
+        'X-Plivo-Signature-V3': sig,
+      },
+      body: new URLSearchParams(body),
+    });
+
+    const res = await answer(req);
+    expect(res.status).toBe(200);
+    const xml = await res.text();
+    expect(xml).toContain('dialMusic="real"');
+    expect(xml).toContain(`action="https://ta.zowiz.ai/api/v1/webhooks/voice/fallback?orgId=${organizationId}&amp;attempt=0"`);
+    expect(xml).toContain(`callbackUrl="https://ta.zowiz.ai/api/v1/webhooks/voice/dial?orgId=${organizationId}&amp;attempt=0"`);
+  });
+  it('records a missed inbound call via GET hangup webhook when no Call row existed yet', async () => {
+    await db.phoneNumber.create({ data: { organizationId, e164: '+918065531234', countryIso: 'IN' } });
+    const callUuid = randomUUID();
+    const qs = new URLSearchParams({
+      orgId: organizationId,
+      CallUUID: callUuid,
+      From: '+919626333162',
+      To: '+918065531234',
+      Direction: 'inbound',
+      HangupCause: 'NORMAL_CLEARING',
+      HangupCauseName: 'Normal Hangup',
+      Duration: '0',
+      BillDuration: '0',
+      TotalCost: '0',
+    });
+    const url = `http://localhost/api/v1/webhooks/voice/hangup?${qs.toString()}`;
+    const nonce = randomUUID();
+    const sig = computeV3Signature('GET', url, nonce, webhookToken, {});
+    const req = new NextRequest(url, {
+      method: 'GET',
+      headers: { 'X-Plivo-Signature-V3-Nonce': nonce, 'X-Plivo-Signature-V3': sig },
+    });
+
+    const res = await getHangup(req);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'ok' });
+
+    const created = await db.call.findUniqueOrThrow({ where: { plivoCallUuid: callUuid } });
+    expect(created).toMatchObject({
+      organizationId,
+      direction: 'inbound',
+      from: '+919626333162',
+      to: '+918065531234',
+      status: 'missed',
+      hangupCauseName: 'Normal Hangup',
+    });
+    expect(created.endedAt).toBeInstanceOf(Date);
+  });
+  it('reconciles stuck ringing calls and backfills missed Plivo inbound calls on GET /api/v1/calls?sync=1', async () => {
+    const encrypted = encryptData(JSON.stringify({ authId: 'test-auth', authToken: 'test-token', appId: 'test-app' }));
+    await db.tenantIntegration.create({
+      data: { organizationId, provider: 'plivo', category: 'telephony', credentialsEncrypted: encrypted.ciphertext, encIv: encrypted.iv, encAuthTag: encrypted.authTag },
+    });
+    const phone = await db.phoneNumber.create({ data: { organizationId, e164: '+918065531234', countryIso: 'IN' } });
+    await db.membership.updateMany({ where: { organizationId, userId: users[1] }, data: { voiceBusy: true } });
+
+    const staleUuid = randomUUID();
+    const outboundParentUuid = randomUUID();
+    const missingInboundUuid = randomUUID();
+
+    await db.call.create({
+      data: {
+        organizationId,
+        phoneNumberId: phone.id,
+        plivoCallUuid: staleUuid,
+        direction: 'inbound',
+        from: '+919626493392',
+        to: '+918065531234',
+        status: 'ringing',
+        assignedToId: users[1],
+        agentOutcome: 'ringing',
+      },
+    });
+    await db.call.create({
+      data: {
+        organizationId,
+        phoneNumberId: phone.id,
+        plivoCallUuid: outboundParentUuid,
+        direction: 'outbound',
+        from: '+918065531234',
+        to: '+919626333162',
+        status: 'completed',
+        endedAt: new Date(),
+        durationSeconds: 12,
+      },
+    });
+
+    providerMock.getCall.mockResolvedValueOnce({
+      callUuid: staleUuid,
+      callState: 'completed',
+      callDirection: 'inbound',
+      fromNumber: '+919626493392',
+      toNumber: '+918065531234',
+      callDuration: 0,
+      billDuration: 0,
+      totalAmount: '0.00',
+      hangupCauseCode: 4000,
+      hangupCauseName: 'Normal Hangup',
+      hangupSource: 'Caller',
+      endTime: '2026-11-18T14:32:00Z',
+    });
+    providerMock.listCalls.mockResolvedValueOnce([
+      {
+        callUuid: missingInboundUuid,
+        callDirection: 'inbound',
+        fromNumber: '+919626333162',
+        toNumber: '+918065531234',
+        callState: 'completed',
+        callDuration: 0,
+        billDuration: 0,
+        totalAmount: '0.00',
+        hangupCauseCode: 4000,
+        hangupCauseName: 'Normal Hangup',
+        hangupSource: 'Caller',
+        initiationTime: '2026-11-18T14:35:00Z',
+        endTime: '2026-11-18T14:35:05Z',
+      },
+      {
+        callUuid: randomUUID(),
+        parentCallUuid: outboundParentUuid,
+        callDirection: 'outbound',
+        fromNumber: '+918065531234',
+        toNumber: '+919626333162',
+        callState: 'completed',
+        callDuration: 12,
+        billDuration: 10,
+        hangupCauseCode: 4000,
+        hangupCauseName: 'Normal Hangup',
+      },
+    ]);
+
+    const res = await listCalls(request('calls?sync=1'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.totalCount).toBe(3);
+
+    const reconciled = body.objects.find((c: { plivoCallUuid: string }) => c.plivoCallUuid === staleUuid);
+    expect(reconciled).toMatchObject({ status: 'missed', hangupCauseCode: 4000, hangupCauseName: 'Normal Hangup' });
+    expect(reconciled.endedAt).toBeTruthy();
+
+    const imported = body.objects.find((c: { plivoCallUuid: string }) => c.plivoCallUuid === missingInboundUuid);
+    expect(imported).toMatchObject({
+      direction: 'inbound',
+      status: 'missed',
+      from: '+919626333162',
+      to: '+918065531234',
+      hangupCauseName: 'Normal Hangup',
+    });
+
+    const releasedMember = await db.membership.findUniqueOrThrow({
+      where: { organizationId_userId: { organizationId, userId: users[1] } },
+    });
+    expect(releasedMember.voiceBusy).toBe(false);
   });
 });

@@ -5,6 +5,7 @@ import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { CreateCallRequestSchema } from '@/lib/schemas';
 import { getTelephonyProvider, getTenantTelephonyProvider } from '@/lib/telephony';
 import { contactScope, managesLeads } from '@/lib/lead-access';
+import { syncRecentOrgCallsFromPlivo } from '@/lib/telephony/plivo-call-sync';
 
 export const runtime = 'nodejs';
 
@@ -21,10 +22,14 @@ export async function GET(req: NextRequest) {
   const search = (url.searchParams.get('search') || '').trim();
   const contactPhone = (url.searchParams.get('contactPhone') || '').trim();
   const staffUserId = (url.searchParams.get('staffUserId') || '').trim();
+  const syncParam = url.searchParams.get('sync');
   const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || '20'), 1), 100);
   const offset = Math.max(Number(url.searchParams.get('offset') || '0'), 0);
 
   const orgId = auth!.organizationId;
+  if (syncParam === '1' || (offset === 0 && !search && syncParam !== '0')) {
+    await syncRecentOrgCallsFromPlivo(orgId, { force: syncParam === '1' });
+  }
   const andConditions: any[] = [{ organizationId: orgId }];
 
   if (status) andConditions.push({ status });
@@ -328,17 +333,17 @@ export async function POST(req: NextRequest) {
 
     const resolvedLanguage = transcriptionLanguage || phoneNumber.transcriptionLanguage || 'en-US';
 
-    // Construct Answer URL and Webhook URLs from DB-stored Plivo webhookUrls or request origin
-    const { getTenantIntegration, buildOrgWebhookUrls } = await import('@/lib/integrations/credentials-manager');
+    // Construct Answer URL and Webhook URLs preferring live non-local request origin over stale DB webhookUrls
+    const { getTenantIntegration, resolveOrgWebhookUrls } = await import('@/lib/integrations/credentials-manager');
     const plivoInteg = await getTenantIntegration(auth!.organizationId, 'plivo');
     const proto = req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http');
     const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
     const requestBase = host ? `${proto}://${host}` : 'http://localhost:3000';
-    const effectiveBase = (
-      plivoInteg?.metadata?.webhookBaseUrl ||
-      requestBase
-    ).trim().replace(/\/+$/, '');
-    const dbWebhookUrls = plivoInteg?.metadata?.webhookUrls || buildOrgWebhookUrls(effectiveBase, auth!.organizationId);
+    const { effectiveBaseUrl: effectiveBase, webhookUrls: dbWebhookUrls } = resolveOrgWebhookUrls(
+      auth!.organizationId,
+      requestBase,
+      plivoInteg?.metadata
+    );
 
     let answerUrl: string;
 
