@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { CreateCallRequestSchema } from '@/lib/schemas';
 import { getTelephonyProvider, getTenantTelephonyProvider } from '@/lib/telephony';
+import { contactScope, managesLeads } from '@/lib/lead-access';
 
 export const runtime = 'nodejs';
 
@@ -50,10 +51,12 @@ export async function GET(req: NextRequest) {
   }
 
   // Load organization contacts so we can both filter by customer name/phone and enrich call rows
-  const orgContacts = await db.contact.findMany({
-    where: { organizationId: orgId },
-    select: { id: true, name: true, phone: true, email: true },
-  });
+  const [orgContacts, accessibleContacts] = await Promise.all([
+    db.contact.findMany({ where: { organizationId: orgId }, select: { id: true, name: true, phone: true, email: true, assignedToId: true } }),
+    auth!.role === 'viewer' || managesLeads(auth!) ? Promise.resolve([])
+      : db.contact.findMany({ where: contactScope(auth!), select: { id: true } }),
+  ]);
+  const accessibleContactIds = new Set(accessibleContacts.map(contact => contact.id));
 
   if (contactPhone) {
     const cleanTarget = contactPhone.replace(/\D/g, '');
@@ -209,23 +212,29 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const normalizeDigits = (val?: string | null) => {
-    const d = String(val || '').replace(/\D/g, '');
-    return d.length >= 10 ? d.slice(-10) : d;
+  const fullPhone = (value?: string | null) => {
+    const digits = String(value || '').trim().replace(/[\s().+-]/g, '').replace(/^00/, '');
+    return /^[1-9]\d{6,14}$/.test(digits) ? digits : null;
   };
+  const contactById = new Map(orgContacts.map(contact => [contact.id, contact]));
+  const contactsByPhone = new Map<string, (typeof orgContacts)[number][]>();
+  for (const contact of orgContacts) {
+    const phone = fullPhone(contact.phone);
+    if (phone) contactsByPhone.set(phone, [...(contactsByPhone.get(phone) || []), contact]);
+  }
 
   const enrichedCalls = calls.map((c) => {
-    const fromTail = normalizeDigits(c.from);
-    const toTail = normalizeDigits(c.to);
-    const matchedContact = orgContacts.find((ct) => {
-      const ctTail = normalizeDigits(ct.phone);
-      if (!ctTail) return false;
-      return ctTail === fromTail || ctTail === toTail;
-    });
+    // A linked enquiry is authoritative even after a phone edit. For repeat
+    // calls, match the customer's full number, never the agency number or a suffix.
+    const linkedContact = c.enquiryContactId ? contactById.get(c.enquiryContactId) : undefined;
+    const customerPhone = fullPhone(c.direction === 'outbound' ? c.to : c.from);
+    const phoneMatches = customerPhone ? contactsByPhone.get(customerPhone) || [] : [];
+    const matchedContact = linkedContact || (phoneMatches.length === 1 ? phoneMatches[0] : undefined);
 
     const reqParams = (c.requestedParams && typeof c.requestedParams === 'object' ? c.requestedParams : {}) as any;
     const resolvedActorId = c.assignedToId || reqParams.actorUserId || actorByCallId.get(c.id);
     const matchedStaff = resolvedActorId ? userById.get(resolvedActorId) : null;
+    const enquiryOwner = matchedContact?.assignedToId ? userById.get(matchedContact.assignedToId) : null;
 
     // Deduplicate recordings per call to at most 1 primary recording
     const sortedRecs = Array.isArray(c.recordings)
@@ -238,6 +247,10 @@ export async function GET(req: NextRequest) {
       recordings: primaryRecs,
       contactName: matchedContact?.name || null,
       contactId: matchedContact?.id || null,
+      enquiry: matchedContact ? { id: matchedContact.id,
+        assignedTo: enquiryOwner ? { id: enquiryOwner.id, name: enquiryOwner.name } : null,
+        canOpen: auth!.role !== 'viewer' && (managesLeads(auth!) || accessibleContactIds.has(matchedContact.id)),
+      } : null,
       staffUser: matchedStaff
         ? { id: matchedStaff.id, name: matchedStaff.name, email: matchedStaff.email }
         : reqParams.actorEmail || reqParams.actorName

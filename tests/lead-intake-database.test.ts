@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID, createHmac } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { NextRequest } from 'next/server';
 import { db } from '@/lib/db';
 import { encryptData } from '@/lib/crypto';
@@ -12,6 +13,7 @@ import { GET as detail } from '@/app/api/v1/leads/[id]/route';
 import { GET as settings, POST as connect, PATCH as changeSettings } from '@/app/api/v1/lead-intake/route';
 import { PATCH as qualify } from '@/app/api/v1/leads/[id]/qualification/route';
 import { POST as worker } from '@/app/api/v1/lead-intake/process/route';
+import { POST as createStaff } from '@/app/api/v1/users/route';
 
 const suite = process.env.LEAD_INTAKE_DATABASE_TESTS === '1' ? describe : describe.skip;
 suite('Lead intake with an isolated PostgreSQL schema', () => {
@@ -186,5 +188,47 @@ suite('Lead intake with an isolated PostgreSQL schema', () => {
     expect((await worker(req('lead-intake/process', {}))).status).toBe(401);
     expect((await worker(req('lead-intake/process', {}, ownerToken))).status).toBe(200);
     expect(await db.lead.count({ where: { organizationId } })).toBe(1);
+  });
+  it('enrols new Sales and Operator staff by default, including an omitted role, without enrolling Admin or Viewer', async () => {
+    for (const role of ['sales', 'operator', undefined, 'admin', 'viewer']) {
+      const response = await createStaff(req('users', { name: 'New test staff', email: `${randomUUID()}@example.test`, password: 'StrongTestPass123!', ...(role ? { role } : {}) }, ownerToken));
+      const data = await response.json(); if (data.user?.id) userIds.push(data.user.id);
+      expect(response.status).toBe(201);
+      const membership = await db.membership.findUniqueOrThrow({ where: { organizationId_userId: { organizationId, userId: data.user.id } } });
+      expect(membership.role).toBe(role || 'operator');
+      expect(membership.receivesLeads).toBe(!role || ['sales', 'operator'].includes(role));
+      expect(membership.availableForLeads).toBe(true);
+    }
+  });
+  it('keeps explicit rotation opt-outs saved across settings reloads', async () => {
+    const member = await db.membership.findFirstOrThrow({ where: { organizationId, userId: salesIds[0] } });
+    expect((await changeSettings(req('lead-intake', { action: 'member', membershipId: member.id, receivesLeads: false, availableForLeads: false }, ownerToken, 'PATCH'))).status).toBe(200);
+    for (let i = 0; i < 2; i++) {
+      const data = await (await settings(req('lead-intake', undefined, ownerToken))).json();
+      expect(data.members.find((m: any) => m.id === member.id)).toMatchObject({ receivesLeads: false, availableForLeads: false });
+    }
+    expect(await db.membership.findUnique({ where: { id: member.id } })).toMatchObject({ receivesLeads: false, availableForLeads: false });
+  });
+  it('migrates default-off staff while preserving recorded opt-outs, unavailable staff and non-sales roles', async () => {
+    const scenarios = [
+      { role: 'sales', available: true, recordedChoice: false, expected: true },
+      { role: 'operator', available: true, recordedChoice: false, expected: true },
+      { role: 'sales', available: true, recordedChoice: true, expected: false },
+      { role: 'operator', available: false, recordedChoice: false, expected: false },
+      { role: 'admin', available: true, recordedChoice: false, expected: false },
+      { role: 'owner', available: true, recordedChoice: false, expected: false },
+      { role: 'viewer', available: true, recordedChoice: false, expected: false },
+    ];
+    const memberships = [];
+    for (const scenario of scenarios) {
+      const user = await db.user.create({ data: { name: 'Migration test staff', email: `${randomUUID()}@example.test`, passwordHash: 'unused' } }); userIds.push(user.id);
+      const membership = await db.membership.create({ data: { organizationId, userId: user.id, role: scenario.role, receivesLeads: false, availableForLeads: scenario.available } });
+      if (scenario.recordedChoice) await db.auditLog.create({ data: { organizationId, actorUserId: ownerId, action: 'lead_intake.member', metadata: { membershipId: membership.id, receivesLeads: false, availableForLeads: true } } });
+      memberships.push({ id: membership.id, ...scenario });
+    }
+    const migration = readFileSync('prisma/migrations/20261118130000_staff_rotation_defaults/migration.sql', 'utf8');
+    await db.$executeRawUnsafe(migration);
+    await db.$executeRawUnsafe(migration);
+    for (const expected of memberships) expect(await db.membership.findUnique({ where: { id: expected.id } })).toMatchObject({ receivesLeads: expected.expected, availableForLeads: expected.available });
   });
 });

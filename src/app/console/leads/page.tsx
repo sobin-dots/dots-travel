@@ -20,8 +20,10 @@ import {
   Clock,
   ShieldAlert,
   Loader2,
+  TrendingUp,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
+import { computePipelineKpis, getLeadQuotedPrice } from '@/lib/pipeline-metrics';
 
 const PIPELINE_STAGES = [
   { id: 'new_inquiry', label: 'New Inquiry', color: 'from-cyan-500/20 to-blue-500/10', border: 'border-cyan-500/30', badge: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30' },
@@ -31,32 +33,6 @@ const PIPELINE_STAGES = [
   { id: 'confirmed', label: 'Confirmed & Won', color: 'from-emerald-500/20 to-teal-500/10', border: 'border-emerald-500/30', badge: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
   { id: 'lost', label: 'Closed / Lost', color: 'from-rose-500/20 to-red-500/10', border: 'border-rose-500/30', badge: 'bg-rose-500/10 text-rose-400 border-rose-500/30' },
 ];
-
-/**
- * Returns the lead's quoted price ONLY after a supplier quote has been received.
- * Before getting a quote from the supplier, returns null so no premature/stray price is shown or summed.
- */
-function getLeadQuotedPrice(lead: any): number | null {
-  const supplierQuotes = Array.isArray(lead?.supplierQuotations) ? lead.supplierQuotations : [];
-  if (supplierQuotes.length === 0) {
-    return null;
-  }
-
-  const customerQuotes = Array.isArray(lead?.quotations) ? lead.quotations : [];
-  if (customerQuotes.length > 0 && customerQuotes[0]?.finalSellingPrice != null) {
-    const selling = Number(customerQuotes[0].finalSellingPrice);
-    if (!isNaN(selling) && selling > 0) return selling;
-  }
-
-  const selectedSupplierQuote =
-    supplierQuotes.find((q: any) => q.status === 'selected') || supplierQuotes[0];
-  if (selectedSupplierQuote?.totalNetCost != null) {
-    const net = Number(selectedSupplierQuote.totalNetCost);
-    if (!isNaN(net) && net > 0) return net;
-  }
-
-  return null;
-}
 
 function getLeadDurationDays(lead: any): number {
   const titleMatch = typeof lead?.title === 'string' ? lead.title.match(/\b(\d+)-Day\b/i) : null;
@@ -119,19 +95,13 @@ export default function LeadsPage() {
   const [viewMode, setViewMode] = useState<'kanban' | 'list'>('kanban');
   const [updatingStageId, setUpdatingStageId] = useState<string | null>(null);
 
-  // Calculate Pipeline Metrics strictly from leads that have received supplier quotes
-  const activeLeads = leadsList.filter((l) => l.stage !== 'lost');
-  const totalLeads = activeLeads.length;
-  const activePipelineValue = activeLeads.reduce((sum, l) => {
-    const val = getLeadQuotedPrice(l);
-    return sum + (val ?? 0);
-  }, 0);
-  const confirmedWonValue = leadsList
-    .filter((l) => l.stage === 'confirmed' || l.status === 'converted')
-    .reduce((sum, l) => {
-      const val = getLeadQuotedPrice(l);
-      return sum + (val ?? 0);
-    }, 0);
+  // Calculate Pipeline Metrics strictly from leads that have received quotes
+  const {
+    activeLeadsCount: totalLeads,
+    activePipelineValue,
+    possibleIncome,
+    confirmedRevenue: confirmedWonValue,
+  } = computePipelineKpis(leadsList);
 
   // Stage transition helper with optimistic update & in-flight lock
   const handleMoveStage = async (leadId: string, currentStage: string, direction: 'next' | 'prev') => {
@@ -211,7 +181,7 @@ export default function LeadsPage() {
       </div>
 
       {/* Pipeline Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-4 flex items-center justify-between">
           <div>
             <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Active Inquiries</div>
@@ -245,6 +215,21 @@ export default function LeadsPage() {
           </div>
           <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
             <CheckCircle2 className="w-5 h-5" />
+          </div>
+        </div>
+
+        <div
+          className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-4 flex items-center justify-between"
+          title="Total margin set by your organization across active pipeline quotations (excludes Closed / Lost)"
+        >
+          <div>
+            <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Possible Income</div>
+            <div className="text-xl font-bold text-amber-400 mt-1 font-mono">
+              ₹{possibleIncome.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+            </div>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center">
+            <TrendingUp className="w-5 h-5" />
           </div>
         </div>
       </div>
