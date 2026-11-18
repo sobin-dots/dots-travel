@@ -36,10 +36,14 @@ async function responsibleSalesperson(tx: Prisma.TransactionClient, organization
   // across countries. Older manually entered contacts may contain spaces or omit '+'.
   const digits = phone.trim().replace(/[\s().+-]/g, '').replace(/^00/, '');
   if (!/^[1-9]\d{6,14}$/.test(digits)) return null;
-  const contacts = await tx.$queryRaw<{ id: string }[]>`
-    SELECT id FROM contacts WHERE "organizationId" = ${organizationId}
-      AND regexp_replace(regexp_replace(phone, '[^0-9]', '', 'g'), '^00', '') = ${digits}`;
+  const contacts = await tx.$queryRaw<{ id: string; assignedToId: string | null }[]>`
+    SELECT id, "assignedToId" FROM contacts WHERE "organizationId" = ${organizationId}
+      AND regexp_replace(regexp_replace(phone, '[^0-9]', '', 'g'), '^00', '') = ${digits}
+    ORDER BY "assignedAt" DESC NULLS LAST, "createdAt" DESC, id ASC`;
   if (!contacts.length) return null;
+  // The enquiry owner recorded on the contact is the authoritative responsible salesperson.
+  const owner = contacts.find(c => c.assignedToId);
+  if (owner?.assignedToId) return owner.assignedToId;
   // Assignments belong to enquiries. Keep the most recently assigned enquiry's
   // salesperson for returning callers, including completed bookings.
   const lead = await tx.lead.findFirst({ where: { organizationId, contactId: { in: contacts.map(c => c.id) }, assignedToId: { not: null } },

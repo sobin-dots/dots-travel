@@ -38,11 +38,19 @@ suite('Lead intake with an isolated PostgreSQL schema', () => {
   afterEach(async () => { vi.unstubAllGlobals(); await db.organization.delete({ where: { id: organizationId } }); await db.user.deleteMany({ where: { id: { in: userIds.splice(0) } } }); });
   afterAll(async () => { await db.$disconnect(); });
 
-  it('distributes concurrent enquiries evenly and preserves one contact with multiple enquiries', async () => {
-    const created = await Promise.all(Array.from({ length: 8 }, () => create()));
+  it('distributes concurrent enquiries from different customers evenly', async () => {
+    const created = await Promise.all(Array.from({ length: 8 }, (_, i) => db.$transaction(tx => createEnquiry(tx, organizationId, 'website',
+      enquirySchema.parse({ submissionId: randomUUID(), name: `Customer ${i}`, phone: `+9198765432${String(i).padStart(2, '0')}`, formId: 'trip', formName: 'Summer trips' })), { maxWait: 15000, timeout: 15000 })));
     expect(created.filter(l => l.assignedToId === salesIds[0])).toHaveLength(4);
     expect(created.filter(l => l.assignedToId === salesIds[1])).toHaveLength(4);
+    expect(await db.contact.count({ where: { organizationId } })).toBe(8);
+  });
+  it('keeps one contact and one responsible owner across multiple enquiries from the same customer', async () => {
+    const created = await Promise.all(Array.from({ length: 8 }, () => create()));
+    expect(new Set(created.map(l => l.assignedToId)).size).toBe(1);
+    expect(salesIds).toContain(created[0].assignedToId);
     expect(await db.contact.count({ where: { organizationId } })).toBe(1);
+    expect(await db.contact.findFirst({ where: { organizationId } })).toMatchObject({ assignedToId: created[0].assignedToId });
     expect(created.filter(l => l.duplicateContactFlag)).toHaveLength(7);
     expect(created[0].firstContactDueAt!.getTime() - created[0].createdAt.getTime()).toBeGreaterThan(29 * 60_000);
   });

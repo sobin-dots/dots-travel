@@ -15,8 +15,10 @@ import {
   ChevronRight,
   Clock,
   X,
+  BookUser,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
+import { EnquiryFormModal } from '@/components/console/EnquiryFormModal';
 
 type DatePreset = 'all' | 'today' | 'yesterday' | '7d' | '30d' | 'custom';
 
@@ -31,6 +33,7 @@ export default function CallsPage() {
     contactsList,
     staffList,
     bearerToken,
+    currentOrg,
     setShowCallModal,
     authFetch,
     setSelectedCallDetail,
@@ -44,6 +47,7 @@ export default function CallsPage() {
 
   const [openingDetailId, setOpeningDetailId] = useState<string | null>(null);
   const [openingItineraryId, setOpeningItineraryId] = useState<string | null>(null);
+  const [enquiryCallId, setEnquiryCallId] = useState<string | null>(null);
 
   // Filter & Pagination state
   const [searchQuery, setSearchQuery] = useState('');
@@ -236,7 +240,7 @@ export default function CallsPage() {
             )}
           </div>
 
-          {/* Customer / Contact Filter */}
+          {/* Enquiry / Caller Filter */}
           <div className="relative">
             <Users className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <select
@@ -246,10 +250,10 @@ export default function CallsPage() {
                 setPage(1);
               }}
               className="w-full bg-zinc-950 border border-zinc-800 focus:border-indigo-500/60 rounded-lg pl-8 pr-3 py-2 text-xs text-zinc-200 outline-none"
-              title="Filter by Customer / Contact"
+              title="Filter by enquiry or caller"
             >
-              <option value="">All Customers / Callers</option>
-              {contactsList.map((ct: any) => (
+              <option value="">All Enquiries / Callers</option>
+              {contactsList.filter((ct: any) => !!ct.phone).map((ct: any) => (
                 <option key={ct.id} value={ct.phone}>
                   {ct.name} ({ct.phone})
                 </option>
@@ -503,6 +507,17 @@ export default function CallsPage() {
                         </div>
                       </td>
                       <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
+                        {currentOrg && currentOrg.role !== 'viewer' && (
+                          <button
+                            type="button"
+                            onClick={() => setEnquiryCallId(call.id)}
+                            className="text-xs bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 inline-flex items-center gap-1 cursor-pointer transition"
+                            title="Open enquiry details prefilled from this call"
+                          >
+                            <BookUser className="w-3 h-3" />
+                            <span>{call.enquiryContactId ? 'Enquiry' : 'Convert to enquiry'}</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           disabled={openingDetailId === call.id}
@@ -638,6 +653,17 @@ export default function CallsPage() {
           </div>
         </div>
       </div>
+      {enquiryCallId && (
+        <EnquiryFormModal
+          key={enquiryCallId}
+          callId={enquiryCallId}
+          onClose={() => setEnquiryCallId(null)}
+          onSaved={() => {
+            setEnquiryCallId(null);
+            void fetchFilteredCalls();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { CreateContactRequestSchema } from '@/lib/schemas';
-import { contactScope } from '@/lib/lead-access';
+import { contactScope, managesLeads } from '@/lib/lead-access';
 
 export const runtime = 'nodejs';
 
@@ -66,6 +66,8 @@ export async function POST(req: NextRequest) {
         email: email || null,
         company: company || null,
         notes: notes || null,
+        // Staff who add a contact own it, so it appears in their "Assigned to me" list.
+        ...(managesLeads(auth!) ? {} : { assignedToId: auth!.userId, assignedAt: new Date() }),
         ...travelDetails,
       },
     });

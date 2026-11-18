@@ -9,5 +9,8 @@ export function leadScope(auth: AuthContext) {
 }
 
 export function contactScope(auth: AuthContext) {
-  return { organizationId: auth.organizationId, ...(!managesLeads(auth) ? { leads: { some: leadScope(auth) } } : {}) };
+  return { organizationId: auth.organizationId, ...(!managesLeads(auth) ? { OR: [
+    { assignedToId: auth.userId },
+    { assignedToId: null, leads: { some: leadScope(auth) } },
+  ] } : {}) };
 }

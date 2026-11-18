@@ -16,7 +16,7 @@ async function main() {
     const env = { ...process.env, DATABASE_URL: url.toString(), LEAD_INTAKE_DATABASE_TESTS: '1', ENCRYPTION_KEK: randomBytes(32).toString('base64'), JWT_ACCESS_SECRET: randomBytes(32).toString('hex'), RESEND_API_KEY: '', RESEND_FROM_EMAIL: '' };
     for (const args of [
       [require.resolve('prisma/build/index.js'), 'migrate', 'deploy'],
-      [require('node:path').join(require.resolve('vitest/package.json'), '..', 'vitest.mjs'), 'run', 'tests/lead-intake.test.ts', 'tests/lead-intake-database.test.ts', 'tests/itinerary-api-regression.test.ts', 'tests/contacts-bulk-import.test.ts', 'tests/tenant-isolation.test.ts', 'tests/security-controls.test.ts', 'tests/itinerary-comparison.test.ts', 'tests/priorities-database.test.ts', 'tests/contact-details-database.test.ts'],
+      [require('node:path').join(require.resolve('vitest/package.json'), '..', 'vitest.mjs'), 'run', 'tests/lead-intake.test.ts', 'tests/lead-intake-database.test.ts', 'tests/itinerary-api-regression.test.ts', 'tests/contacts-bulk-import.test.ts', 'tests/tenant-isolation.test.ts', 'tests/security-controls.test.ts', 'tests/itinerary-comparison.test.ts', 'tests/priorities-database.test.ts', 'tests/contact-details-database.test.ts', 'tests/enquiry-workflow-database.test.ts'],
     ]) {
       const result = spawnSync(process.execPath, args, { env, stdio: 'inherit' });
       if (result.status !== 0) { process.exitCode = result.status || 1; break; }

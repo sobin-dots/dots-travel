@@ -34,9 +34,19 @@ export async function createEnquiry(tx: Prisma.TransactionClient, organizationId
   let contact = phoneMatch || (!ambiguous ? emailMatches[0] : null);
   const repeat = contact ? await tx.lead.count({ where: { organizationId, contactId: contact.id } }) > 0 : false;
   const { preferredTravelMonth, tourType, numberOfChildren, specialRequirements, city } = input;
-  if (!contact && !ambiguous) contact = await tx.contact.create({ data: { organizationId, name: input.name, phone: input.phone, email: input.email,
-    preferredTravelMonth, tourType, numberOfChildren, specialRequirements, city } });
-  const assignedToId = await pickAssignee(tx, organizationId);
+  // A returning customer stays with the team member who already owns the enquiry, even if a
+  // different salesperson is next in rotation. Only an owner who can no longer be assigned
+  // (inactive, removed or now a viewer) is replaced.
+  let ownerId = contact?.assignedToId ?? null;
+  if (ownerId && !await tx.membership.findFirst({ where: { organizationId, userId: ownerId, role: { in: ['owner', 'admin', 'operator', 'sales'] }, user: { status: 'active' } }, select: { id: true } })) ownerId = null;
+  const assignedToId = ownerId || await pickAssignee(tx, organizationId);
+  if (!contact && !ambiguous) {
+    contact = await tx.contact.create({ data: { organizationId, name: input.name, phone: input.phone, email: input.email,
+      preferredTravelMonth, tourType, numberOfChildren, specialRequirements, city,
+      enquiryTag: input.temperature, tags: [...new Set(input.tags)], assignedToId, assignedAt: assignedToId ? new Date() : null } });
+  } else if (contact && contact.assignedToId !== assignedToId && assignedToId) {
+    contact = await tx.contact.update({ where: { id: contact.id }, data: { assignedToId, assignedAt: new Date() } });
+  }
   const organization = await tx.organization.findUniqueOrThrow({ where: { id: organizationId }, select: { firstContactMinutes: true } });
   const { submissionId: _submissionId, name, phone, email, notes, title, answers,
     preferredTravelMonth: _month, tourType: _tour, numberOfChildren: _children, specialRequirements: _requirements, city: _city, ...fields } = input;

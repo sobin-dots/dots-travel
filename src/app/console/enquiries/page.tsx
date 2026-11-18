@@ -5,12 +5,17 @@ import Link from 'next/link';
 import { useConsole } from '@/context/ConsoleContext';
 
 const inputClass = 'rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-sm text-zinc-100 w-full';
+const enquiryTags = [
+  { value: 'hot', label: 'Hot' },
+  { value: 'warm', label: 'Warm' },
+  { value: 'cold', label: 'Cold' },
+];
 
 export default function EnquiriesPage() {
   const { leadsList, authFetch, bearerToken, currentOrg, staffList, fetchData, handleSelectLead } = useConsole();
   const admin = ['owner', 'admin'].includes(currentOrg?.role);
   const [error, setError] = useState(''); const [busy, setBusy] = useState<string | null>(null);
-  const [search, setSearch] = useState(''); const [temperature, setTemperature] = useState('');
+  const [search, setSearch] = useState(''); const [tagFilter, setTagFilter] = useState('');
   const [source, setSource] = useState(''); const [assignee, setAssignee] = useState('');
   const [showNew, setShowNew] = useState(false); const [failed, setFailed] = useState(0);
   const [now, setNow] = useState(Date.now());
@@ -45,9 +50,9 @@ export default function EnquiriesPage() {
     } catch (e) { setError(e instanceof Error ? e.message : 'Could not create enquiry'); }
     finally { setBusy(null); }
   }
-  const visible = leadsList.filter(l => (!temperature || l.temperature === temperature) && (!source || l.source === source)
+  const visible = leadsList.filter(l => (!tagFilter || l.temperature === tagFilter) && (!source || l.source === source)
     && (!assignee || (assignee === 'unassigned' ? !l.assignedToId : l.assignedToId === assignee))
-    && (!search || [l.title, l.contact?.name, l.customerEmail, l.formName, l.contact?.phone, ...(l.tags || [])].join(' ').toLowerCase().includes(search.toLowerCase())));
+    && (!search || [l.title, l.contact?.name, l.customerEmail, l.formName, l.contact?.phone, l.temperature, ...(l.tags || [])].join(' ').toLowerCase().includes(search.toLowerCase())));
   const unassigned = leadsList.filter(l => !l.assignedToId).length;
   return <div className="space-y-6 max-w-7xl">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -67,7 +72,7 @@ export default function EnquiriesPage() {
     </form>}
     <div className="grid sm:grid-cols-4 gap-3">
       <input aria-label="Search enquiries" placeholder="Name, form, phone, email or tag" value={search} onChange={e => setSearch(e.target.value)} className={inputClass} />
-      <select aria-label="Filter by temperature" value={temperature} onChange={e => setTemperature(e.target.value)} className={inputClass}><option value="">All temperatures</option>{['hot', 'warm', 'cold'].map(t => <option key={t}>{t}</option>)}</select>
+      <select aria-label="Filter by enquiry tag" value={tagFilter} onChange={e => setTagFilter(e.target.value)} className={inputClass}><option value="">All enquiry tags</option>{enquiryTags.map(tag => <option key={tag.value} value={tag.value}>{tag.label}</option>)}</select>
       <select aria-label="Filter by source" value={source} onChange={e => setSource(e.target.value)} className={inputClass}><option value="">All sources</option>{Array.from(new Set(leadsList.map(l => l.source || 'manual'))).map(s => <option key={s}>{s}</option>)}</select>
       <select aria-label="Filter by assignee" value={assignee} onChange={e => setAssignee(e.target.value)} className={inputClass}><option value="">All assignees</option>{admin && <option value="unassigned">Unassigned</option>}{staffList.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select>
     </div>
@@ -81,9 +86,9 @@ export default function EnquiriesPage() {
         {lead.metadata?.enquiryNotes && <p className="text-sm whitespace-pre-wrap">{lead.metadata.enquiryNotes}</p>}
         {Object.keys(lead.metadata?.formAnswers || {}).length > 0 && <details className="text-sm text-zinc-400"><summary className="cursor-pointer">Original form answers</summary><dl className="mt-2 grid sm:grid-cols-2 gap-2">{Object.entries(lead.metadata.formAnswers).map(([question, answer]) => <div key={question}><dt className="text-xs text-zinc-500">{question}</dt><dd className="whitespace-pre-wrap text-zinc-200">{String(answer)}</dd></div>)}</dl></details>}
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <label className="text-xs text-zinc-400">Temperature<select disabled={!!busy} value={lead.temperature || 'warm'} onChange={e => update(lead.id, { temperature: e.target.value })} className={inputClass}>{['hot', 'warm', 'cold'].map(t => <option key={t}>{t}</option>)}</select></label>
+          <label className="text-xs text-zinc-400">Enquiry tag<select disabled={!!busy} value={lead.temperature || 'warm'} onChange={e => update(lead.id, { temperature: e.target.value })} className={inputClass}>{enquiryTags.map(tag => <option key={tag.value} value={tag.value}>{tag.label}</option>)}</select></label>
           <label className="text-xs text-zinc-400">Assigned to{admin ? <select disabled={!!busy} value={lead.assignedToId || ''} onChange={e => update(lead.id, { assignedToId: e.target.value || null })} className={inputClass}><option value="">Unassigned</option>{staffList.filter(m => m.status === 'active' && m.role !== 'viewer').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select> : <p className="p-2 text-sm">{lead.assignedTo?.name || 'You'}</p>}</label>
-          <label className="text-xs text-zinc-400">Tags, separated by commas<input key={`${lead.id}:${(lead.tags || []).join()}`} disabled={!!busy} className={inputClass} defaultValue={(lead.tags || []).join(', ')} onBlur={e => { const tags = e.target.value.split(',').map(t => t.trim()).filter(Boolean); if (JSON.stringify(tags) !== JSON.stringify(lead.tags || [])) update(lead.id, { tags }); }} /></label>
+          <label className="text-xs text-zinc-400">Other tags, separated by commas<input key={`${lead.id}:${(lead.tags || []).join()}`} disabled={!!busy} className={inputClass} defaultValue={(lead.tags || []).join(', ')} onBlur={e => { const tags = e.target.value.split(',').map(t => t.trim()).filter(Boolean); if (JSON.stringify(tags) !== JSON.stringify(lead.tags || [])) update(lead.id, { tags }); }} /></label>
           <div className="flex items-end gap-2">{!lead.firstContactAt && <button disabled={!!busy} className={`${inputClass} disabled:opacity-50`} onClick={() => update(lead.id, { contacted: true })}>Mark contacted</button>}{admin && !lead.assignedToId && <button disabled={!!busy} className={inputClass} onClick={() => update(lead.id, { autoAssign: true })}>Assign next</button>}</div>
         </div>
         <button className="text-xs text-indigo-300 underline" onClick={() => handleSelectLead(lead.id)}>{lead.itinerary ? 'Open itinerary' : 'Open lead and prepare itinerary'}</button>
