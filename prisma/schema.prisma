@@ -84,6 +84,7 @@ model User {
 
   memberships Membership[]
   assignedLeads Lead[] @relation("LeadAssignee")
+  assignedContacts Contact[] @relation("ContactAssignee")
   sessions    Session[]
   apiKeys     ApiKey[]
   auditLogs   AuditLog[]
@@ -258,6 +259,7 @@ model Call {
   organizationId       String
   phoneNumberId        String?
   assignedToId         String?
+  enquiryContactId     String?
   agentOutcome         String?
   agentAnsweredAt      DateTime?
   // provider truth
@@ -299,10 +301,12 @@ model Call {
   recordings   Recording[]
   transcriptions Transcription[]
   leads        Lead[]
+  enquiryContact Contact? @relation("EnquiryCalls", fields: [enquiryContactId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, startedAt])
   @@index([organizationId, status])
   @@index([organizationId, direction])
+  @@index([organizationId, enquiryContactId])
   @@map("calls")
 }
 
@@ -495,15 +499,23 @@ model Contact {
   numberOfChildren Int?
   specialRequirements String? @db.Text
   city           String?
+  assignedToId   String?
+  assignedAt     DateTime?
+  enquiryStatus  String @default("new_inquiry")
+  enquiryTag     String @default("warm")
+  tags           String[] @default([])
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   leads        Lead[]
+  assignedTo   User? @relation("ContactAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  enquiryCalls Call[] @relation("EnquiryCalls")
 
   @@unique([organizationId, phone])
   @@index([organizationId, email])
   @@index([organizationId])
+  @@index([organizationId, assignedToId])
   @@map("contacts")
 }
 

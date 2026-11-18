@@ -8,14 +8,14 @@ export const ContactTravelFieldsSchema = z.object({
   specialRequirements: optionalText(5000),
   city: optionalText(100),
 });
-const fields = z.object({
+export const contactFields = z.object({
   name: z.string().trim().min(2, 'Full name must be at least 2 characters').max(100),
   phone: z.string().trim().transform(value => value.replace(/[\s().-]/g, '')).pipe(z.string().regex(/^\+[1-9]\d{6,14}$/, 'Phone number must include a country code, for example +919876543210').or(z.literal(''))).nullable().optional().transform(value => value === '' ? null : value),
   email: z.string().trim().toLowerCase().email('Invalid email address').or(z.literal('')).nullable().optional().transform(value => value === '' ? null : value),
   company: optionalText(100), notes: optionalText(500), ...ContactTravelFieldsSchema.shape,
 });
-export const CreateContactSchema = fields.strict().refine(value => value.phone || value.email, { message: 'Provide a phone number or email address', path: ['phone'] });
-export const UpdateContactSchema = fields.partial().extend({ expectedUpdatedAt: z.string().datetime().optional() }).strict();
+export const CreateContactSchema = contactFields.strict().refine(value => value.phone || value.email, { message: 'Provide a phone number or email address', path: ['phone'] });
+export const UpdateContactSchema = contactFields.partial().extend({ expectedUpdatedAt: z.string().datetime().optional() }).strict();
 export type ContactTravelFields = z.infer<typeof ContactTravelFieldsSchema>;
 
 export function contactValuesFromForm(form: FormData) {
