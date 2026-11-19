@@ -198,3 +198,75 @@ export function patchPlivoSDK(PlivoClass?: any, instance?: any) {
     } catch {}
   });
 }
+
+export interface PlivoCallFailureResult {
+  isUserCancel: boolean;
+  nextStatus: 'ended' | 'error';
+  errorMessage: string | null;
+  causeText: string;
+}
+
+/**
+ * Normalizes Plivo Browser SDK `onCallFailed` causes.
+ * Canceling an unanswered outgoing call (`Canceled`) is a normal user hangup, and
+ * remote call outcomes (`Busy`, `No Answer`, `Rejected`) should not mark a
+ * registered WebPhone as `error` / unavailable for inbound calls.
+ */
+export function classifyPlivoCallFailure(
+  cause: unknown,
+  isSipLoggedIn = true
+): PlivoCallFailureResult {
+  const raw =
+    typeof cause === 'string'
+      ? cause.trim()
+      : cause && typeof cause === 'object' && 'message' in cause && typeof (cause as { message?: unknown }).message === 'string'
+        ? String((cause as { message: string }).message).trim()
+        : '';
+
+  const normalized = raw.toLowerCase();
+  if (normalized === 'canceled' || normalized === 'cancelled' || normalized === 'originator cancel') {
+    return {
+      isUserCancel: true,
+      nextStatus: 'ended',
+      errorMessage: null,
+      causeText: raw || 'Canceled',
+    };
+  }
+
+  let errorMessage = raw || 'Call failed';
+  if (normalized === 'busy') errorMessage = 'The recipient line is busy.';
+  else if (normalized === 'no answer' || normalized === 'request timeout') errorMessage = 'No answer from recipient.';
+  else if (normalized === 'rejected') errorMessage = 'Call was declined.';
+  else if (normalized === 'unavailable' || normalized === 'not found') errorMessage = 'Recipient is currently unavailable.';
+
+  return {
+    isUserCancel: false,
+    nextStatus: isSipLoggedIn ? 'ended' : 'error',
+    errorMessage,
+    causeText: raw || 'Call failed',
+  };
+}
+
+/**
+ * Ensures Plivo's hidden `[data-devicetype="speakerDevice"]` audio elements have
+ * an explicit default `sinkId` so `audio.speakerDevices.get()` does not fail or
+ * warn "No speaker element found" when `permOnClick: true` is used.
+ */
+export function ensureDefaultSpeakerDevice(clientInstance: {
+  audio?: { speakerDevices?: { set?: (deviceId: string) => unknown } };
+} | null | undefined): void {
+  if (typeof document === 'undefined') return;
+  try {
+    const speakerEl = document.querySelector('[data-devicetype="speakerDevice"]') as
+      | (HTMLMediaElement & { sinkId?: string })
+      | null;
+    if (speakerEl && speakerEl.sinkId) return;
+    const setSpeaker = clientInstance?.audio?.speakerDevices?.set;
+    if (typeof setSpeaker === 'function') {
+      const result = setSpeaker('default') as { catch?: (fn: () => void) => void } | undefined;
+      if (result && typeof result.catch === 'function') {
+        result.catch(() => {});
+      }
+    }
+  } catch {}
+}

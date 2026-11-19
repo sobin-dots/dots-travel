@@ -5,7 +5,13 @@ import { CallToneGenerator } from '@/lib/call-tones';
 import { assertItineraryReady } from '@/lib/itinerary-content';
 import { readItineraryResponse } from '@/lib/itinerary-response';
 import { contactValuesFromForm } from '@/lib/contact-fields';
-import { patchPlivoSDK, createNoiseSuppressionShim, getLiveMicrophoneStream } from '@/lib/telephony/plivo-shim';
+import {
+  patchPlivoSDK,
+  createNoiseSuppressionShim,
+  getLiveMicrophoneStream,
+  classifyPlivoCallFailure,
+  ensureDefaultSpeakerDevice,
+} from '@/lib/telephony/plivo-shim';
 import {
   getCallbackPhone,
   normalizeDialablePhone,
@@ -972,11 +978,11 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         let clientInstance: any = null;
 
         try {
-          const plivoSdk = new PlivoClass({ debug: 'INFO', permOnClick: true, enableNoiseReduction: false, allowMultipleIncomingCalls: true });
+          const plivoSdk = new PlivoClass({ debug: 'OFF', permOnClick: true, enableNoiseReduction: false, allowMultipleIncomingCalls: true });
           clientInstance = plivoSdk.client || plivoSdk;
         } catch {
           try {
-            clientInstance = new PlivoClass.Client({ enableNoiseReduction: false, allowMultipleIncomingCalls: true });
+            clientInstance = new PlivoClass.Client({ debug: 'OFF', enableNoiseReduction: false, allowMultipleIncomingCalls: true });
           } catch {}
         }
 
@@ -990,6 +996,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           }
           clientInstance.on('onLogin', () => {
             console.log('[WebPhone] SIP registered successfully with Plivo:', data.username);
+            ensureDefaultSpeakerDevice(clientInstance);
             repairedEndpointRef.current = null;
             setWebPhoneStatus('ready');
             setWebPhoneError(null);
@@ -1077,8 +1084,13 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
             setAnsweringIncomingCall(false);
             toneGenRef.current?.stop();
             setIncomingCall(null);
-            setWebPhoneStatus('error');
-            setWebPhoneError(cause?.message || 'Call failed');
+            const outcome = classifyPlivoCallFailure(cause, clientInstance.isLoggedIn !== false);
+            setWebPhoneStatus(outcome.nextStatus);
+            setWebPhoneError(outcome.errorMessage);
+            if (!outcome.isUserCancel) {
+              console.warn('[WebPhone] Call did not connect:', outcome.causeText);
+            }
+            fetchData();
           });
           const handleIncoming = (callerId: any, extraHeaders: any, callInfo?: any) => {
             if (incomingActiveRef.current) return;
@@ -1216,7 +1228,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         try {
           const PlivoClass = (window as any).Plivo;
           patchPlivoSDK(PlivoClass);
-          const plivoSdk = new PlivoClass({ debug: 'INFO', permOnClick: true, enableNoiseReduction: false, allowMultipleIncomingCalls: true });
+          const plivoSdk = new PlivoClass({ debug: 'OFF', permOnClick: true, enableNoiseReduction: false, allowMultipleIncomingCalls: true });
           const clientInstance = plivoSdk.client || plivoSdk;
           if (clientInstance) {
             patchPlivoSDK(PlivoClass, clientInstance);
@@ -1234,6 +1246,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
       if (plivoClientRef.current && endpointConfig) {
         patchPlivoSDK((window as any).Plivo, plivoClientRef.current);
+        ensureDefaultSpeakerDevice(plivoClientRef.current);
         if (!plivoClientRef.current.noiseSuppresion) {
           plivoClientRef.current.noiseSuppresion = createNoiseSuppressionShim(plivoClientRef.current);
         }
@@ -1275,9 +1288,23 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   const handleHangupBrowserCall = () => {
     toneGenRef.current?.stop();
+    incomingActiveRef.current = false;
+    incomingAnswerRef.current = false;
+    setAnsweringIncomingCall(false);
     setIncomingCall(null);
-    if (plivoClientRef.current) {
-      try { plivoClientRef.current.hangup(); } catch {}
+    setWebPhoneError(null);
+    const client = plivoClientRef.current;
+    const hasActiveCall = Boolean(
+      client &&
+        (client._currentSession ||
+          webPhoneStatus === 'calling' ||
+          webPhoneStatus === 'ringing' ||
+          webPhoneStatus === 'connected')
+    );
+    if (hasActiveCall) {
+      try {
+        client.hangup();
+      } catch {}
     }
     setWebPhoneStatus('ended');
     if (callTimerRef.current) clearInterval(callTimerRef.current);
@@ -1307,6 +1334,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         }
 
         patchPlivoSDK((window as any).Plivo, plivoClientRef.current);
+        ensureDefaultSpeakerDevice(plivoClientRef.current);
         if (!plivoClientRef.current.noiseSuppresion) {
           plivoClientRef.current.noiseSuppresion = createNoiseSuppressionShim(plivoClientRef.current);
         }

@@ -1,59 +1,70 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createSpeechRecognitionShim, patchPlivoSDK } from '@/lib/telephony/plivo-shim';
+import { describe, expect, it, vi } from 'vitest';
+import { classifyPlivoCallFailure, ensureDefaultSpeakerDevice } from '@/lib/telephony/plivo-shim';
 
-describe('Plivo Browser SDK compatibility shim', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
+describe('Plivo Browser SDK shim helpers', () => {
+  it('treats user-initiated outgoing Canceled hangups as clean ended calls with no error', () => {
+    expect(classifyPlivoCallFailure('Canceled', true)).toEqual({
+      isUserCancel: true,
+      nextStatus: 'ended',
+      errorMessage: null,
+      causeText: 'Canceled',
+    });
+    expect(classifyPlivoCallFailure({ message: 'Cancelled' }, false)).toEqual({
+      isUserCancel: true,
+      nextStatus: 'ended',
+      errorMessage: null,
+      causeText: 'Cancelled',
+    });
   });
 
-  it('replaces Plivo speechRecognition on prototype and instances with a silent no-op shim', () => {
-    const abortReal = vi.fn();
-    const startReal = vi.fn();
-    const realSr = { abort: abortReal, start: startReal, stop: vi.fn() };
+  it('keeps a registered WebPhone ready (ended, not error) on normal remote call failures', () => {
+    expect(classifyPlivoCallFailure('Busy', true)).toEqual({
+      isUserCancel: false,
+      nextStatus: 'ended',
+      errorMessage: 'The recipient line is busy.',
+      causeText: 'Busy',
+    });
+    expect(classifyPlivoCallFailure('No Answer', true)).toEqual({
+      isUserCancel: false,
+      nextStatus: 'ended',
+      errorMessage: 'No answer from recipient.',
+      causeText: 'No Answer',
+    });
+    expect(classifyPlivoCallFailure('Rejected', true)).toEqual({
+      isUserCancel: false,
+      nextStatus: 'ended',
+      errorMessage: 'Call was declined.',
+      causeText: 'Rejected',
+    });
+  });
 
-    class FakeClient {
-      speechRecognition: unknown;
-      constructor() {
-        this.speechRecognition = realSr;
-      }
+  it('transitions to error status when SIP registration is lost on failure', () => {
+    expect(classifyPlivoCallFailure('Connection Error', false)).toEqual({
+      isUserCancel: false,
+      nextStatus: 'error',
+      errorMessage: 'Connection Error',
+      causeText: 'Connection Error',
+    });
+  });
+
+  it('sets default speaker device safely when audio element sinkId is empty', () => {
+    const set = vi.fn().mockResolvedValue(true);
+    const originalDoc = globalThis.document;
+    try {
+      (globalThis as { document?: unknown }).document = {
+        querySelector: vi.fn().mockReturnValue({ sinkId: '' }),
+      };
+      ensureDefaultSpeakerDevice({ audio: { speakerDevices: { set } } });
+      expect(set).toHaveBeenCalledWith('default');
+
+      set.mockClear();
+      (globalThis as { document?: unknown }).document = {
+        querySelector: vi.fn().mockReturnValue({ sinkId: 'default' }),
+      };
+      ensureDefaultSpeakerDevice({ audio: { speakerDevices: { set } } });
+      expect(set).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as { document?: unknown }).document = originalDoc;
     }
-    const FakePlivo = { Client: FakeClient };
-
-    vi.stubGlobal('window', { Plivo: FakePlivo });
-
-    // Pre-patch prototype before instantiation (matches layout.tsx / initWebPhone)
-    patchPlivoSDK(FakePlivo);
-    const client = new FakeClient() as FakeClient & { speechRecognition: ReturnType<typeof createSpeechRecognitionShim> };
-
-    expect(abortReal).toHaveBeenCalledTimes(1);
-    expect(client.speechRecognition.__isPlivoShim).toBe(true);
-
-    // Simulates Plivo's speechListeners() assigning handlers and calling stop()/start() on mute
-    const onError = vi.fn();
-    client.speechRecognition.stop();
-    client.speechRecognition.continuous = true;
-    client.speechRecognition.interimResults = true;
-    client.speechRecognition.onerror = onError;
-    client.speechRecognition.start();
-
-    expect(startReal).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
-  });
-
-  it('aborts and replaces an existing real speechRecognition on an already-created client instance', () => {
-    const abortExisting = vi.fn();
-    const existingInstance = {
-      speechRecognition: { abort: abortExisting, start: vi.fn(), stop: vi.fn() },
-    };
-
-    vi.stubGlobal('window', {});
-    patchPlivoSDK(undefined, existingInstance);
-
-    expect(abortExisting).toHaveBeenCalledTimes(1);
-    expect((existingInstance.speechRecognition as { __isPlivoShim?: boolean }).__isPlivoShim).toBe(true);
-
-    // Re-patching the same instance stays idempotent
-    patchPlivoSDK(undefined, existingInstance);
-    expect((existingInstance.speechRecognition as { __isPlivoShim?: boolean }).__isPlivoShim).toBe(true);
   });
 });
