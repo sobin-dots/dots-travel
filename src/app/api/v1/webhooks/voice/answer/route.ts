@@ -230,7 +230,7 @@ export async function handleAnswer(req: NextRequest) {
           .dial(sipEndpoint, {
             callerId: callerPhone,
             timeLimit: 3600,
-            timeout: 25,
+            timeout: 15,
             dialMusic: 'real',
             action: dialAttemptUrl(dialActionUrl, callRoutingState(reservation.call.requestedParams).dialAttempt),
             method: 'POST',

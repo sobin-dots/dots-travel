@@ -6,17 +6,12 @@ import {
   getTenantIntegrationsSummary,
   IntegrationProvider,
 } from '@/lib/integrations/credentials-manager';
+import { resolveRequestBaseUrl } from '@/lib/webhook-helper';
 
 export const runtime = 'nodejs';
 
 function extractRequestBaseUrl(req: NextRequest): string {
-  const proto = req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http');
-  const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
-  if (host) {
-    return `${proto}://${host}`.replace(/\/+$/, '');
-  }
-  const urlObj = new URL(req.url);
-  return `${urlObj.protocol}//${urlObj.host}`;
+  return resolveRequestBaseUrl(req);
 }
 
 export async function GET(req: NextRequest) {

@@ -4,8 +4,9 @@ import * as plivo from 'plivo';
 import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
 import { encryptData } from '@/lib/crypto';
-import { getTenantIntegration } from '@/lib/integrations/credentials-manager';
+import { getTenantIntegration, syncTenantPlivoWebhooksIfNeeded } from '@/lib/integrations/credentials-manager';
 import { decryptAgentEndpoint, type AgentEndpoint } from '@/lib/telephony/agent-routing';
+import { resolveRequestBaseUrl } from '@/lib/webhook-helper';
 
 export const runtime = 'nodejs';
 export async function GET(req: NextRequest) {
@@ -14,6 +15,8 @@ export async function GET(req: NextRequest) {
   const integration = await getTenantIntegration(auth!.organizationId, 'plivo');
   const { authId, authToken } = integration?.credentials || {};
   if (!authId || !authToken) return NextResponse.json({ error: 'Configure Plivo in Settings → Platform & BYOK first.' }, { status: 400 });
+  const requestBaseUrl = resolveRequestBaseUrl(req, req.nextUrl.host);
+  const syncedAppId = await syncTenantPlivoWebhooksIfNeeded(auth!.organizationId, requestBaseUrl, { force: forceRefresh });
   try {
     const member = await db.membership.findUniqueOrThrow({ where: { organizationId_userId: { organizationId: auth!.organizationId, userId: auth!.userId } } });
     let endpoint = !forceRefresh && member.voiceEndpoint ? decryptAgentEndpoint(member.voiceEndpoint) : null;
@@ -27,7 +30,7 @@ export async function GET(req: NextRequest) {
         const identity = createHash('sha256').update(`${auth!.organizationId}:${auth!.userId}`).digest('hex').slice(0, 16);
         const password = `P${randomBytes(12).toString('hex')}9a`;
         const applications = await client.applications.list();
-        const appId = integration?.credentials?.appId || applications.find((a: any) => a.appId === integration?.metadata?.applicationId)?.appId || applications.find((a: any) => a.defaultEndpointApp)?.appId || applications[0]?.appId;
+        const appId = syncedAppId || integration?.credentials?.appId || applications.find((a: any) => a.appId === integration?.metadata?.applicationId)?.appId || applications.find((a: any) => a.defaultEndpointApp)?.appId || applications[0]?.appId;
         if (!appId) throw new Error('Set a Plivo application for browser endpoints before receiving calls.');
         const alias = `Agent-${identity}`;
         const expectedPrefix = `a${identity}`;
