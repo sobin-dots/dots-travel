@@ -4,7 +4,7 @@ name: Deploy dots-travel to Lightsail
 on:
   push:
     branches:
-      - master
+      - prod
   workflow_dispatch:
 
 concurrency:
@@ -27,7 +27,7 @@ jobs:
       - name: Deploy application
         run: |
           cd /home/ubuntu/apps/dots-travel
-          bash deploy.sh
+          bash deploy.sh prod
 
       
       - name: Verify application
