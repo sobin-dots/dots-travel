@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { processIncomingWebhook } from '@/lib/webhook-helper';
+import { processIncomingWebhook, resolveRequestBaseUrl } from '@/lib/webhook-helper';
 import { PlivoXmlBuilder } from '@/lib/telephony/xml/builder';
+import { callRoutingState, dialAttemptUrl, reserveInboundCall } from '@/lib/telephony/agent-routing';
 import {
   resolveTenantPlivoIntegration,
-  buildOrgWebhookUrls,
+  resolveOrgWebhookUrls,
 } from '@/lib/integrations/credentials-manager';
 
 export const runtime = 'nodejs';
@@ -24,11 +25,7 @@ export async function handleAnswer(req: NextRequest) {
   const forwardTo = urlObj.searchParams.get('forwardTo') || params.forwardTo;
   const connectTo = urlObj.searchParams.get('connectTo') || params.connectTo;
 
-  const requestBase = `${req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http')}://${
-    req.headers.get('x-forwarded-host') || req.headers.get('host') || urlObj.host
-  }`
-    .trim()
-    .replace(/\/+$/, '');
+  const requestBase = resolveRequestBaseUrl(req, urlObj.host);
 
   const queryOrgId = urlObj.searchParams.get('orgId') || params.orgId;
   const destinationNumber = params.To || params.to;
@@ -76,27 +73,17 @@ export async function handleAnswer(req: NextRequest) {
     }
   }
 
-  if (!resolvedOrg) {
-    resolvedOrg = await db.organization.findFirst();
-  }
-
   const effectiveOrgId = tenantPlivo?.organizationId || resolvedOrg?.id;
+  if (!effectiveOrgId) return NextResponse.json({ error: 'No organization matched this call' }, { status: 404 });
   const plivoCreds = tenantPlivo?.integration?.credentials || {};
   const plivoMeta = tenantPlivo?.integration?.metadata || {};
 
-  // Use DB-stored webhook URLs generated in Settings -> Platform & BYOK (falling back to request origin if not yet saved)
-  const effectiveBaseUrl = (
-    (!requestBase.includes('localhost') ? requestBase : plivoMeta.webhookBaseUrl) ||
-    requestBase
-  )
-    .trim()
-    .replace(/\/+$/, '');
-
-  const orgWebhookUrls = effectiveOrgId
-    ? plivoMeta.webhookUrls && plivoMeta.webhookUrls.voiceRecord?.includes(effectiveOrgId)
-      ? plivoMeta.webhookUrls
-      : buildOrgWebhookUrls(effectiveBaseUrl, effectiveOrgId)
+  // Resolve live request origin over stale DB webhook URLs (e.g. old local/ngrok tunnels)
+  const resolved = effectiveOrgId
+    ? resolveOrgWebhookUrls(effectiveOrgId, requestBase, plivoMeta)
     : null;
+  const effectiveBaseUrl = resolved?.effectiveBaseUrl || requestBase.trim().replace(/\/+$/, '');
+  const orgWebhookUrls = resolved?.webhookUrls || null;
 
   const recordActionUrl =
     orgWebhookUrls?.voiceRecord ||
@@ -106,10 +93,12 @@ export async function handleAnswer(req: NextRequest) {
     `${effectiveBaseUrl}/api/v1/webhooks/voice/fallback${effectiveOrgId ? `?orgId=${effectiveOrgId}` : ''}`;
 
   const builder = new PlivoXmlBuilder();
+  let inboundCallHandled = false;
+  const dialCallbackUrl = `${effectiveBaseUrl}/api/v1/webhooks/voice/dial?orgId=${effectiveOrgId}`;
 
   const isSipEndpointCall = Boolean(
     rawFrom.startsWith('sip:') ||
-      rawFrom.includes('agent') ||
+      /^(?:agent_|a[0-9a-f]{16})/i.test(rawFrom) ||
       params.Direction === 'outbound' ||
       params.direction === 'outbound' ||
       params.CallDirection === 'outbound' ||
@@ -193,6 +182,12 @@ export async function handleAnswer(req: NextRequest) {
   } else {
     // Inbound call from customer/client to the tenant's Plivo connected number
     const callerPhone = params.From || params.from || resolvedCallerId;
+    if (!callUuid) return NextResponse.json({ error: 'Call UUID required' }, { status: 400 });
+    const reservation = await reserveInboundCall({ organizationId: effectiveOrgId, callUuid, from: callerPhone,
+      to: destinationNumber || phoneRecord?.e164 || 'Unknown', phoneNumberId: phoneRecord?.id,
+      forwarded: !!(forwardTo || phoneRecord?.forwardTo) });
+    if (reservation.call.endedAt) return new NextResponse(new PlivoXmlBuilder().hangup().toXml(), { headers: { 'content-type': 'application/xml; charset=utf-8' } });
+    inboundCallHandled = true;
 
     if (forwardTo || phoneRecord?.forwardTo) {
       const targetForward = forwardTo || phoneRecord.forwardTo;
@@ -213,39 +208,15 @@ export async function handleAnswer(req: NextRequest) {
           action: dialActionUrl,
           method: 'POST',
           redirect: true,
+          callbackUrl: dialCallbackUrl,
+          callbackMethod: 'POST',
         });
     } else {
-      // Resolve tenant's WebRTC SIP endpoint from DB-configured Plivo credentials (or live Plivo API if not yet cached in DB)
-      let sipEndpoint: string | null =
-        plivoCreds.sipEndpoint ||
-        (plivoCreds.endpointUsername ? `sip:${plivoCreds.endpointUsername}@phone.plivo.com` : null);
-
-      if (!sipEndpoint && plivoCreds.authId && plivoCreds.authToken) {
-        try {
-          const plivoModule = await import('plivo');
-          const client = new (plivoModule as any).Client(plivoCreds.authId, plivoCreds.authToken);
-          const eps = await client.endpoints.list();
-          if (Array.isArray(eps) && eps.length > 0) {
-            const matchedEp =
-              eps.find((e: any) => plivoCreds.endpointUsername && e.username === plivoCreds.endpointUsername) ||
-              eps.find((e: any) => String(e.sipRegistered).toLowerCase() === 'true' || e.sipRegistered === true) ||
-              eps[0];
-
-            if (matchedEp?.username) {
-              sipEndpoint = matchedEp.sipUri || `sip:${matchedEp.username}@phone.plivo.com`;
-            }
-          }
-        } catch (err) {
-          console.warn('[VoiceAnswer] Failed to query tenant Plivo endpoint:', err);
-        }
-      }
+      const sipEndpoint = reservation.sipUri;
 
       if (sipEndpoint) {
-        // Always attempt to ring the tenant's WebRTC SIP endpoint first.
-        // Plivo's SIP registrar handles real-time availability:
-        // - If the user is logged into the Web Phone, it rings in the app immediately.
-        // - If the user is logged out, busy, or declines/ignores the call, Plivo immediately invokes
-        //   dialActionUrl (/api/v1/webhooks/voice/fallback) which connects the caller to the AI voicemail.
+        // Ring the responsible salesperson first. The Dial action retries available
+        // round-robin backups only after this attempt fails.
         builder
           .record({
             action: recordActionUrl,
@@ -260,9 +231,12 @@ export async function handleAnswer(req: NextRequest) {
             callerId: callerPhone,
             timeLimit: 3600,
             timeout: 25,
-            action: dialActionUrl,
+            dialMusic: 'real',
+            action: dialAttemptUrl(dialActionUrl, callRoutingState(reservation.call.requestedParams).dialAttempt),
             method: 'POST',
             redirect: true,
+            callbackUrl: dialAttemptUrl(dialCallbackUrl, callRoutingState(reservation.call.requestedParams).dialAttempt),
+            callbackMethod: 'POST',
           });
       } else {
         // No WebRTC SIP endpoint configured -> connect to AI agent voicemail
@@ -292,6 +266,11 @@ export async function handleAnswer(req: NextRequest) {
       status: 200,
       headers: { 'content-type': 'application/xml; charset=utf-8' },
     });
+  }
+
+  if (inboundCallHandled) {
+    if (webhookEventId) await db.webhookEvent.update({ where: { id: webhookEventId }, data: { status: 'processed', processedAt: new Date() } });
+    return new NextResponse(xmlResponse, { headers: { 'content-type': 'application/xml; charset=utf-8' } });
   }
 
   // Update Call state in DB
@@ -325,70 +304,80 @@ export async function handleAnswer(req: NextRequest) {
         const actorUserId = params['X-PH-actorUserId'] || params['x-ph-actoruserid'] || undefined;
         const actorName = params['X-PH-actorName'] || params['x-ph-actorname'] || undefined;
         const actorEmail = params['X-PH-actorEmail'] || params['x-ph-actoremail'] || undefined;
-        const newCall = await db.call.create({
-          data: {
-            organizationId: effectiveOrgId,
-            phoneNumberId: phoneRecord?.id || null,
-            plivoCallUuid: callUuid,
-            from: resolvedCallerId || 'Unknown',
-            to: destinationNumber || 'Unknown',
-            direction: 'outbound',
-            status: 'in-progress',
-            recordingEnabled: true,
-            transcriptionEnabled: true,
-            transcriptionLanguage: 'en-US',
-            answeredAt: new Date(),
-            requestedMode: 'browser',
-            requestedParams: actorUserId || actorName || actorEmail
-              ? { actorUserId, actorName, actorEmail }
-              : undefined,
-          },
+        await db.call.createMany({
+          data: [
+            {
+              organizationId: effectiveOrgId,
+              phoneNumberId: phoneRecord?.id || null,
+              plivoCallUuid: callUuid,
+              from: resolvedCallerId || 'Unknown',
+              to: destinationNumber || 'Unknown',
+              direction: 'outbound',
+              status: 'in-progress',
+              recordingEnabled: true,
+              transcriptionEnabled: true,
+              transcriptionLanguage: 'en-US',
+              answeredAt: new Date(),
+              requestedMode: 'browser',
+              requestedParams: actorUserId || actorName || actorEmail
+                ? { actorUserId, actorName, actorEmail }
+                : undefined,
+            },
+          ],
+          skipDuplicates: true,
         });
-
-        await db.callEvent.create({
-          data: {
-            organizationId: effectiveOrgId,
-            callId: newCall.id,
-            eventType: 'answer',
-            status: 'in-progress',
-            payload: params,
-            occurredAt: new Date(),
-            webhookEventId,
-          },
-        });
+        const savedCall = await db.call.findUnique({ where: { plivoCallUuid: callUuid } });
+        if (savedCall) {
+          await db.callEvent.create({
+            data: {
+              organizationId: effectiveOrgId,
+              callId: savedCall.id,
+              eventType: 'answer',
+              status: 'in-progress',
+              payload: params,
+              occurredAt: new Date(),
+              webhookEventId,
+            },
+          });
+        }
       }
     } else {
       // Inbound call from customer to virtual number
       if (effectiveOrgId) {
         const callerPhone = params.From || params.from || 'Unknown Caller';
         const calledNumber = destinationNumber || phoneRecord?.e164 || resolvedCallerId || 'Unknown';
-        const newCall = await db.call.create({
-          data: {
-            organizationId: effectiveOrgId,
-            phoneNumberId: phoneRecord?.id || null,
-            plivoCallUuid: callUuid,
-            from: callerPhone,
-            to: calledNumber,
-            direction: 'inbound',
-            status: 'in-progress',
-            recordingEnabled: true,
-            transcriptionEnabled: true,
-            transcriptionLanguage: 'en-US',
-            answeredAt: new Date(),
-          },
+        await db.call.createMany({
+          data: [
+            {
+              organizationId: effectiveOrgId,
+              phoneNumberId: phoneRecord?.id || null,
+              plivoCallUuid: callUuid,
+              from: callerPhone,
+              to: calledNumber,
+              direction: 'inbound',
+              status: 'in-progress',
+              recordingEnabled: true,
+              transcriptionEnabled: true,
+              transcriptionLanguage: 'en-US',
+              answeredAt: new Date(),
+            },
+          ],
+          skipDuplicates: true,
         });
-
-        await db.callEvent.create({
-          data: {
-            organizationId: effectiveOrgId,
-            callId: newCall.id,
-            eventType: 'answer',
-            status: 'in-progress',
-            payload: params,
-            occurredAt: new Date(),
-            webhookEventId,
-          },
-        });
+        const savedCall = await db.call.findUnique({ where: { plivoCallUuid: callUuid } });
+        if (savedCall) {
+          await db.callEvent.create({
+            data: {
+              organizationId: effectiveOrgId,
+              callId: savedCall.id,
+              eventType: 'answer',
+              status: 'in-progress',
+              payload: params,
+              occurredAt: new Date(),
+              webhookEventId,
+            },
+          });
+        }
       }
     }
 

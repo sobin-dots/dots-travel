@@ -10,29 +10,35 @@ export async function GET(req: NextRequest) {
   if (errorResponse) return errorResponse;
 
   try {
-    const memberships = await db.membership.findMany({
-      where: { userId: auth!.userId },
-      include: {
-        organization: {
-          select: {
-            id: true,
-            name: true,
-            slug: true,
-            primaryTelephonyProvider: true,
-            createdAt: true,
-            _count: {
-              select: {
-                members: true,
-                numbers: true,
-                calls: true,
-                leads: true,
+    const [currentUser, memberships] = await Promise.all([
+      db.user.findUnique({
+        where: { id: auth!.userId },
+        select: { id: true, name: true, email: true },
+      }),
+      db.membership.findMany({
+        where: { userId: auth!.userId },
+        include: {
+          organization: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              primaryTelephonyProvider: true,
+              createdAt: true,
+              _count: {
+                select: {
+                  members: true,
+                  numbers: true,
+                  calls: true,
+                  leads: true,
+                },
               },
             },
           },
         },
-      },
-      orderBy: { createdAt: 'asc' },
-    });
+        orderBy: { createdAt: 'asc' },
+      }),
+    ]);
 
     const organizations = memberships.map((m) => ({
       id: m.organization.id,
@@ -47,6 +53,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
+      user: currentUser,
       activeOrganizationId: auth!.organizationId,
       organizations,
     });

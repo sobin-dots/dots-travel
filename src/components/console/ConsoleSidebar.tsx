@@ -9,6 +9,8 @@ import {
   Compass,
   Building2,
   BookUser,
+  Inbox,
+  UserCheck,
   Users,
   MessageSquare,
   Mic,
@@ -36,6 +38,8 @@ export function ConsoleSidebar() {
     setIsMobileMenuOpen,
     incomingCall,
     webPhoneStatus,
+    currentOrg,
+    currentUser,
   } = useConsole();
 
   const navItems = [
@@ -47,8 +51,12 @@ export function ConsoleSidebar() {
       badge: calls.filter((c) => c.status === 'in-progress').length || undefined,
     },
     { href: '/console/leads', label: 'Leads & Itineraries', icon: Compass, count: leadsList.length },
+    // { href: '/console/enquiries', label: 'Lead Inbox', icon: Inbox },
     { href: '/console/suppliers', label: 'Suppliers', icon: Building2, count: suppliersList.length },
-    { href: '/console/contacts', label: 'Contacts', icon: BookUser, count: contactsList.length },
+    { href: '/console/contacts', label: 'Enquiries', icon: BookUser, count: contactsList.length },
+    ...(currentOrg?.role && currentOrg.role !== 'viewer'
+      ? [{ href: '/console/assigned-to-me', label: 'Assigned to me', icon: UserCheck, count: contactsList.filter((c) => c.assignedToId === currentUser?.id).length }]
+      : []),
     { href: '/console/users', label: 'Staff Team', icon: Users, count: staffList.length },
     { href: '/console/recordings', label: 'Recordings', icon: Mic, count: recordings.length },
     { href: '/console/transcripts', label: 'Transcripts', icon: FileText, count: transcripts.length },
@@ -59,6 +67,7 @@ export function ConsoleSidebar() {
       subItems: [
         { href: '/console/settings', label: 'Platform & BYOK', exact: true },
         { href: '/console/settings/itinerary-rules', label: 'Itinerary Rules', icon: Sparkles },
+        { href: '/console/settings/lead-intake', label: 'Lead Intake', icon: BookUser },
       ],
     },
     { href: '/console/audit', label: 'Audit Log', icon: Shield },
@@ -154,6 +163,31 @@ export function ConsoleSidebar() {
     </nav>
   );
 
+  const renderUserBadge = () => (
+    <div className="p-2.5 bg-zinc-900/70 border border-zinc-800 rounded-lg text-[11px] flex items-center gap-2.5">
+      <div className="w-7 h-7 rounded-full bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 flex items-center justify-center font-bold text-xs shrink-0 uppercase">
+        {(currentUser?.name || currentUser?.email || 'U').slice(0, 1)}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-1.5">
+          <span className="font-semibold text-white truncate">
+            {currentUser?.name || currentUser?.email || 'Signed in user'}
+          </span>
+          {currentOrg?.role && (
+            <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-[9px] text-zinc-300 uppercase font-semibold shrink-0">
+              {currentOrg.role}
+            </span>
+          )}
+        </div>
+        {currentUser?.email && (
+          <span className="text-[10px] text-zinc-400 font-mono truncate block">
+            {currentUser.email}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <>
       {/* Desktop Persistent Sidebar */}
@@ -161,6 +195,8 @@ export function ConsoleSidebar() {
         {renderNavList(false)}
 
         <div className="space-y-2">
+          {renderUserBadge()}
+
           <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-lg text-[11px] flex items-center justify-between">
             <div className="flex items-center gap-2 min-w-0">
               <span
@@ -226,6 +262,8 @@ export function ConsoleSidebar() {
             </div>
 
             <div className="space-y-2">
+              {renderUserBadge()}
+
               <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded-lg text-[11px] flex items-center justify-between">
                 <div className="flex items-center gap-2 min-w-0">
                   <span

@@ -36,12 +36,17 @@ import {
   Loader2,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
+import { EditableItinerary, type ItineraryEditorState } from './EditableItinerary';
 import { VisualItinerary } from '@/components/VisualItinerary';
+import { readItineraryResponse } from '@/lib/itinerary-response';
+import { ItineraryComparison } from './ItineraryComparison';
+import { isComparisonRequest } from '@/lib/itinerary-comparison';
 
 export function LeadDetailDrawer() {
   const {
     selectedLead,
     setSelectedLead,
+    setLeadsList,
     bearerToken,
     authFetch,
     suppliersList,
@@ -70,7 +75,40 @@ export function LeadDetailDrawer() {
   };
 
   // Active Drawer Tab
-  const [activeTab, setActiveTab] = useState<'itinerary' | 'send_itinerary' | 'procurement' | 'pricing' | 'flights' | 'dispatch' | 'lifecycle'>('itinerary');
+  const [activeTab, setActiveTab] = useState<'itinerary' | 'edit_itinerary' | 'comparison' | 'send_itinerary' | 'procurement' | 'pricing' | 'flights' | 'dispatch' | 'lifecycle'>('itinerary');
+  const [downloadFormat, setDownloadFormat] = useState('pdf');
+  const [comparisonInstructions, setComparisonInstructions] = useState('');
+  const [comparisonLeadId, setComparisonLeadId] = useState<string | null>(null);
+  const openComparison = () => { if (selectedLead) { setComparisonLeadId(selectedLead.id); setActiveTab('comparison'); } };
+  const [editorSession, setEditorSession] = useState<{ leadId: string; key: number } | null>(null);
+  const [editorState, setEditorState] = useState<ItineraryEditorState>({ dirty: false, saving: false });
+  const [manualSaveMessage, setManualSaveMessage] = useState('');
+  const manualEditInProgress = editorState.dirty || editorState.saving;
+
+  // Keep the editor mounted when changing tabs so reviewing details never loses a draft.
+  const openItineraryEditor = () => {
+    if (!selectedLead || savingParams || leadRevising) return;
+    if (!manualEditInProgress || editorSession?.leadId !== selectedLead.id) {
+      setEditorSession(current => ({ leadId: selectedLead.id, key: (current?.key || 0) + 1 }));
+      setEditorState({ dirty: false, saving: false });
+    }
+    setManualSaveMessage('');
+    setActiveTab('edit_itinerary');
+  };
+
+  const closeDrawer = () => {
+    if (editorState.saving) return;
+    if (editorState.dirty && !window.confirm('Discard your unsaved itinerary changes?')) return;
+    setEditorState({ dirty: false, saving: false });
+    setSelectedLead(null);
+  };
+
+  useEffect(() => {
+    if (!editorState.dirty) return;
+    const protectDraft = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', protectDraft);
+    return () => window.removeEventListener('beforeunload', protectDraft);
+  }, [editorState.dirty]);
 
   // Send Itinerary (Customer & Supplier) tab state
   const [sendingToCustomer, setSendingToCustomer] = useState(false);
@@ -207,6 +245,11 @@ export function LeadDetailDrawer() {
   // Reset tab and quote states when switching to a different lead
   useEffect(() => {
     setActiveTab('itinerary');
+    setComparisonLeadId(null);
+    setComparisonInstructions('');
+    setEditorSession(null);
+    setEditorState({ dirty: false, saving: false });
+    setManualSaveMessage('');
     setSupplierQuotes(Array.isArray(selectedLead?.supplierQuotations) ? selectedLead.supplierQuotations : []);
     setCustomerQuotes(Array.isArray(selectedLead?.quotations) ? selectedLead.quotations : []);
     setComparisonMatrix(null);
@@ -232,7 +275,7 @@ export function LeadDetailDrawer() {
   }, [selectedLead?.id]);
 
   const handleSaveTripParams = async () => {
-    if (!selectedLead) return;
+    if (!selectedLead || manualEditInProgress) return;
     await runDrawerExclusive(`save-params:${selectedLead.id}`, async () => {
       setSavingParams(true);
       setParamsSuccessMsg('');
@@ -259,7 +302,7 @@ export function LeadDetailDrawer() {
           },
           body: JSON.stringify(payload),
         });
-        const data = await res.json();
+        const data = await readItineraryResponse<{ lead?: typeof selectedLead; error?: string }>(res);
         if (res.ok && data.lead) {
           setSelectedLead((current: any) => current?.id === data.lead.id ? data.lead : current);
           setParamsSuccessMsg('✓ Itinerary regenerated. Dashboard and PDF use the saved programme.');
@@ -434,7 +477,7 @@ export function LeadDetailDrawer() {
 
   // Handler: Send Revised / New Itinerary PDF to Customer via Email
   const handleSendItineraryToCustomer = async () => {
-    if (!selectedLead) return;
+    if (!selectedLead || manualEditInProgress) return;
     if (!leadCustomerEmail || !leadCustomerEmail.includes('@')) {
       setSendItineraryError('Please enter a valid customer email address.');
       return;
@@ -474,7 +517,7 @@ export function LeadDetailDrawer() {
 
   // Handler: Send Itinerary PDF to Supplier via Email to Request Quote
   const handleSendItineraryToSupplier = async () => {
-    if (!selectedLead) return;
+    if (!selectedLead || manualEditInProgress) return;
     if (!leadSelectedSupplierId) {
       setSendItineraryError('Please select a partner supplier first.');
       return;
@@ -514,7 +557,7 @@ export function LeadDetailDrawer() {
 
   // Handler: Send Itinerary PDF to Both Customer & Supplier via Email
   const handleSendItineraryToBoth = async () => {
-    if (!selectedLead) return;
+    if (!selectedLead || manualEditInProgress) return;
     if (!leadCustomerEmail || !leadCustomerEmail.includes('@')) {
       setSendItineraryError('Please enter a valid customer email address.');
       return;
@@ -819,6 +862,7 @@ export function LeadDetailDrawer() {
 
   // Handler: Email Quotation Dispatch (P2-12, P2-13, P2-14, P2-15)
   const handleDispatchQuotation = async () => {
+    if (manualEditInProgress) return;
     await runDrawerExclusive(`dispatch-quote:${selectedLead.id}`, async () => {
       setDispatching(true);
       setDispatchSuccessMsg('');
@@ -1083,22 +1127,27 @@ export function LeadDetailDrawer() {
             </div>
           </div>
 
-          {/* Quick PDF Downloads & Close */}
+          {/* Editing, PDF Downloads & Close */}
           <div className="flex items-center gap-2 flex-wrap self-end md:self-auto">
+            <label className="text-xs text-zinc-400">Download format<select aria-label="Itinerary download format" value={downloadFormat} onChange={e => setDownloadFormat(e.target.value)} className="ml-2 rounded border border-zinc-700 bg-zinc-900 p-1"><option value="pdf">PDF</option><option value="docx">Word (.docx)</option></select></label>
+            <button type="button" onClick={openItineraryEditor} disabled={savingParams || leadRevising || editorState.saving} className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-lg flex items-center gap-1.5 font-semibold disabled:opacity-50">
+              <Edit3 className="w-3.5 h-3.5" /> Edit itinerary
+            </button>
             <a
-              href={leadItineraryIssue(selectedLead) || savingParams ? undefined : `/api/v1/leads/${selectedLead.id}/pdf?token=${bearerToken}`}
-              aria-disabled={!!leadItineraryIssue(selectedLead) || savingParams}
+              href={leadItineraryIssue(selectedLead) || savingParams || manualEditInProgress ? undefined : downloadFormat === 'docx' ? `/api/v1/leads/${selectedLead.id}/export?format=docx&token=${bearerToken}` : `/api/v1/leads/${selectedLead.id}/pdf?token=${bearerToken}`}
+              aria-disabled={!!leadItineraryIssue(selectedLead) || savingParams || manualEditInProgress}
               target="_blank"
               rel="noreferrer"
               className="text-xs bg-red-950/60 hover:bg-red-900/80 text-red-200 px-3 py-1.5 rounded-lg border border-red-700/60 flex items-center gap-1.5 transition font-semibold shadow-sm shadow-red-900/20"
               title="Download Executive Itinerary Proposal PDF (without Sample Quotation)"
             >
               <Download className="w-3.5 h-3.5 text-red-400" />
-              <span>Itinerary Proposal PDF</span>
+              <span>{downloadFormat === 'docx' ? 'Download Word itinerary' : 'Itinerary Proposal PDF'}</span>
             </a>
             {supplierQuotes.length > 0 && customerQuotes.length > 0 && (
               <a
-                href={`/api/v1/leads/${selectedLead.id}/quotation-pdf?token=${bearerToken}`}
+                href={manualEditInProgress ? undefined : `/api/v1/leads/${selectedLead.id}/quotation-pdf?token=${bearerToken}`}
+                aria-disabled={manualEditInProgress}
                 target="_blank"
                 rel="noreferrer"
                 className="text-xs bg-indigo-950/70 hover:bg-indigo-900/90 text-indigo-200 px-3 py-1.5 rounded-lg border border-indigo-600/60 flex items-center gap-1.5 transition font-semibold shadow-sm shadow-indigo-900/20"
@@ -1110,7 +1159,9 @@ export function LeadDetailDrawer() {
             )}
             <button
               type="button"
-              onClick={() => setSelectedLead(null)}
+              onClick={closeDrawer}
+              disabled={editorState.saving}
+              aria-label="Close lead details"
               className="text-zinc-400 hover:text-white p-1.5 rounded-lg hover:bg-zinc-800 text-lg leading-none transition ml-1"
             >
               ✕
@@ -1118,8 +1169,12 @@ export function LeadDetailDrawer() {
           </div>
         </div>
 
+        {manualEditInProgress && <div role="status" className="px-4 sm:px-6 py-2 text-xs text-amber-200 bg-amber-950/30 border-b border-amber-800/40">{editorState.saving ? 'Saving itinerary…' : <>You have unsaved itinerary changes. <button type="button" onClick={openItineraryEditor} className="underline font-semibold">Return to editor</button> to save or cancel before sharing or revising with AI.</>}</div>}
+        {manualSaveMessage && <p role="status" className="px-4 sm:px-6 py-2 text-xs text-emerald-300 bg-emerald-950/30">{manualSaveMessage}</p>}
+
         {/* Tab Navigation */}
         <div className="px-4 sm:px-6 bg-zinc-950 border-b border-zinc-800 flex items-center gap-1 overflow-x-auto shrink-0 py-2">
+          <button type="button" onClick={openComparison} className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap ${activeTab === 'comparison' ? 'bg-indigo-600 text-white' : 'text-zinc-400 hover:text-white'}`}><Layers className="inline w-3.5 h-3.5 mr-1" />Compare itineraries</button>
           <button
             type="button"
             onClick={() => setActiveTab('itinerary')}
@@ -1130,7 +1185,16 @@ export function LeadDetailDrawer() {
             }`}
           >
             <Compass className="w-3.5 h-3.5" />
-            <span>Itinerary & Revisions (P2-08)</span>
+            <span>Itinerary & Revisions</span>
+          </button>
+          <button
+            type="button"
+            onClick={openItineraryEditor}
+            disabled={savingParams || leadRevising || editorState.saving}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 ${activeTab === 'edit_itinerary' ? 'bg-indigo-600 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-900'}`}
+          >
+            <Edit3 className="w-3.5 h-3.5" />
+            <span>Edit itinerary{editorState.dirty ? ' • Unsaved' : ''}</span>
           </button>
           <button
             type="button"
@@ -1208,6 +1272,27 @@ export function LeadDetailDrawer() {
 
         {/* Tab Contents */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+          {comparisonLeadId === selectedLead.id && <div hidden={activeTab !== 'comparison'}><ItineraryComparison key={selectedLead.id} lead={selectedLead} initialInstructions={comparisonInstructions} disabled={manualEditInProgress || savingParams || leadRevising} onMainChanged={lead => { setSelectedLead((previous: any) => previous?.id === lead.id ? { ...previous, ...lead } : previous); setLeadsList((previous: any[]) => previous.map(item => item.id === lead.id ? { ...item, ...lead } : item)); fetchData(); }} /></div>}
+          {editorSession && editorSession.leadId === selectedLead.id && <div hidden={activeTab !== 'edit_itinerary'} className="space-y-4">
+            <div><h4 className="text-base font-semibold text-white">Edit generated itinerary</h4><p className="text-sm text-zinc-400 mt-1">Update the day-by-day programme, hotels, activities, inclusions and notes below.</p></div>
+            <EditableItinerary
+              key={`${editorSession.leadId}:${editorSession.key}`}
+              lead={selectedLead}
+              initialEditing
+              disabled={savingParams || leadRevising}
+              onStateChange={setEditorState}
+              onCancel={() => { setEditorSession(null); setActiveTab('itinerary'); }}
+              onSaved={(lead) => {
+                setSelectedLead((current: any) => current?.id === lead.id ? lead : current);
+                setLeadsList((current: any[]) => current.map(item => item.id === lead.id ? { ...item, ...lead } : item));
+                setEditorState({ dirty: false, saving: false });
+                setEditorSession(null);
+                setManualSaveMessage('Itinerary saved. Downloads and emails will use your changes.');
+                setActiveTab('itinerary');
+                fetchData();
+              }}
+            />
+          </div>}
           {/* TAB 1: ITINERARY & AI REVISION */}
           {activeTab === 'itinerary' && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -1430,7 +1515,7 @@ export function LeadDetailDrawer() {
                     <button
                       type="button"
                       onClick={handleSaveTripParams}
-                      disabled={savingParams || leadRevising}
+                      disabled={savingParams || leadRevising || manualEditInProgress}
                       className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 px-3 rounded-lg text-xs flex items-center justify-center gap-2 transition disabled:opacity-50 cursor-pointer shadow-md shadow-emerald-600/20"
                     >
                       {savingParams ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
@@ -1508,12 +1593,8 @@ export function LeadDetailDrawer() {
                       Trip parameters have changed. Save parameters and regenerate before sending or downloading.
                     </div>
                   )}
-                  <VisualItinerary
-                    itineraryText={selectedLead.itinerary}
-                    destination={selectedLead.destination}
-                    leadTitle={selectedLead.title}
-                    durationDays={selectedLead.durationDays}
-                  />
+                  <div className="mb-3 flex items-center justify-between gap-3"><h4 className="text-sm font-semibold text-white">Generated itinerary</h4><button type="button" onClick={openItineraryEditor} disabled={savingParams || leadRevising || editorState.saving} className="text-xs font-semibold text-indigo-300 underline disabled:opacity-50">Edit itinerary</button></div>
+                  <VisualItinerary itineraryText={selectedLead.itinerary} destination={selectedLead.destination} leadTitle={selectedLead.title} durationDays={selectedLead.durationDays} />
                 </div>
 
                 {/* Prompt for Corrections & Revisions (P2-08) */}
@@ -1535,8 +1616,8 @@ export function LeadDetailDrawer() {
                   <div className="flex justify-end">
                     <button
                       type="button"
-                      onClick={handleReviseItinerary}
-                      disabled={leadRevising || savingParams || !!leadItineraryIssue(selectedLead) || !leadRevisionNotes.trim()}
+                      onClick={() => { if (isComparisonRequest(leadRevisionNotes)) { setComparisonInstructions(leadRevisionNotes); openComparison(); } else handleReviseItinerary(); }}
+                      disabled={leadRevising || savingParams || manualEditInProgress || !!leadItineraryIssue(selectedLead) || !leadRevisionNotes.trim()}
                       className="bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition disabled:opacity-50 cursor-pointer"
                     >
                       {leadRevising ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3 text-amber-300" />}
@@ -1562,7 +1643,8 @@ export function LeadDetailDrawer() {
                   </p>
                 </div>
                 <a
-                  href={`/api/v1/leads/${selectedLead.id}/pdf?type=customer&token=${bearerToken}`}
+                  href={manualEditInProgress ? undefined : `/api/v1/leads/${selectedLead.id}/pdf?type=customer&token=${bearerToken}`}
+                  aria-disabled={manualEditInProgress}
                   target="_blank"
                   rel="noreferrer"
                   className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg border border-zinc-700 flex items-center gap-1.5 transition shrink-0"
@@ -1647,7 +1729,7 @@ export function LeadDetailDrawer() {
                   <button
                     type="button"
                     onClick={handleSendItineraryToCustomer}
-                    disabled={sendingToCustomer || !leadCustomerEmail.trim()}
+                    disabled={sendingToCustomer || manualEditInProgress || !leadCustomerEmail.trim()}
                     className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition shadow-md shadow-indigo-600/20 disabled:opacity-50 cursor-pointer"
                   >
                     {sendingToCustomer ? (
@@ -1729,7 +1811,7 @@ export function LeadDetailDrawer() {
                   <button
                     type="button"
                     onClick={handleSendItineraryToSupplier}
-                    disabled={sendingToSupplier || !leadSelectedSupplierId}
+                    disabled={sendingToSupplier || manualEditInProgress || !leadSelectedSupplierId}
                     className="w-full py-2.5 px-4 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition shadow-md shadow-amber-600/20 disabled:opacity-50 cursor-pointer"
                   >
                     {sendingToSupplier ? (
@@ -1755,7 +1837,7 @@ export function LeadDetailDrawer() {
                 <button
                   type="button"
                   onClick={handleSendItineraryToBoth}
-                  disabled={sendingToBoth || !leadCustomerEmail.trim() || !leadSelectedSupplierId}
+                  disabled={sendingToBoth || manualEditInProgress || !leadCustomerEmail.trim() || !leadSelectedSupplierId}
                   className="px-4 py-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-lg text-xs font-semibold flex items-center gap-2 transition shrink-0 disabled:opacity-50 cursor-pointer"
                 >
                   {sendingToBoth ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
@@ -1980,7 +2062,8 @@ export function LeadDetailDrawer() {
 
                 {supplierQuotes.length > 0 && customerQuotes.length > 0 && (
                   <a
-                    href={`/api/v1/leads/${selectedLead.id}/quotation-pdf?token=${bearerToken}`}
+                    href={manualEditInProgress ? undefined : `/api/v1/leads/${selectedLead.id}/quotation-pdf?token=${bearerToken}`}
+                    aria-disabled={manualEditInProgress}
                     target="_blank"
                     rel="noreferrer"
                     className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-lg font-semibold flex items-center gap-1.5 transition shadow-md shadow-indigo-600/20 shrink-0"
@@ -2618,7 +2701,7 @@ export function LeadDetailDrawer() {
                 <button
                   type="button"
                   onClick={handleDispatchQuotation}
-                  disabled={dispatching || !sendEmail}
+                  disabled={dispatching || manualEditInProgress || !sendEmail}
                   className="w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold shadow-lg shadow-indigo-600/20 transition flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   {dispatching ? (

@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { processIncomingWebhook } from '@/lib/webhook-helper';
+import { inboundFinalStatus, releaseCallAgentInTransaction } from '@/lib/telephony/agent-routing';
+import { lockAgency } from '@/lib/lead-intake/service';
+import {
+  createRecoveredHangupCallInTx,
+  inferHangupTerminalStatus,
+  resolveHangupOrganizationId,
+} from '@/lib/telephony/plivo-call-sync';
 
 export const runtime = 'nodejs';
+
+export async function GET(req: NextRequest) {
+  return POST(req);
+}
 
 export async function POST(req: NextRequest) {
   const result = await processIncomingWebhook(req, 'voice', (p) => {
@@ -21,43 +32,92 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: 'ignored_no_uuid' }, { status: 200 });
   }
 
-  const duration = params.Duration ? Number(params.Duration) : undefined;
-  const billDuration = params.BillDuration ? Number(params.BillDuration) : undefined;
-  const totalCost = params.TotalCost ? params.TotalCost.toString() : undefined;
-  const hangupCause = params.HangupCause ? Number(params.HangupCause) : undefined;
+  const parsedDuration = params.Duration !== undefined && params.Duration !== '' ? Number(params.Duration) : NaN;
+  const duration = Number.isFinite(parsedDuration) ? parsedDuration : undefined;
+  const parsedBillDuration =
+    params.BillDuration !== undefined && params.BillDuration !== '' ? Number(params.BillDuration) : NaN;
+  const billDuration = Number.isFinite(parsedBillDuration) ? parsedBillDuration : undefined;
+  const parsedTotalCost = params.TotalCost !== undefined && params.TotalCost !== '' ? Number(params.TotalCost) : NaN;
+  const totalCost = Number.isFinite(parsedTotalCost) ? parsedTotalCost : undefined;
+  const rawHangup = params.HangupCauseCode ?? params.HangupCause;
+  const hangupCause =
+    rawHangup !== undefined && /^\d+$/.test(String(rawHangup).trim())
+      ? Number(String(rawHangup).trim())
+      : undefined;
+  const hangupCauseName =
+    params.HangupCauseName ||
+    (hangupCause === undefined && params.HangupCause ? String(params.HangupCause) : undefined) ||
+    'Hangup';
 
   try {
-    const existingCall = await db.call.findUnique({
+    const orgId = req.nextUrl.searchParams.get('orgId');
+    const existingLookup = await db.call.findUnique({
       where: { plivoCallUuid: callUuid },
+      select: { organizationId: true },
     });
-
-    if (existingCall) {
-      await db.call.update({
+    const resolvedOrgId =
+      existingLookup?.organizationId ||
+      (await resolveHangupOrganizationId({ orgIdParam: orgId, params }));
+    if (!resolvedOrgId || (orgId && resolvedOrgId !== orgId)) {
+      return NextResponse.json({ status: 'ignored_unknown_call' });
+    }
+    let unknownRecovered = false;
+    await db.$transaction(async tx => {
+      await lockAgency(tx, resolvedOrgId);
+      let existingCall = await tx.call.findUnique({ where: { plivoCallUuid: callUuid } });
+      if (!existingCall) {
+        existingCall = await createRecoveredHangupCallInTx(tx, {
+          organizationId: resolvedOrgId,
+          callUuid,
+          params,
+        });
+      }
+      if (!existingCall || (orgId && existingCall.organizationId !== orgId)) {
+        unknownRecovered = true;
+        return null;
+      }
+      const reqParams = existingCall.requestedParams as Record<string, unknown> | null;
+      const isRecoveredFromHangup = Boolean(reqParams?.recoveredFromHangup);
+      const finalStatus = isRecoveredFromHangup
+        ? inferHangupTerminalStatus({
+            direction: existingCall.direction,
+            durationSeconds: duration,
+            billDurationSeconds: billDuration,
+            hangupCauseCode: hangupCause,
+            hangupCauseName,
+          })
+        : inboundFinalStatus(existingCall);
+      await tx.call.update({
         where: { id: existingCall.id },
         data: {
-          status: 'completed',
+          status: finalStatus,
+          ...(existingCall.direction === 'inbound' && existingCall.agentOutcome && finalStatus === 'missed' && existingCall.agentOutcome !== 'declined' ? { agentOutcome: 'missed' } : {}),
           endedAt: existingCall.endedAt || new Date(),
           durationSeconds: duration !== undefined ? duration : existingCall.durationSeconds,
           billDurationSeconds: billDuration !== undefined ? billDuration : existingCall.billDurationSeconds,
-          totalCost: totalCost ? Number(totalCost) : existingCall.totalCost,
+          totalCost: totalCost !== undefined ? totalCost : existingCall.totalCost,
           hangupCauseCode: hangupCause,
-          hangupCauseName: params.HangupCauseName || 'Hangup',
+          hangupCauseName,
         },
       });
 
       // Real recordings and transcriptions are received via /webhooks/voice/record and /webhooks/transcription
 
-      await db.callEvent.create({
+      await tx.callEvent.create({
         data: {
           organizationId: existingCall.organizationId,
           callId: existingCall.id,
           eventType: 'hangup',
-          status: 'completed',
+          status: finalStatus,
           payload: params,
           occurredAt: new Date(),
           webhookEventId,
         },
       });
+      await releaseCallAgentInTransaction(tx, existingCall);
+    }, { timeout: 15_000 });
+    if (unknownRecovered) {
+      return NextResponse.json({ status: 'ignored_unknown_call' });
     }
 
     if (webhookEventId) {

@@ -102,6 +102,8 @@ export async function POST(req: NextRequest) {
         organizationId: auth!.organizationId,
         userId: user.id,
         role,
+        receivesLeads: role === 'sales' || role === 'operator',
+        availableForLeads: true,
       },
     });
 

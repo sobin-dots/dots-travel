@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Loader2,
   Phone,
@@ -15,8 +15,12 @@ import {
   ChevronRight,
   Clock,
   X,
+  BookUser,
+  PhoneCall,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
+import { EnquiryFormModal } from '@/components/console/EnquiryFormModal';
+import { getCallbackPhone, isMissedOrUnansweredCall } from '@/lib/telephony/call-callback';
 
 type DatePreset = 'all' | 'today' | 'yesterday' | '7d' | '30d' | 'custom';
 
@@ -31,7 +35,9 @@ export default function CallsPage() {
     contactsList,
     staffList,
     bearerToken,
+    currentOrg,
     setShowCallModal,
+    openCallbackModal,
     authFetch,
     setSelectedCallDetail,
     refreshCallDetail,
@@ -44,6 +50,28 @@ export default function CallsPage() {
 
   const [openingDetailId, setOpeningDetailId] = useState<string | null>(null);
   const [openingItineraryId, setOpeningItineraryId] = useState<string | null>(null);
+  const [enquiryCallId, setEnquiryCallId] = useState<string | null>(null);
+  const [enquiryToEdit, setEnquiryToEdit] = useState<Record<string, any> | null>(null);
+  const [openingEnquiryId, setOpeningEnquiryId] = useState<string | null>(null);
+  const [enquiryError, setEnquiryError] = useState('');
+  const activeOrgRef = useRef(currentOrg?.id);
+  activeOrgRef.current = currentOrg?.id;
+
+  useEffect(() => { setEnquiryToEdit(null); setEnquiryCallId(null); setEnquiryError(''); }, [currentOrg?.id]);
+
+  async function openEnquiry(contactId: string) {
+    const orgId = currentOrg?.id;
+    setOpeningEnquiryId(contactId); setEnquiryError('');
+    try {
+      const response = await authFetch(`/api/v1/enquiries/${contactId}`);
+      const data = await response.json();
+      if (activeOrgRef.current !== orgId) return;
+      if (!response.ok || !data.contact) throw new Error(data.error || 'Could not open the enquiry');
+      setEnquiryToEdit(data.contact);
+    } catch (error) {
+      if (activeOrgRef.current === orgId) setEnquiryError(error instanceof Error ? error.message : 'Could not open the enquiry');
+    } finally { if (activeOrgRef.current === orgId) setOpeningEnquiryId(null); }
+  }
 
   // Filter & Pagination state
   const [searchQuery, setSearchQuery] = useState('');
@@ -119,13 +147,16 @@ export default function CallsPage() {
     setPage(1);
   };
 
-  const fetchFilteredCalls = useCallback(async () => {
+  const didInitialSyncRef = useRef(false);
+
+  const fetchFilteredCalls = useCallback(async (forceSync = false) => {
     if (!bearerToken) return;
     setFetchingCalls(true);
     try {
       const params = new URLSearchParams();
       params.set('limit', String(pageSize));
       params.set('offset', String((page - 1) * pageSize));
+      if (forceSync) params.set('sync', '1');
 
       if (debouncedSearch) params.set('search', debouncedSearch);
       if (selectedContactPhone) params.set('contactPhone', selectedContactPhone);
@@ -165,7 +196,9 @@ export default function CallsPage() {
   ]);
 
   useEffect(() => {
-    fetchFilteredCalls();
+    const shouldSync = !didInitialSyncRef.current;
+    didInitialSyncRef.current = true;
+    fetchFilteredCalls(shouldSync);
   }, [fetchFilteredCalls, contextCalls]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -184,6 +217,7 @@ export default function CallsPage() {
 
   return (
     <div className="space-y-5 max-w-6xl">
+      {enquiryError && <p role="alert" className="rounded-lg border border-red-800/50 bg-red-950/30 p-3 text-sm text-red-300">{enquiryError}</p>}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">Call Logs & Live Control</h2>
@@ -194,7 +228,7 @@ export default function CallsPage() {
         <div className="flex items-center gap-2 self-start sm:self-auto">
           <button
             type="button"
-            onClick={() => fetchFilteredCalls()}
+            onClick={() => fetchFilteredCalls(true)}
             disabled={fetchingCalls}
             className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5 border border-zinc-700 transition cursor-pointer disabled:opacity-50"
             title="Refresh call logs"
@@ -236,7 +270,7 @@ export default function CallsPage() {
             )}
           </div>
 
-          {/* Customer / Contact Filter */}
+          {/* Enquiry / Caller Filter */}
           <div className="relative">
             <Users className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <select
@@ -246,10 +280,10 @@ export default function CallsPage() {
                 setPage(1);
               }}
               className="w-full bg-zinc-950 border border-zinc-800 focus:border-indigo-500/60 rounded-lg pl-8 pr-3 py-2 text-xs text-zinc-200 outline-none"
-              title="Filter by Customer / Contact"
+              title="Filter by enquiry or caller"
             >
-              <option value="">All Customers / Callers</option>
-              {contactsList.map((ct: any) => (
+              <option value="">All Enquiries / Callers</option>
+              {contactsList.filter((ct: any) => !!ct.phone).map((ct: any) => (
                 <option key={ct.id} value={ct.phone}>
                   {ct.name} ({ct.phone})
                 </option>
@@ -314,6 +348,7 @@ export default function CallsPage() {
               <option value="ringing">Ringing</option>
               <option value="queued">Queued</option>
               <option value="no-answer">No Answer</option>
+              <option value="missed">Missed</option>
               <option value="busy">Busy</option>
               <option value="failed">Failed</option>
             </select>
@@ -438,6 +473,15 @@ export default function CallsPage() {
                         hour12: true,
                       })
                     : '';
+                  const callbackPhone = getCallbackPhone(call);
+                  const isMissedCall = isMissedOrUnansweredCall(call);
+                  const showCallBack = Boolean(
+                    currentOrg &&
+                    currentOrg.role !== 'viewer' &&
+                    callbackPhone &&
+                    call.status !== 'in-progress' &&
+                    (isMissedCall || call.direction === 'inbound')
+                  );
 
                   return (
                     <tr key={call.id} className="hover:bg-zinc-800/30 transition">
@@ -502,6 +546,43 @@ export default function CallsPage() {
                         </div>
                       </td>
                       <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">
+                        {showCallBack && (
+                          <button
+                            type="button"
+                            onClick={() => openCallbackModal(call)}
+                            className={`text-xs px-2.5 py-1 rounded border inline-flex items-center gap-1 cursor-pointer transition ${
+                              isMissedCall
+                                ? 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border-amber-500/35'
+                                : 'bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-300 border-emerald-500/30'
+                            }`}
+                            title={`Call back ${callbackPhone}`}
+                          >
+                            <PhoneCall className="w-3 h-3" />
+                            <span>Call Back</span>
+                          </button>
+                        )}
+                        {call.enquiry ? (
+                          <button
+                            type="button"
+                            disabled={!call.enquiry.canOpen || openingEnquiryId === call.enquiry.id}
+                            onClick={() => void openEnquiry(call.enquiry.id)}
+                            className="text-xs bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 inline-flex items-center gap-1 disabled:cursor-default disabled:hover:bg-emerald-600/10 transition"
+                            title={call.enquiry.canOpen ? 'Open the existing enquiry' : 'This enquiry is handled by another staff member or is read-only for your role'}
+                          >
+                            {openingEnquiryId === call.enquiry.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <BookUser className="w-3 h-3" />}
+                            <span>{call.enquiry.assignedTo ? `${call.enquiry.assignedTo.name || 'Assigned staff'} is handling` : 'Enquiry unassigned'}</span>
+                          </button>
+                        ) : currentOrg && currentOrg.role !== 'viewer' && (
+                          <button
+                            type="button"
+                            onClick={() => setEnquiryCallId(call.id)}
+                            className="text-xs bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 px-2.5 py-1 rounded border border-emerald-500/30 inline-flex items-center gap-1 cursor-pointer transition"
+                            title="Open enquiry details prefilled from this call"
+                          >
+                            <BookUser className="w-3 h-3" />
+                            <span>{call.enquiryContactId ? 'Enquiry' : 'Convert to enquiry'}</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           disabled={openingDetailId === call.id}
@@ -637,6 +718,25 @@ export default function CallsPage() {
           </div>
         </div>
       </div>
+      {enquiryCallId && (
+        <EnquiryFormModal
+          key={enquiryCallId}
+          callId={enquiryCallId}
+          onClose={() => setEnquiryCallId(null)}
+          onSaved={() => {
+            setEnquiryCallId(null);
+            void fetchFilteredCalls();
+          }}
+        />
+      )}
+      {enquiryToEdit && (
+        <EnquiryFormModal
+          key={enquiryToEdit.id}
+          contact={enquiryToEdit}
+          onClose={() => setEnquiryToEdit(null)}
+          onSaved={() => { setEnquiryToEdit(null); void fetchFilteredCalls(); }}
+        />
+      )}
     </div>
   );
 }

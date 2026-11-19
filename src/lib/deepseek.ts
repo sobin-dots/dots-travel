@@ -1246,13 +1246,44 @@ export async function generateItineraryFromTranscript(
       content:
         `You are an elite FIT travel proposal specialist. Analyze the customer conversation transcript, confirmed travel parameters, and the travel agency's strict itinerary preparation rules, and generate a comprehensive, destination-specific FIT travel proposal.${
           rulesContext.ruleCount > 0 ? `\n\n${rulesContext.promptText}` : ''
-        }\n\nIMPORTANT: Do NOT use static sample content from other destinations. Every section, day programme, inclusion, exclusion, and preference must be dynamically tailored to the guest's actual destination (${destination || 'as stated in transcript'}), duration (${duration ? `${duration} days` : 'as stated in transcript'}), and transcript. Do NOT use USD currency or include estimated budget disclaimers before supplier quotation; always use INR (₹) if currency is referenced, and use clean bullet points (- ...) instead of pipe tables (| ... |) for lists.\n\nUse confirmed inputs as authoritative. Cover every requested destination, including intercity or cross-border travel when relevant. Present suggested attractions as proposals, never as booked services. Never invent confirmed hotel names, flights, prices, tickets, meals, private transfers or inclusions. If a service is unconfirmed, label it as proposed or to be confirmed. Return a strictly valid JSON object with the following keys:\n- "title": A compelling title for the itinerary\n- "destination": The target destination\n- "itinerary": The complete Markdown travel proposal following this exact structure:\n  1. "# <Title>" with Guest, Destination, Duration, Travel Dates, Party Size, Accommodation Category\n  2. "## 1. Executive Summary" (Overview paragraph + structured Trip Overview bullets: Destination, Duration, Hotel plan, Meal plan, Transfers, Flights, Pace)\n  3. "## 2. Guest Preferences" with "### Recorded requirements" and "### To confirm before booking"\n  4. "## 3. Day-by-Day Journey Itinerary" with "### Day 1: <Title>" through the final day. Each day MUST include a comprehensive, data-rich, and vividly detailed programme (about 160-260 words per day) structured with practical time segments:\n     - Morning: (e.g. 09:00 AM private pickup, primary sightseeing, architectural & cultural highlights, scenic vantage points, photo stops)\n     - Afternoon: (e.g. authentic culinary & dining recommendations with cuisine highlights, immersive guided touring or leisure, family-friendly considerations)\n     - Evening: (e.g. sunset spots, curated dinner venue recommendations, evening entertainment, night illuminations or relaxed waterfront strolls)\n     Explain the sequence of visits, vehicle logistics (private chauffeured AC vehicle, estimated transit times), entry tickets included, and tailored touches for the traveling party. Arrival/departure days may be shorter but must describe actual logistics. Do not pad with generic repeated sentences. Follow each day with:\n     Overnight: <City and proposed property> (omit on final departure day)\n     Meals: <Exact meal inclusions: Breakfast, Lunch, Dinner>\n     Transfers: <Transfer type, private vehicle specification>\n     Included experience: <Specific attraction/tour/tickets included>\n     Notes: <Operational guidance, dress codes, recommended footwear, camera tips>\n  5. "## 4. Curated Accommodations" (Provide a detailed, itemized breakdown: Hotel category, Stay duration & locations, Room category & bed configurations suitable for the guest count, Meal plan, Proposed luxury hotel/resort names)\n  6. "## 5. Package Includes" (comprehensive numbered list of 10-15 exact included services matching the daily itinerary: luxury accommodation, private airport transfers, dedicated private AC vehicle for all tours, 4x4 desert safari package with dune drive, camel ride, falconry, BBQ dinner, entry passes to all featured attractions, all specified meals, guide services, and taxes)\n  7. "## 6. Package Excludes" (clear, professional numbered list of excluded items: international airfare, visa fees, personal expenses, travel insurance, unmentioned meals/beverages)\n  8. "## 7. Before Travel" (clean, comprehensive bullet list of essential pre-departure checklist items, travel etiquette, weather expectations, and currency advice — never a pipe table)\n  (Do NOT include a Sample Quotation section in the itinerary before supplier quotation)`,
+        }\n\nCRITICAL REQUIREMENT — NO STATIC, FALLBACK, OR PLACEHOLDER DATA:
+- Never output "None", "None.", "Not applicable", "To be confirmed", "TBD", "TBC", "(to be confirmed)", or "to be decided".
+- Every day programme, accommodation, inclusion, exclusion, and preference must be 100% dynamic and tailored to the guest's actual destination (${destination || 'as stated in transcript'}), duration (${duration ? `${duration} days` : 'as stated in transcript'}), and transcript.
+- Do NOT use USD currency or include estimated budget disclaimers before supplier quotation; always use INR (₹) if currency is referenced, and use clean bullet points (- ...) instead of pipe tables (| ... |) for lists.
+- Use confirmed inputs as authoritative. Cover every requested destination, including intercity or cross-border travel when relevant.
+
+Return a strictly valid JSON object with the following keys:
+- "title": A compelling title for the itinerary
+- "destination": The target destination
+- "itinerary": The complete Markdown travel proposal following this exact structure:
+  1. "# <Title>" with key details (only include fields that are confirmed; omit lines for unknown fields — never write "Guest: Guest" or "Travel Dates: To be confirmed"):
+     - Destination: <Destination>
+     - Duration: <Duration in Days & Nights>
+     - Party Size: <Party Size>
+     - Accommodation Category: <Tier>
+${customerName ? `     - Guest: ${customerName}\n` : ''}${departureDate ? `     - Travel Dates: ${departureDate}${returnDate ? ` to ${returnDate}` : ''}\n` : ''}  2. "## 1. Executive Summary" (Overview paragraph + structured Trip Overview bullets: Destination, Duration, Hotel plan, Meal plan, Transfers, Flights, Pace)
+  3. "## 2. Guest Preferences" with "### Recorded requirements" capturing the guest's authentic trip goals, interests, preferences, and dietary/logistical needs stated in the transcript. Do NOT create generic doubts or a "To confirm before booking" questionnaire section.
+  4. "## 3. Day-by-Day Journey Itinerary" with "### Day 1: <Title>" through the final day. Each day MUST include a comprehensive, data-rich, and vividly detailed programme (about 160-260 words per day) structured with practical time segments:
+     - Morning: (e.g. 09:00 AM private pickup, primary sightseeing, architectural & cultural highlights, scenic vantage points, photo stops)
+     - Afternoon: (e.g. authentic culinary & dining recommendations with cuisine highlights, immersive guided touring or leisure, family-friendly considerations)
+     - Evening: (e.g. sunset spots, curated dinner venue recommendations, evening entertainment, night illuminations or relaxed waterfront strolls)
+     Explain the sequence of visits, vehicle logistics (private chauffeured AC vehicle, estimated transit times), entry tickets included, and tailored touches for the traveling party. Arrival/departure days may be shorter but must describe actual logistics. Do not pad with generic repeated sentences. Follow each day with:
+     Overnight: <Specific city and proposed luxury hotel/resort name matching the tier, without '(to be confirmed)' tags> (omit on final departure day)
+     Meals: <Exact meal inclusions: Breakfast, Lunch, Dinner>
+     Transfers: <Transfer type, private vehicle specification>
+     Included experience: <Specific attraction, tour, admission tickets, or safari included on this day — NEVER 'None'>
+     Notes: <Operational guidance, dress codes, recommended footwear, camera tips>
+  5. "## 4. Curated Accommodations" (Provide a detailed, itemized breakdown with concrete luxury property names for the destination: Hotel category, Stay duration & locations, Room category & bed configurations suitable for the guest count, Meal plan, Proposed luxury hotel/resort names — never write 'To be confirmed')
+  6. "## 5. Package Includes" (comprehensive numbered list of 10-15 exact included services matching the daily itinerary: luxury accommodation, private airport transfers, dedicated private AC vehicle for all tours, specific destination excursions such as desert safari with BBQ dinner or harbor cruises, entry passes to all featured attractions, all specified meals, guide services, and taxes)
+  7. "## 6. Package Excludes" (clear, professional numbered list of excluded items: international airfare, visa fees, personal expenses, travel insurance, unmentioned meals/beverages)
+  8. "## 7. Before Travel" (clean, comprehensive bullet list of essential pre-departure checklist items, travel etiquette, weather expectations, and currency advice — never a pipe table)
+  (Do NOT include a Sample Quotation section in the itinerary before supplier quotation)`,
     },
     {
       role: 'user',
-      content: `Customer Name: ${customerName || 'Not specified'}
-Phone: ${contactInfo?.phone || customParams?.customerPhone || 'Not specified'}
-Email: ${customerEmail || 'Not specified'}
+      content: `Customer Name: ${customerName || '(Not provided)'}
+Phone: ${contactInfo?.phone || customParams?.customerPhone || '(Not provided)'}
+Email: ${customerEmail || '(Not provided)'}
 
 Confirmed Trip Parameters:
 - Target Destination: ${destination || 'Extract from transcript'}
@@ -1262,7 +1293,7 @@ Confirmed Trip Parameters:
 - Party Size: ${adults != null ? `${adults} Adults` : 'Not specified'}${children != null ? `, ${children} Children` : ''}${infants != null ? `, ${infants} Infants` : ''}
 - Target Budget: ${budget || 'Not specified'}
 - Preferred Hotel Tier: ${hotelTier || 'Not specified'}
-- Special Requests & Inclusions: ${specialRequests || 'None specified'}
+- Special Requests & Inclusions: ${specialRequests || 'Standard premium bespoke inclusions according to destination'}
 ${rulesContext.promptText ? `\nEnforced Agency Preparation Rules (${rulesContext.ruleCount} active):\n${rulesContext.promptText}\n` : ''}
 Verbatim Call Transcript:
 ${transcriptText || '(No call transcript available)'}
@@ -1327,7 +1358,13 @@ export async function reviseItineraryWithDeepSeek(
       content:
         `You are an expert travel concierge. Revise the provided travel itinerary according to the user corrections and requested adjustments while maintaining full adherence to the agency's established itinerary preparation rules.${
           rulesContext.ruleCount > 0 ? `\n\n${rulesContext.promptText}` : ''
-        }\n\nPreserve and enhance the structured sections with rich daily details (Morning, Afternoon, and Evening activities with comprehensive travel logistics, attractions, and family-friendly considerations), detailed Curated Accommodations breakdown, comprehensive Package Includes (10-15 itemized inclusions), Package Excludes, and Before Travel checklist. Output the revised Markdown itinerary. Do NOT use USD currency or include estimated budget conflict disclaimers before supplier quotation; use clean bullet lists (- ...) instead of pipe tables (| ... |) for Guest Preferences, Package Includes, Package Excludes, and Before Travel.`,
+        }\n\nCRITICAL REQUIREMENT — NO STATIC, FALLBACK, OR PLACEHOLDER DATA:
+- Never output "None", "None.", "Not applicable", "To be confirmed", "TBD", "TBC", "(to be confirmed)", or "to be decided".
+- Every single day MUST include a concrete, meaningful, destination-specific Included experience (never "None") and a specific recommended property under Overnight without "(to be confirmed)" tags.
+- In Curated Accommodations, always provide specific luxury property names, room types, and meal plans.
+- In Guest Preferences, only include Recorded requirements; do not create generic doubts or "To confirm before booking" checklists.
+
+Preserve and enhance the structured sections with rich daily details (Morning, Afternoon, and Evening activities with comprehensive travel logistics, attractions, and family-friendly considerations), detailed Curated Accommodations breakdown, comprehensive Package Includes (10-15 itemized inclusions), Package Excludes, and Before Travel checklist. Output the revised Markdown itinerary. Do NOT use USD currency or include estimated budget conflict disclaimers before supplier quotation; use clean bullet lists (- ...) instead of pipe tables (| ... |) for Guest Preferences, Package Includes, Package Excludes, and Before Travel.`,
     },
     {
       role: 'user',
@@ -1352,6 +1389,21 @@ Provide the complete updated and polished itinerary adhering to the corrections 
 
   if (!content) throw new ItineraryError('The AI returned no revision.', 502, 'itinerary_generation_failed');
   return content;
+}
+
+export async function generateBudgetItineraryOption(input: {
+  organizationId: string; itinerary: string; destination: string; durationDays: number;
+  budget: number; currency: string; instructions: string; transcript?: string;
+}): Promise<string> {
+  const rules = await getActiveItineraryRulesForOrg(input.organizationId);
+  const result = await callLlmText({ organizationId: input.organizationId, required: true, timeoutMs: 90_000, temperature: 0.5,
+    messages: [
+      { role: 'system', content: `Create one complete alternative travel itinerary for the same destination and dates as the source. Adapt accommodation, pace, activities, and transfers to the requested budget target. The budget is a planning target, not a verified selling price. Never invent supplier rates, availability, confirmed bookings or a cost breakdown. Preserve all traveller requirements, party size, and the exact number of days. Provide a concrete recommended programme for every day. Label recommendations as proposed. Use Markdown headings Day 1: ..., Day 2: ... in sequence, with substantial programme paragraphs and explicit Location:, Overnight:, Meals:, Transfers: lines for each day. Do not use pipe tables: the application renders comparisons from the saved days. Retain inclusions, exclusions and travel notes. ${rules.promptText}` },
+      { role: 'user', content: `Destination: ${input.destination}\nDays: ${input.durationDays}\nBudget target for the whole trip: ${input.currency} ${input.budget}\nStaff instructions: ${input.instructions}\nCustomer requirement call transcript:\n${input.transcript || '(No transcript attached)'}\nOriginal itinerary:\n${input.itinerary}` },
+    ], validate: value => assertItineraryReady(value, input.durationDays),
+  });
+  if (!result) throw new ItineraryError('No budget alternative was returned. Please retry.', 502);
+  return result;
 }
 
 

@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
     telephonyMode: 'live',
-    organization: org,
+    organization: { ...org, role: auth!.role },
   });
 }
 
@@ -161,7 +161,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({
       api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
       message: 'Settings updated successfully',
-      organization: updatedOrg,
+      organization: { ...updatedOrg, role: auth!.role },
     });
   } catch (err: any) {
     return NextResponse.json(

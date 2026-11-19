@@ -4,6 +4,8 @@ import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { CreateCallRequestSchema } from '@/lib/schemas';
 import { getTelephonyProvider, getTenantTelephonyProvider } from '@/lib/telephony';
+import { contactScope, managesLeads } from '@/lib/lead-access';
+import { syncRecentOrgCallsFromPlivo } from '@/lib/telephony/plivo-call-sync';
 
 export const runtime = 'nodejs';
 
@@ -20,10 +22,14 @@ export async function GET(req: NextRequest) {
   const search = (url.searchParams.get('search') || '').trim();
   const contactPhone = (url.searchParams.get('contactPhone') || '').trim();
   const staffUserId = (url.searchParams.get('staffUserId') || '').trim();
+  const syncParam = url.searchParams.get('sync');
   const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || '20'), 1), 100);
   const offset = Math.max(Number(url.searchParams.get('offset') || '0'), 0);
 
   const orgId = auth!.organizationId;
+  if (syncParam === '1') {
+    await syncRecentOrgCallsFromPlivo(orgId, { force: true });
+  }
   const andConditions: any[] = [{ organizationId: orgId }];
 
   if (status) andConditions.push({ status });
@@ -50,10 +56,12 @@ export async function GET(req: NextRequest) {
   }
 
   // Load organization contacts so we can both filter by customer name/phone and enrich call rows
-  const orgContacts = await db.contact.findMany({
-    where: { organizationId: orgId },
-    select: { id: true, name: true, phone: true, email: true },
-  });
+  const [orgContacts, accessibleContacts] = await Promise.all([
+    db.contact.findMany({ where: { organizationId: orgId }, select: { id: true, name: true, phone: true, email: true, assignedToId: true } }),
+    auth!.role === 'viewer' || managesLeads(auth!) ? Promise.resolve([])
+      : db.contact.findMany({ where: contactScope(auth!), select: { id: true } }),
+  ]);
+  const accessibleContactIds = new Set(accessibleContacts.map(contact => contact.id));
 
   if (contactPhone) {
     const cleanTarget = contactPhone.replace(/\D/g, '');
@@ -78,10 +86,11 @@ export async function GET(req: NextRequest) {
       .filter(
         (c) =>
           c.name.toLowerCase().includes(search.toLowerCase()) ||
-          c.phone.toLowerCase().includes(search.toLowerCase()) ||
-          (cleanDigits.length >= 4 && c.phone.replace(/\D/g, '').includes(cleanDigits))
+          (c.phone || '').toLowerCase().includes(search.toLowerCase()) ||
+          (cleanDigits.length >= 4 && (c.phone || '').replace(/\D/g, '').includes(cleanDigits))
       )
       .flatMap((c) => {
+        if (!c.phone) return [];
         const digits = c.phone.replace(/\D/g, '');
         const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
         return [c.phone, ...(last10 ? [last10] : [])];
@@ -124,6 +133,7 @@ export async function GET(req: NextRequest) {
     andConditions.push({
       OR: [
         ...(auditedCallIds.length > 0 ? [{ id: { in: auditedCallIds } }] : []),
+        { assignedToId: staffUserId },
         {
           requestedParams: {
             path: ['actorUserId'],
@@ -207,23 +217,29 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const normalizeDigits = (val?: string | null) => {
-    const d = String(val || '').replace(/\D/g, '');
-    return d.length >= 10 ? d.slice(-10) : d;
+  const fullPhone = (value?: string | null) => {
+    const digits = String(value || '').trim().replace(/[\s().+-]/g, '').replace(/^00/, '');
+    return /^[1-9]\d{6,14}$/.test(digits) ? digits : null;
   };
+  const contactById = new Map(orgContacts.map(contact => [contact.id, contact]));
+  const contactsByPhone = new Map<string, (typeof orgContacts)[number][]>();
+  for (const contact of orgContacts) {
+    const phone = fullPhone(contact.phone);
+    if (phone) contactsByPhone.set(phone, [...(contactsByPhone.get(phone) || []), contact]);
+  }
 
   const enrichedCalls = calls.map((c) => {
-    const fromTail = normalizeDigits(c.from);
-    const toTail = normalizeDigits(c.to);
-    const matchedContact = orgContacts.find((ct) => {
-      const ctTail = normalizeDigits(ct.phone);
-      if (!ctTail) return false;
-      return ctTail === fromTail || ctTail === toTail;
-    });
+    // A linked enquiry is authoritative even after a phone edit. For repeat
+    // calls, match the customer's full number, never the agency number or a suffix.
+    const linkedContact = c.enquiryContactId ? contactById.get(c.enquiryContactId) : undefined;
+    const customerPhone = fullPhone(c.direction === 'outbound' ? c.to : c.from);
+    const phoneMatches = customerPhone ? contactsByPhone.get(customerPhone) || [] : [];
+    const matchedContact = linkedContact || (phoneMatches.length === 1 ? phoneMatches[0] : undefined);
 
     const reqParams = (c.requestedParams && typeof c.requestedParams === 'object' ? c.requestedParams : {}) as any;
-    const resolvedActorId = reqParams.actorUserId || actorByCallId.get(c.id);
+    const resolvedActorId = c.assignedToId || reqParams.actorUserId || actorByCallId.get(c.id);
     const matchedStaff = resolvedActorId ? userById.get(resolvedActorId) : null;
+    const enquiryOwner = matchedContact?.assignedToId ? userById.get(matchedContact.assignedToId) : null;
 
     // Deduplicate recordings per call to at most 1 primary recording
     const sortedRecs = Array.isArray(c.recordings)
@@ -236,6 +252,10 @@ export async function GET(req: NextRequest) {
       recordings: primaryRecs,
       contactName: matchedContact?.name || null,
       contactId: matchedContact?.id || null,
+      enquiry: matchedContact ? { id: matchedContact.id,
+        assignedTo: enquiryOwner ? { id: enquiryOwner.id, name: enquiryOwner.name } : null,
+        canOpen: auth!.role !== 'viewer' && (managesLeads(auth!) || accessibleContactIds.has(matchedContact.id)),
+      } : null,
       staffUser: matchedStaff
         ? { id: matchedStaff.id, name: matchedStaff.name, email: matchedStaff.email }
         : reqParams.actorEmail || reqParams.actorName
@@ -313,17 +333,17 @@ export async function POST(req: NextRequest) {
 
     const resolvedLanguage = transcriptionLanguage || phoneNumber.transcriptionLanguage || 'en-US';
 
-    // Construct Answer URL and Webhook URLs from DB-stored Plivo webhookUrls or request origin
-    const { getTenantIntegration, buildOrgWebhookUrls } = await import('@/lib/integrations/credentials-manager');
+    // Construct Answer URL and Webhook URLs preferring live non-local request origin over stale DB webhookUrls
+    const { getTenantIntegration, resolveOrgWebhookUrls } = await import('@/lib/integrations/credentials-manager');
     const plivoInteg = await getTenantIntegration(auth!.organizationId, 'plivo');
     const proto = req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http');
     const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
     const requestBase = host ? `${proto}://${host}` : 'http://localhost:3000';
-    const effectiveBase = (
-      plivoInteg?.metadata?.webhookBaseUrl ||
-      requestBase
-    ).trim().replace(/\/+$/, '');
-    const dbWebhookUrls = plivoInteg?.metadata?.webhookUrls || buildOrgWebhookUrls(effectiveBase, auth!.organizationId);
+    const { effectiveBaseUrl: effectiveBase, webhookUrls: dbWebhookUrls } = resolveOrgWebhookUrls(
+      auth!.organizationId,
+      requestBase,
+      plivoInteg?.metadata
+    );
 
     let answerUrl: string;
 

@@ -3,7 +3,21 @@
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { CallToneGenerator } from '@/lib/call-tones';
 import { assertItineraryReady } from '@/lib/itinerary-content';
-import { patchPlivoSDK, createNoiseSuppressionShim, getLiveMicrophoneStream } from '@/lib/telephony/plivo-shim';
+import { readItineraryResponse } from '@/lib/itinerary-response';
+import { contactValuesFromForm } from '@/lib/contact-fields';
+import {
+  patchPlivoSDK,
+  createNoiseSuppressionShim,
+  getLiveMicrophoneStream,
+  classifyPlivoCallFailure,
+  ensureDefaultSpeakerDevice,
+} from '@/lib/telephony/plivo-shim';
+import {
+  getCallbackPhone,
+  normalizeDialablePhone,
+  resolveCallbackDestination,
+  type CallbackCallLike,
+} from '@/lib/telephony/call-callback';
 
 interface ConsoleContextType {
   bearerToken: string;
@@ -64,13 +78,14 @@ interface ConsoleContextType {
   webPhoneError: string | null;
   setWebPhoneError: (err: string | null) => void;
   formatCallTimer: (sec: number) => string;
-  initWebPhone: () => Promise<void>;
+  initWebPhone: (forceRefresh?: boolean) => Promise<void>;
   handleStartBrowserCall: () => Promise<void>;
   handleToggleMute: () => void;
   handleHangupBrowserCall: () => void;
 
   // Incoming Call handling (Live WebRTC incoming only)
-  incomingCall: { callerId: string; extraHeaders?: any } | null;
+  incomingCall: { callerId: string; extraHeaders?: any; callUUID?: string } | null;
+  answeringIncomingCall: boolean;
   setIncomingCall: (call: any | null) => void;
   handleAnswerIncomingCall: () => Promise<void>;
   handleRejectIncomingCall: () => void;
@@ -92,6 +107,7 @@ interface ConsoleContextType {
   setCallTranscribe: (tra: boolean) => void;
   callLoading: boolean;
   handlePlaceCall: () => Promise<void>;
+  openCallbackModal: (callOrPhone: string | CallbackCallLike) => void;
 
   // Call detail drawer
   selectedCallDetail: any | null;
@@ -117,7 +133,7 @@ interface ConsoleContextType {
   intakeCallTarget: any | null;
   setIntakeCallTarget: (call: any | null) => void;
   openItineraryIntakeModal: (call: any) => void;
-  handleGenerateItineraryWithParams: (callId: string, params: any) => Promise<void>;
+  handleGenerateItineraryWithParams: (callId: string, params: any) => Promise<string | null>;
 
   // Leads & AI Itinerary review drawer
   selectedLead: any | null;
@@ -168,7 +184,7 @@ interface ConsoleContextType {
   setStaffEmail: (email: string) => void;
   staffPassword: string;
   setStaffPassword: (pass: string) => void;
-  staffRole: 'operator' | 'admin' | 'viewer';
+  staffRole: 'operator' | 'sales' | 'admin' | 'viewer';
   setStaffRole: (role: any) => void;
   staffLoading: boolean;
   handleCreateStaff: (e: React.FormEvent) => Promise<void>;
@@ -344,10 +360,15 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [webPhoneDuration, setWebPhoneDuration] = useState(0);
   const [webPhoneError, setWebPhoneError] = useState<string | null>(null);
   const [endpointConfig, setEndpointConfig] = useState<any>(null);
-  const [incomingCall, setIncomingCall] = useState<{ callerId: string; extraHeaders?: any } | null>(null);
+  const [incomingCall, setIncomingCall] = useState<{ callerId: string; extraHeaders?: any; callUUID?: string } | null>(null);
+  const [answeringIncomingCall, setAnsweringIncomingCall] = useState(false);
+  const incomingActiveRef = useRef(false);
+  const incomingAnswerRef = useRef(false);
+  const incomingGenerationRef = useRef(0);
 
   const plivoClientRef = useRef<any>(null);
   const webPhoneUsernameRef = useRef<string | null>(null);
+  const repairedEndpointRef = useRef<string | null>(null);
   const isInitializingWebPhoneRef = useRef<boolean>(false);
   const callTimerRef = useRef<any>(null);
   const toneGenRef = useRef<CallToneGenerator | null>(null);
@@ -357,7 +378,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [staffName, setStaffName] = useState('');
   const [staffEmail, setStaffEmail] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
-  const [staffRole, setStaffRole] = useState<'operator' | 'admin' | 'viewer'>('operator');
+  const [staffRole, setStaffRole] = useState<'operator' | 'sales' | 'admin' | 'viewer'>('operator');
   const [staffLoading, setStaffLoading] = useState(false);
 
   // Contact creation state
@@ -405,11 +426,12 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     if (webPhoneStatus === 'calling') {
       toneGenRef.current?.startConnectingTune();
     } else if (webPhoneStatus === 'ringing') {
-      toneGenRef.current?.startRingingTune();
+      if (incomingCall) toneGenRef.current?.startIncomingRingtone();
+      else toneGenRef.current?.startRingingTune();
     } else {
       toneGenRef.current?.stop();
     }
-  }, [webPhoneStatus]);
+  }, [webPhoneStatus, incomingCall]);
 
 
 
@@ -442,6 +464,9 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const handleSignOut = () => {
+    const token = tokenRef.current || bearerToken;
+    if (token) fetch('/api/v1/telephony/presence', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ ready: false, busy: false }) }).catch(() => {});
+    try { plivoClientRef.current?.logout(); } catch {}
     if (typeof window !== 'undefined') {
       localStorage.removeItem('plivo_access_token');
       localStorage.removeItem('plivo_refresh_token');
@@ -610,8 +635,22 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       setLeadSelectedSupplierId('');
     }
 
+    if (orgsRes?.user) {
+      setCurrentUser(orgsRes.user);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('plivo_user', JSON.stringify(orgsRes.user));
+      }
+    }
+
     if (orgsRes?.organizations) {
       setOrganizationsList(orgsRes.organizations);
+      // Keep currentOrg synced for non-admin users whose GET /api/v1/settings returns 403
+      if (!setRes?.organization) {
+        const activeOrg = orgsRes.organizations.find((o: any) => o.isActive || o.id === orgsRes.activeOrganizationId);
+        if (activeOrg) {
+          setCurrentOrg(activeOrg);
+        }
+      }
     }
 
     if (integRes && integRes.api_id !== 'auth_err' && integRes.api_id !== 'server_err') {
@@ -704,10 +743,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         const data = await res.json();
         if (Array.isArray(data.objects)) {
           setContactsList(data.objects);
-          setCallDestination((prev) => {
-            if (prev && data.objects.some((c: any) => c.phone === prev)) return prev;
-            return data.objects[0]?.phone || '';
-          });
+          setCallDestination((prev) => prev || data.objects[0]?.phone || '');
           return data.objects;
         }
       }
@@ -718,9 +754,17 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   };
 
   const handleSwitchOrganization = async (orgId: string) => {
+    if (['calling', 'ringing', 'connected'].includes(webPhoneStatus)) { alert('End or decline the current call before switching agencies.'); return; }
     await runExclusive(`switch-org:${orgId}`, async () => {
       try {
         setLoading(true);
+        await authFetch('/api/v1/telephony/presence', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ready: false, busy: false }) }).catch(() => {});
+        const previousClient = plivoClientRef.current;
+        plivoClientRef.current = null;
+        webPhoneUsernameRef.current = null;
+        repairedEndpointRef.current = null;
+        setWebPhoneStatus('idle');
+        try { previousClient?.logout(); } catch {}
 
         // Instantly clear out old tenant state to guarantee complete isolation during switch
         setNumbers([]);
@@ -884,17 +928,18 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   ]);
 
   // Initialize In-Browser Web Phone (concurrency-safe, auto-retries if SDK script still loading, and auto-reconnects)
-  const initWebPhone = async () => {
+  const initWebPhone = async (forceRefresh = false) => {
     if (typeof window === 'undefined') return;
     const activeToken = tokenRef.current || bearerToken || localStorage.getItem('plivo_access_token') || '';
     if (!activeToken) return;
 
-    if (isInitializingWebPhoneRef.current) return;
+    if (isInitializingWebPhoneRef.current && !forceRefresh) return;
     isInitializingWebPhoneRef.current = true;
 
     try {
-      const res = await authFetch('/api/v1/telephony/endpoint');
+      const res = await authFetch(`/api/v1/telephony/endpoint${forceRefresh ? '?refresh=1' : ''}`);
       const data = await res.json();
+      if (!res.ok) { setWebPhoneStatus('error'); setWebPhoneError(data.error || 'Browser phone configuration is unavailable.'); return; }
       if (res.ok && data.username && data.password) {
         setEndpointConfig(data);
 
@@ -902,13 +947,13 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           // Plivo SDK script is still loading in layout.tsx — retry once it finishes loading
           setTimeout(() => {
             isInitializingWebPhoneRef.current = false;
-            initWebPhone();
+            void initWebPhone(forceRefresh);
           }, 600);
           return;
         }
 
         // If already initialized for this exact SIP endpoint username, simply ensure it is logged in
-        if (plivoClientRef.current && webPhoneUsernameRef.current === data.username) {
+        if (!forceRefresh && plivoClientRef.current && webPhoneUsernameRef.current === data.username) {
           if (!plivoClientRef.current.isLoggedIn) {
             try {
               plivoClientRef.current.login(data.username, data.password);
@@ -933,11 +978,11 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         let clientInstance: any = null;
 
         try {
-          const plivoSdk = new PlivoClass({ debug: 'INFO', permOnClick: true, enableNoiseReduction: false });
+          const plivoSdk = new PlivoClass({ debug: 'OFF', permOnClick: true, enableNoiseReduction: false, allowMultipleIncomingCalls: true });
           clientInstance = plivoSdk.client || plivoSdk;
         } catch {
           try {
-            clientInstance = new PlivoClass.Client({ enableNoiseReduction: false });
+            clientInstance = new PlivoClass.Client({ debug: 'OFF', enableNoiseReduction: false, allowMultipleIncomingCalls: true });
           } catch {}
         }
 
@@ -951,18 +996,31 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           }
           clientInstance.on('onLogin', () => {
             console.log('[WebPhone] SIP registered successfully with Plivo:', data.username);
+            ensureDefaultSpeakerDevice(clientInstance);
+            repairedEndpointRef.current = null;
             setWebPhoneStatus('ready');
             setWebPhoneError(null);
           });
           clientInstance.on('onLoginFailed', (cause: any) => {
             console.error('[WebPhone] SIP registration failed:', cause);
+            if (!forceRefresh && repairedEndpointRef.current !== data.username) {
+              repairedEndpointRef.current = data.username;
+              setWebPhoneStatus('logging_in');
+              setTimeout(() => {
+                void initWebPhone(true);
+              }, 300);
+              return;
+            }
             setWebPhoneStatus('error');
             setWebPhoneError(`SIP Auth Failed: ${cause?.message || cause || 'Check credentials'}`);
           });
           clientInstance.on('onLogout', () => {
+            if (plivoClientRef.current !== clientInstance) return;
+            setWebPhoneStatus('logging_in');
             console.log('[WebPhone] SIP logged out — scheduling auto-reconnect if session active');
             if (tokenRef.current) {
               setTimeout(() => {
+                if (plivoClientRef.current !== clientInstance || !tokenRef.current) return;
                 try {
                   clientInstance.login(data.username, data.password);
                 } catch {}
@@ -972,7 +1030,10 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           clientInstance.on('onConnectionChange', (obj: any) => {
             const state = String(obj?.state || obj || '').toLowerCase();
             if ((state === 'disconnected' || state === 'closed') && tokenRef.current) {
+              if (plivoClientRef.current !== clientInstance) return;
+              setWebPhoneStatus('logging_in');
               setTimeout(() => {
+                if (plivoClientRef.current !== clientInstance || !tokenRef.current) return;
                 try {
                   clientInstance.login(data.username, data.password);
                 } catch {}
@@ -983,42 +1044,83 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           clientInstance.on('onCallRemoteRinging', () => setWebPhoneStatus('ringing'));
           clientInstance.on('onCallAnswered', () => {
             toneGenRef.current?.stop();
+            incomingActiveRef.current = false;
+            incomingAnswerRef.current = false;
+            setAnsweringIncomingCall(false);
+            setIncomingCall(null);
             setWebPhoneStatus('connected');
+            setShowCallModal(true);
           });
           clientInstance.on('onCallConnected', () => {
             toneGenRef.current?.stop();
+            incomingActiveRef.current = false;
+            incomingAnswerRef.current = false;
+            setAnsweringIncomingCall(false);
+            setIncomingCall(null);
             setWebPhoneStatus('connected');
+            setShowCallModal(true);
+          });
+          clientInstance.on('onMediaConnected', () => {
+            toneGenRef.current?.stop();
+            incomingActiveRef.current = false;
+            incomingAnswerRef.current = false;
+            setAnsweringIncomingCall(false);
+            setIncomingCall(null);
+            setWebPhoneStatus('connected');
+            setShowCallModal(true);
           });
           clientInstance.on('onCallTerminated', () => {
+            incomingActiveRef.current = false;
+            incomingAnswerRef.current = false;
+            setAnsweringIncomingCall(false);
             toneGenRef.current?.stop();
             setIncomingCall(null);
             setWebPhoneStatus('ended');
             fetchData();
           });
           clientInstance.on('onCallFailed', (cause: any) => {
+            incomingActiveRef.current = false;
+            incomingAnswerRef.current = false;
+            setAnsweringIncomingCall(false);
             toneGenRef.current?.stop();
             setIncomingCall(null);
-            setWebPhoneStatus('error');
-            setWebPhoneError(cause?.message || 'Call failed');
+            const outcome = classifyPlivoCallFailure(cause, clientInstance.isLoggedIn !== false);
+            setWebPhoneStatus(outcome.nextStatus);
+            setWebPhoneError(outcome.errorMessage);
+            if (!outcome.isUserCancel) {
+              console.warn('[WebPhone] Call did not connect:', outcome.causeText);
+            }
+            fetchData();
           });
-          const handleIncoming = (callerId: any, extraHeaders: any) => {
+          const handleIncoming = (callerId: any, extraHeaders: any, callInfo?: any) => {
+            if (incomingActiveRef.current) return;
+            incomingGenerationRef.current++;
             console.log('[WebPhone] Incoming call received from:', callerId);
             const rawId = typeof callerId === 'string'
-              ? callerId.replace('@phone.plivo.com', '')
+              ? callerId.replace(/^sip:/i, '').replace(/@.*$/, '')
               : (callerId?.callerId || callerId?.callerName || callerId?.src || 'Inbound Caller');
             toneGenRef.current?.startIncomingRingtone();
+            incomingActiveRef.current = true;
+            incomingAnswerRef.current = false;
+            setAnsweringIncomingCall(false);
+            setWebPhoneError(null);
             setIncomingCall({
               callerId: rawId,
               extraHeaders,
+              callUUID: callInfo?.callUUID || callInfo?.callUuid || callInfo?.call_uuid,
             });
             setWebPhoneStatus('ringing');
           };
 
           const handleIncomingCanceled = () => {
+            incomingActiveRef.current = false;
+            incomingAnswerRef.current = false;
+            setAnsweringIncomingCall(false);
             console.log('[WebPhone] Inbound caller hung up / canceled');
             toneGenRef.current?.stop();
             setIncomingCall(null);
             setWebPhoneStatus('ended');
+            fetchData();
           };
 
           clientInstance.on('onIncomingCall', handleIncoming);
@@ -1033,6 +1135,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           if (typeof window !== 'undefined') {
             (window as any).plivoClient = clientInstance;
           }
+          setWebPhoneStatus('logging_in');
           clientInstance.login(data.username, data.password);
         }
       }
@@ -1125,7 +1228,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         try {
           const PlivoClass = (window as any).Plivo;
           patchPlivoSDK(PlivoClass);
-          const plivoSdk = new PlivoClass({ debug: 'INFO', permOnClick: true, enableNoiseReduction: false });
+          const plivoSdk = new PlivoClass({ debug: 'OFF', permOnClick: true, enableNoiseReduction: false, allowMultipleIncomingCalls: true });
           const clientInstance = plivoSdk.client || plivoSdk;
           if (clientInstance) {
             patchPlivoSDK(PlivoClass, clientInstance);
@@ -1143,6 +1246,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
       if (plivoClientRef.current && endpointConfig) {
         patchPlivoSDK((window as any).Plivo, plivoClientRef.current);
+        ensureDefaultSpeakerDevice(plivoClientRef.current);
         if (!plivoClientRef.current.noiseSuppresion) {
           plivoClientRef.current.noiseSuppresion = createNoiseSuppressionShim(plivoClientRef.current);
         }
@@ -1184,9 +1288,23 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   const handleHangupBrowserCall = () => {
     toneGenRef.current?.stop();
+    incomingActiveRef.current = false;
+    incomingAnswerRef.current = false;
+    setAnsweringIncomingCall(false);
     setIncomingCall(null);
-    if (plivoClientRef.current) {
-      try { plivoClientRef.current.hangup(); } catch {}
+    setWebPhoneError(null);
+    const client = plivoClientRef.current;
+    const hasActiveCall = Boolean(
+      client &&
+        (client._currentSession ||
+          webPhoneStatus === 'calling' ||
+          webPhoneStatus === 'ringing' ||
+          webPhoneStatus === 'connected')
+    );
+    if (hasActiveCall) {
+      try {
+        client.hangup();
+      } catch {}
     }
     setWebPhoneStatus('ended');
     if (callTimerRef.current) clearInterval(callTimerRef.current);
@@ -1196,23 +1314,27 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   };
 
   const handleAnswerIncomingCall = async () => {
+    if (!incomingCall || incomingAnswerRef.current) return;
+    incomingAnswerRef.current = true;
+    setAnsweringIncomingCall(true);
+    setWebPhoneError(null);
+    const generation = incomingGenerationRef.current;
     toneGenRef.current?.stop();
     const caller = incomingCall?.callerId || 'Customer';
     setCallDestination(caller);
-    setIncomingCall(null);
-    setWebPhoneStatus('connected');
     setWebPhoneDuration(0);
-    setShowCallModal(true);
 
     if (plivoClientRef.current) {
       try {
         // Guarantee live microphone audio tracks are active before answering
         const micStream = await getLiveMicrophoneStream();
+        if (!incomingActiveRef.current || generation !== incomingGenerationRef.current) return;
         if (typeof window !== 'undefined' && micStream) {
           (window as any).localStream = micStream;
         }
 
         patchPlivoSDK((window as any).Plivo, plivoClientRef.current);
+        ensureDefaultSpeakerDevice(plivoClientRef.current);
         if (!plivoClientRef.current.noiseSuppresion) {
           plivoClientRef.current.noiseSuppresion = createNoiseSuppressionShim(plivoClientRef.current);
         }
@@ -1221,8 +1343,16 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         }
 
         if (typeof plivoClientRef.current.answer === 'function') {
-          plivoClientRef.current.answer();
-        }
+          const accepted = plivoClientRef.current.answer(incomingCall.callUUID);
+          if (accepted === false) throw new Error('This call is no longer available.');
+        } else throw new Error('The browser phone is not ready to answer.');
+        setTimeout(() => {
+          if (generation === incomingGenerationRef.current && incomingActiveRef.current && incomingAnswerRef.current) {
+            incomingAnswerRef.current = false;
+            setAnsweringIncomingCall(false);
+            setWebPhoneError('The call has not connected. Retry answering or decline the call.');
+          }
+        }, 20_000);
 
         // Guarantee Plivo WebRTC stream is unmuted and transmitting audio
         setTimeout(() => {
@@ -1235,16 +1365,23 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         }, 400);
       } catch (err: any) {
         console.warn('Plivo answer notice:', err.message);
+        incomingAnswerRef.current = false;
+        setAnsweringIncomingCall(false);
+        setWebPhoneError(err.message || 'Could not access the microphone. Allow microphone access and retry.');
+        if (incomingActiveRef.current) toneGenRef.current?.startIncomingRingtone();
       }
-    }
+    } else { incomingAnswerRef.current = false; setAnsweringIncomingCall(false); setWebPhoneError('The browser phone is disconnected. Reconnect before answering.'); }
   };
 
   const handleRejectIncomingCall = () => {
+    incomingActiveRef.current = false;
+    incomingAnswerRef.current = false;
+    setAnsweringIncomingCall(false);
     toneGenRef.current?.stop();
     if (plivoClientRef.current) {
       try {
         if (typeof plivoClientRef.current.reject === 'function') {
-          plivoClientRef.current.reject();
+          plivoClientRef.current.reject(incomingCall?.callUUID);
         } else if (typeof plivoClientRef.current.hangup === 'function') {
           plivoClientRef.current.hangup();
         }
@@ -1280,7 +1417,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           },
           body: JSON.stringify({
             phoneNumberId: callFromNumber,
-            to: callDestination,
+            to: normalizeDialablePhone(callDestination) || callDestination,
             mode: callMode,
             forwardTo: (callMode === 'bridge' || callMode === 'forward') ? callForwardTo : undefined,
             record: callRecord,
@@ -1304,6 +1441,23 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         setCallLoading(false);
       }
     });
+  };
+
+  const openCallbackModal = (callOrPhone: string | CallbackCallLike) => {
+    const rawPhone =
+      typeof callOrPhone === 'string'
+        ? normalizeDialablePhone(callOrPhone)
+        : getCallbackPhone(callOrPhone);
+    const resolved = resolveCallbackDestination(rawPhone, contactsList);
+    if (!resolved) {
+      alert('No dialable phone number is available to call back.');
+      return;
+    }
+    setCallDestination(resolved);
+    setCallMode(callForwardTo ? 'bridge' : 'browser');
+    setWebPhoneError(null);
+    setWebPhoneStatus((prev) => (prev === 'ended' || prev === 'error' ? 'ready' : prev));
+    setShowCallModal(true);
   };
 
   // Send SMS Handler
@@ -1448,6 +1602,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   // Create Contact
   const handleCreateContact = async (e: React.FormEvent) => {
     e.preventDefault();
+    const values = contactValuesFromForm(new FormData(e.currentTarget as HTMLFormElement));
     await runExclusive('create-contact', async () => {
       setContactLoading(true);
       try {
@@ -1456,33 +1611,21 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            name: contactName,
-            phone: contactPhone,
-            email: contactEmail,
-            company: contactCompany,
-            notes: contactNotes,
-          }),
+          body: JSON.stringify(values),
         });
         const data = await res.json();
         if (res.ok) {
-          const newContact = data.contact || {
-            id: `temp_${Date.now()}`,
-            name: contactName,
-            phone: contactPhone,
-            email: contactEmail || null,
-            company: contactCompany || null,
-            notes: contactNotes || null,
-          };
+          if (!data.contact?.id) throw new Error('The contact save was not confirmed. Please retry.');
+          const newContact = data.contact;
 
           // 1. Immediately update contactsList in state so call buttons & dropdowns enable instantly (0ms)
           setContactsList((prev) => {
-            const filtered = prev.filter((c: any) => c.id !== newContact.id && c.phone !== newContact.phone);
+            const filtered = prev.filter((c: any) => c.id !== newContact.id && (!newContact.phone || c.phone !== newContact.phone));
             return [newContact, ...filtered].sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''));
           });
 
           // 2. Immediately set destination to new contact's canonical phone number
-          setCallDestination(newContact.phone);
+          if (newContact.phone) setCallDestination(newContact.phone);
 
           // 3. Clear modal inputs and close contact modal
           setShowContactModal(false);
@@ -1676,7 +1819,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       const cleanTarget = customerPhone.replace(/\D/g, '');
       const matched = contacts.find((c: any) => {
         if (!c.phone) return false;
-        const cClean = c.phone.replace(/\D/g, '');
+        const cClean = (c.phone || '').replace(/\D/g, '');
         return c.phone === customerPhone || (cleanTarget && cClean === cleanTarget);
       });
       if (matched?.email && matched.email.includes('@')) {
@@ -1698,7 +1841,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           },
           body: JSON.stringify({ callId }),
         });
-        const data = await res.json();
+        const data = await readItineraryResponse<{ lead?: typeof selectedLead; error?: string }>(res);
         if (res.ok && data.lead) {
           setSelectedLead(data.lead);
           const resolved = resolveCustomerEmailForLead(data.lead, contactsList);
@@ -1720,6 +1863,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   // Generate Itinerary with Customized Intake Parameters
   const handleGenerateItineraryWithParams = async (callId: string, params: any) => {
+    let generationError: string | null = null;
     await runExclusive(`gen-itinerary:${callId}`, async () => {
       setGeneratingItineraryCallId(callId);
       try {
@@ -1730,7 +1874,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           },
           body: JSON.stringify({ callId, ...params }),
         });
-        const data = await res.json();
+        const data = await readItineraryResponse<{ lead?: typeof selectedLead; error?: string }>(res);
         if (res.ok && data.lead) {
           setShowItineraryIntakeModal(false);
           setIntakeCallTarget(null);
@@ -1742,14 +1886,15 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           setSelectedCallDetail(null);
           fetchData();
         } else {
-          alert(data.error || 'Failed to generate itinerary');
+          generationError = data.error || 'The itinerary service did not return an itinerary. Please retry.';
         }
       } catch (err: any) {
-        alert(err.message || 'Error communicating with itinerary service');
+        generationError = err.message || 'Unable to reach the itinerary service. Your inputs are still here; please retry.';
       } finally {
         setGeneratingItineraryCallId(null);
       }
     });
+    return generationError;
   };
 
   // Select Lead Details (Instant 0ms optimistic drawer open + background full load)
@@ -2025,6 +2170,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         setCallTranscribe,
         callLoading,
         handlePlaceCall,
+        openCallbackModal,
         selectedCallDetail,
         setSelectedCallDetail,
         callDetailSyncing,
@@ -2139,6 +2285,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         isMobileMenuOpen,
         setIsMobileMenuOpen,
         incomingCall,
+        answeringIncomingCall,
         setIncomingCall,
         handleAnswerIncomingCall,
         handleRejectIncomingCall,

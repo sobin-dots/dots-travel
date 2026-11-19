@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { processIncomingWebhook } from '@/lib/webhook-helper';
+import { lockAgency } from '@/lib/lead-intake/service';
+import { inboundFinalStatus, releaseCallAgentInTransaction } from '@/lib/telephony/agent-routing';
 
 export const runtime = 'nodejs';
+
+export async function GET(req: NextRequest) {
+  return POST(req);
+}
 
 export async function POST(req: NextRequest) {
   const result = await processIncomingWebhook(req, 'voice', (p) => {
@@ -16,7 +22,7 @@ export async function POST(req: NextRequest) {
 
   const { params, webhookEventId } = result;
   const callUuid = params.CallUUID || params.call_uuid;
-  const callStatus = params.CallStatus || params.call_status || 'ringing';
+  const callStatus = String(params.CallStatus || params.call_status || 'ringing').toLowerCase();
 
   if (!callUuid) {
     return NextResponse.json({ status: 'ignored_no_uuid' }, { status: 200 });
@@ -27,13 +33,19 @@ export async function POST(req: NextRequest) {
       where: { plivoCallUuid: callUuid },
     });
 
-    if (existingCall) {
-      await db.call.update({
-        where: { id: existingCall.id },
-        data: { status: callStatus },
-      });
+    const orgId = req.nextUrl.searchParams.get('orgId');
+    if (existingCall && (!orgId || existingCall.organizationId === orgId)) await db.$transaction(async tx => {
+      await lockAgency(tx, existingCall.organizationId);
+      const current = await tx.call.findUniqueOrThrow({ where: { id: existingCall.id } });
+      const terminal = ['completed', 'failed', 'busy', 'no-answer', 'timeout', 'canceled'].includes(callStatus);
+      if (current.endedAt || (!terminal && ['completed', 'missed', 'failed', 'busy', 'no-answer', 'timeout', 'canceled'].includes(current.status))) return;
+      const status = terminal ? inboundFinalStatus({ ...current, status: callStatus })
+        : current.direction === 'inbound' && current.agentOutcome && current.agentOutcome !== 'answered' && callStatus === 'in-progress' ? 'ringing' : callStatus;
+      await tx.call.update({ where: { id: current.id }, data: { status,
+        ...(terminal ? { endedAt: new Date(), ...(current.direction === 'inbound' && status === 'missed' && current.agentOutcome && current.agentOutcome !== 'declined' ? { agentOutcome: 'missed' } : {}) } : {}) } });
+      if (terminal) await releaseCallAgentInTransaction(tx, current);
 
-      await db.callEvent.create({
+      await tx.callEvent.create({
         data: {
           organizationId: existingCall.organizationId,
           callId: existingCall.id,
@@ -44,7 +56,7 @@ export async function POST(req: NextRequest) {
           webhookEventId,
         },
       });
-    }
+    }, { timeout: 15_000 });
 
     if (webhookEventId) {
       await db.webhookEvent.update({

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
+import { leadScope } from '@/lib/lead-access';
+import { getActiveCustomerQuotation, getLeadMarginAmount } from '@/lib/pipeline-metrics';
 
 export const runtime = 'nodejs';
 
@@ -12,13 +14,12 @@ export async function GET(req: NextRequest) {
 
   try {
     const leads = await db.lead.findMany({
-      where: { organizationId: auth!.organizationId },
+      where: leadScope(auth!),
       include: {
         contact: true,
         supplier: true,
         quotations: {
           orderBy: { version: 'desc' },
-          take: 1,
         },
         supplierQuotations: {
           orderBy: { createdAt: 'desc' },
@@ -38,12 +39,13 @@ export async function GET(req: NextRequest) {
     };
 
     let totalPipelineValue = 0;
+    let possibleIncome = 0;
     let wonValue = 0;
 
     for (const lead of leads) {
       const stage = columns[lead.stage] ? lead.stage : 'new_inquiry';
       const hasSupplierQuote = lead.supplierQuotations && lead.supplierQuotations.length > 0;
-      const latestQuote = lead.quotations[0];
+      const latestQuote = getActiveCustomerQuotation(lead) || lead.quotations[0];
       const selectedSuppQuote =
         lead.supplierQuotations.find((q) => q.status === 'selected') || lead.supplierQuotations[0];
 
@@ -60,6 +62,7 @@ export async function GET(req: NextRequest) {
 
       if (stage !== 'lost') {
         totalPipelineValue += dealValue;
+        possibleIncome += getLeadMarginAmount(lead) ?? 0;
       }
       if (stage === 'confirmed' || lead.status === 'converted') {
         wonValue += dealValue;
@@ -95,6 +98,7 @@ export async function GET(req: NextRequest) {
       summary: {
         totalLeads: leads.length,
         totalPipelineValue,
+        possibleIncome: Number(possibleIncome.toFixed(2)),
         wonValue,
       },
       columns,

@@ -10,6 +10,7 @@ import {
 import { useConsole } from '@/context/ConsoleContext';
 import { ItineraryIntakeModal } from './ItineraryIntakeModal';
 import { BulkContactsModal } from './BulkContactsModal';
+import { ContactDetailsFields } from './ContactDetailsFields';
 
 export function GlobalModals() {
   const {
@@ -42,15 +43,10 @@ export function GlobalModals() {
     showContactModal,
     setShowContactModal,
     contactName,
-    setContactName,
     contactPhone,
-    setContactPhone,
     contactEmail,
-    setContactEmail,
     contactCompany,
-    setContactCompany,
     contactNotes,
-    setContactNotes,
     contactLoading,
     handleCreateContact,
 
@@ -205,6 +201,7 @@ export function GlobalModals() {
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200"
                 >
                   <option value="operator">Operator (Can make calls & send SMS)</option>
+                  <option value="sales">Sales (Assigned leads and follow-ups)</option>
                   <option value="admin">Admin (Full administrative controls)</option>
                   <option value="viewer">Viewer (Read-only observation)</option>
                 </select>
@@ -234,73 +231,17 @@ export function GlobalModals() {
       {/* MODAL: ADD CONTACT */}
       {showContactModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-md w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 space-y-4 sm:space-y-5">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-2xl w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 space-y-4 sm:space-y-5">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <BookUser className="w-4 h-4 text-emerald-400" />
-              Add Verified Contact
+              Add contact
             </h3>
             <p className="text-xs text-zinc-400">
               Register a contact recipient. Staff can only initiate outbound calls to contacts stored in this directory.
             </p>
 
             <form onSubmit={handleCreateContact} className="space-y-4 text-xs">
-              <div>
-                <label className="text-zinc-400 block mb-1">Contact Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Marcus Vance"
-                  value={contactName}
-                  onChange={(e) => setContactName(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200 focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label className="text-zinc-400 block mb-1">Phone Number (E.164) *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="+14155550199"
-                  value={contactPhone}
-                  onChange={(e) => setContactPhone(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200 font-mono focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-zinc-400 block mb-1">Company</label>
-                  <input
-                    type="text"
-                    placeholder="Acme Corp"
-                    value={contactCompany}
-                    onChange={(e) => setContactCompany(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200"
-                  />
-                </div>
-                <div>
-                  <label className="text-zinc-400 block mb-1">Email</label>
-                  <input
-                    type="email"
-                    placeholder="marcus@acme.com"
-                    value={contactEmail}
-                    onChange={(e) => setContactEmail(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-zinc-400 block mb-1">Notes / Relationship</label>
-                <textarea
-                  rows={2}
-                  placeholder="Key account executive"
-                  value={contactNotes}
-                  onChange={(e) => setContactNotes(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200"
-                />
-              </div>
+              <ContactDetailsFields contact={{ name: contactName, phone: contactPhone, email: contactEmail, company: contactCompany, notes: contactNotes }} disabled={contactLoading} />
 
               <div className="flex justify-end gap-3 pt-3 border-t border-zinc-800">
                 <button

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import { PDFDocument, PDFRawStream, PDFArray, decodePDFRawStream } from 'pdf-lib';
 
 vi.mock('@/lib/db', () => ({ db: {
   lead: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
@@ -26,7 +27,7 @@ const programme = 'Morning: Explore the proposed heritage route at a relaxed pac
 const itinerary = Array.from({ length: 5 }, (_, i) => `Day ${i + 1}: Proposed programme\n${programme}`).join('\n');
 const result = { title: 'Malaysia and Singapore', destination: 'Malaysia and Singapore', itinerary, durationDays: 5 };
 const call = { id: 'call-a', direction: 'outbound', to: '+910000000000', transcriptions: [{ status: 'completed', text: 'Malaysia and Singapore for 5 days', createdAt: new Date() }] };
-const lead = { id: 'lead-a', organizationId: 'org-a', callId: 'call-a', title: result.title, destination: result.destination, itinerary, durationDays: 5, metadata: { currency: 'INR', custom: 'retained' }, headcountAdults: 2, headcountChildren: 1, headcountInfants: 0, departureDate: new Date('2027-02-20'), returnDate: new Date('2027-02-24'), organization: { name: 'Agency' } };
+const lead = { id: 'lead-a', organizationId: 'org-a', assignedToId: 'user-a', callId: 'call-a', title: result.title, destination: result.destination, itinerary, durationDays: 5, metadata: { currency: 'INR', custom: 'retained' }, headcountAdults: 2, headcountChildren: 1, headcountInfants: 0, departureDate: new Date('2027-02-20'), returnDate: new Date('2027-02-24'), organization: { name: 'Agency' } };
 const context = { params: Promise.resolve({ id: lead.id }) };
 const req = (path: string, body?: object, method = 'POST') => new NextRequest(`http://localhost:3000/api/v1/leads/${path}`, { method: body ? method : 'GET', ...(body ? { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } } : {}) });
 
@@ -43,6 +44,56 @@ beforeEach(() => {
 });
 
 describe('Itinerary API persistence and dispatch', () => {
+  it('saves manual edits exactly without calling AI and preserves metadata', async () => {
+    const updatedAt = new Date('2026-11-15T06:00:00.000Z');
+    vi.mocked(db.lead.findFirst).mockResolvedValue({ ...lead, updatedAt } as any);
+    const edited = itinerary.replace('Day 2: Proposed programme', 'Day 2: Revised heritage route');
+    const response = await update(req(lead.id, { itinerary: edited, expectedUpdatedAt: updatedAt.toISOString() }, 'PATCH'), context);
+    expect(response.status).toBe(200);
+    expect((await response.json()).lead).toMatchObject({ itinerary: edited, metadata: { custom: 'retained', itineraryNeedsRegeneration: false } });
+    expect(generateItineraryFromTranscript).not.toHaveBeenCalled();
+    expect(db.lead.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: lead.id, updatedAt } }));
+  });
+
+  it('rejects manual edits based on an older version without overwriting the current itinerary', async () => {
+    vi.mocked(db.lead.findFirst).mockResolvedValue({ ...lead, updatedAt: new Date('2026-11-15T07:00:00.000Z') } as any);
+    const response = await update(req(lead.id, { itinerary, expectedUpdatedAt: '2026-11-15T06:00:00.000Z' }, 'PATCH'), context);
+    expect(response.status).toBe(409);
+    expect(db.lead.update).not.toHaveBeenCalled();
+  });
+
+  it('exports the saved manual changes in the proposal PDF without regenerating with AI', async () => {
+    const updatedAt = new Date('2026-11-17T06:00:00.000Z');
+    vi.mocked(db.lead.findFirst).mockResolvedValue({ ...lead, updatedAt } as any);
+    const edited = itinerary.replace('Day 2: Proposed programme', 'Day 2: ManuallyUpdatedDayTwo').replace('the museum', 'ManualMuseumVisit');
+    const saved = await update(req(lead.id, { itinerary: edited, expectedUpdatedAt: updatedAt.toISOString() }, 'PATCH'), context);
+    expect(saved.status).toBe(200);
+    const savedLead = (await saved.json()).lead;
+    vi.mocked(db.lead.findFirst).mockResolvedValue({ ...lead, ...savedLead } as any);
+    const response = await pdf(req(`${lead.id}/pdf`), context);
+    expect(response.status).toBe(200);
+    const document = await PDFDocument.load(await response.arrayBuffer());
+    let text = '';
+    for (const page of document.getPages()) {
+      const contents = page.node.Contents();
+      for (const reference of contents instanceof PDFArray ? contents.asArray() : [contents]) {
+        const stream = document.context.lookup(reference!);
+        if (!(stream instanceof PDFRawStream)) continue;
+        const operators = Buffer.from(decodePDFRawStream(stream).decode()).toString();
+        for (const match of operators.matchAll(/<([0-9a-f]+)>\s*Tj/gi)) text += Buffer.from(match[1], 'hex').toString('latin1') + '\n';
+      }
+    }
+    expect(text).toContain('ManualMuseumVisit');
+    expect(text).toContain('ManuallyUpdatedDayTwo');
+    expect(generateItineraryFromTranscript).not.toHaveBeenCalled();
+  });
+
+  it('rejects incomplete manual edits without changing saved content', async () => {
+    const response = await update(req(lead.id, { itinerary: 'Day 1: Arrival\nShort.' }, 'PATCH'), context);
+    expect(response.status).toBe(422);
+    expect(db.lead.update).not.toHaveBeenCalled();
+  });
+
   it('returns the generation error without creating or overwriting a lead', async () => {
     vi.mocked(generateItineraryFromTranscript).mockRejectedValue(new ItineraryError('AI unavailable', 502));
     const response = await generate(req('generate', { callId: call.id, destination: result.destination, durationDays: 5 }));

@@ -1,120 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createHash, randomBytes } from 'node:crypto';
 import * as plivo from 'plivo';
 import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
-import { getTenantIntegration, saveTenantIntegration } from '@/lib/integrations/credentials-manager';
+import { encryptData } from '@/lib/crypto';
+import { getTenantIntegration } from '@/lib/integrations/credentials-manager';
+import { decryptAgentEndpoint, type AgentEndpoint } from '@/lib/telephony/agent-routing';
 
 export const runtime = 'nodejs';
-
 export async function GET(req: NextRequest) {
-  const { auth, errorResponse } = await authenticateRequest(req, 'viewer');
-  if (errorResponse) return errorResponse;
-
-  if (!auth?.organizationId) {
-    return NextResponse.json({ error: 'Organization context required' }, { status: 400 });
-  }
-
-  const plivoInteg = await getTenantIntegration(auth.organizationId, 'plivo');
-  const authId = plivoInteg?.credentials?.authId;
-  const authToken = plivoInteg?.credentials?.authToken;
-  let callerId = plivoInteg?.credentials?.callerId;
-
-  if (!authId || !authToken) {
-    return NextResponse.json({
-      error: 'Plivo is not configured for this organization. Please enter your Plivo Auth ID & Token in Settings -> Platform & BYOK.',
-    }, { status: 400 });
-  }
-
-  if (!callerId) {
-    const activeNumber = await db.phoneNumber.findFirst({
-      where: { organizationId: auth.organizationId, status: 'active' },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (activeNumber) {
-      callerId = activeNumber.e164;
-    }
-  }
-
+  const { auth, errorResponse } = await authenticateRequest(req, 'operator'); if (errorResponse) return errorResponse;
+  const forceRefresh = ['1', 'true'].includes(req.nextUrl.searchParams.get('refresh') || '');
+  const integration = await getTenantIntegration(auth!.organizationId, 'plivo');
+  const { authId, authToken } = integration?.credentials || {};
+  if (!authId || !authToken) return NextResponse.json({ error: 'Configure Plivo in Settings → Platform & BYOK first.' }, { status: 400 });
   try {
-    const client = new (plivo as any).Client(authId, authToken);
-    const password = plivoInteg?.credentials?.endpointPassword || 'PilvoAgent2026!Secure';
-    const endpoints = await client.endpoints.list();
-    let endpoint =
-      endpoints.find(
-        (e: any) =>
-          plivoInteg?.credentials?.endpointUsername &&
-          e.username === plivoInteg.credentials.endpointUsername
-      ) || endpoints[0];
-
-    // Auto-provision endpoint on Plivo for this tenant if not yet created
+    const member = await db.membership.findUniqueOrThrow({ where: { organizationId_userId: { organizationId: auth!.organizationId, userId: auth!.userId } } });
+    let endpoint = !forceRefresh && member.voiceEndpoint ? decryptAgentEndpoint(member.voiceEndpoint) : null;
+    if (endpoint?.authId !== authId) endpoint = null;
     if (!endpoint) {
-      try {
-        const apps = await client.applications.list();
-        const app = apps.find((a: any) => a.defaultEndpointApp) || apps[0];
-        const cleanAuthId = String(authId).replace(/[^a-zA-Z0-9]/g, '').slice(-4).toLowerCase() || 'agent';
-        const cleanOrg = auth.organizationId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toLowerCase() || 'line';
-        const username = `agent${cleanOrg}${cleanAuthId}`;
-        endpoint = await client.endpoints.create(username, password, `Agent-${cleanOrg}`, app?.appId);
-      } catch (createErr: any) {
-        console.warn('Auto-create Plivo endpoint warning:', createErr?.message || createErr);
-      }
+      endpoint = await db.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM memberships WHERE id = ${member.id} FOR UPDATE`;
+        const locked = await tx.membership.findUniqueOrThrow({ where: { id: member.id } });
+        if (!forceRefresh && locked.voiceEndpoint) { const saved = decryptAgentEndpoint(locked.voiceEndpoint); if (saved.authId === authId) return saved; }
+        const client = new (plivo as any).Client(authId, authToken);
+        const identity = createHash('sha256').update(`${auth!.organizationId}:${auth!.userId}`).digest('hex').slice(0, 16);
+        const password = `P${randomBytes(12).toString('hex')}9a`;
+        const applications = await client.applications.list();
+        const appId = integration?.credentials?.appId || applications.find((a: any) => a.appId === integration?.metadata?.applicationId)?.appId || applications.find((a: any) => a.defaultEndpointApp)?.appId || applications[0]?.appId;
+        if (!appId) throw new Error('Set a Plivo application for browser endpoints before receiving calls.');
+        const alias = `Agent-${identity}`;
+        const expectedPrefix = `a${identity}`;
+        let recovered: { username?: string; endpointId?: string; id?: string; sipUri?: string; alias?: string } | null = null;
+        for (let offset = 0; offset < 200; offset += 20) {
+          const page = await client.endpoints.list({ limit: 20, offset });
+          if (!Array.isArray(page) || page.length === 0) break;
+          recovered = page.find((e: { alias?: string; username?: string }) => e.alias === alias || e.username === expectedPrefix) || null;
+          if (recovered || page.length < 20) break;
+        }
+        let created;
+        if (recovered) {
+          await client.endpoints.update(recovered.endpointId || recovered.id, { password, appId });
+          created = recovered;
+        } else created = await client.endpoints.create(`a${identity}`, password, alias, appId);
+        const result: AgentEndpoint = { username: created.username, password, authId, endpointId: created.endpointId || created.id, sipUri: created.sipUri || `sip:${created.username}@phone.plivo.com` };
+        if (!result.username || !result.endpointId) throw new Error('The provider did not return browser endpoint details');
+        await tx.membership.update({ where: { id: member.id }, data: { voiceEndpoint: { ...encryptData(JSON.stringify(result)) } } });
+        return result;
+      }, { timeout: 30_000 });
     }
-
-    if (!endpoint) {
-      return NextResponse.json({
-        error: 'No Plivo SIP endpoint found. Please check Plivo credentials.',
-      }, { status: 500 });
-    }
-
-    const sipUri = endpoint.sipUri || `sip:${endpoint.username}@phone.plivo.com`;
-    const endpointId = endpoint.endpointId || endpoint.id;
-
-    // Ensure the endpoint password on Plivo is synchronized with the password we give the browser WebRTC SDK
-    if (endpointId && !plivoInteg.credentials.passwordSynced) {
-      try {
-        await client.endpoints.update(endpointId, { password });
-      } catch (pwErr: any) {
-        console.warn('Plivo endpoint password sync notice:', pwErr?.message || pwErr);
-      }
-    }
-
-    // Persist endpoint details into DB if not yet stored on TenantIntegration
-    if (
-      plivoInteg.credentials.sipEndpoint !== sipUri ||
-      plivoInteg.credentials.endpointUsername !== endpoint.username ||
-      !plivoInteg.credentials.passwordSynced ||
-      (callerId && !plivoInteg.credentials.callerId)
-    ) {
-      const proto = req.headers.get('x-forwarded-proto') || (req.url.startsWith('https') ? 'https' : 'http');
-      const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
-      const requestBaseUrl = host && !host.includes('localhost') ? `${proto}://${host}` : undefined;
-      try {
-        await saveTenantIntegration(auth.organizationId, {
-          provider: 'plivo',
-          credentials: {
-            ...plivoInteg.credentials,
-            callerId: callerId || plivoInteg.credentials.callerId || '',
-            sipEndpoint: sipUri,
-            endpointUsername: endpoint.username,
-            endpointPassword: password,
-            endpointId,
-            passwordSynced: true,
-          },
-          metadata: plivoInteg.metadata,
-          webhookBaseUrl: requestBaseUrl,
-        });
-      } catch {}
-    }
-
-    return NextResponse.json({
-      mode: 'live',
-      username: endpoint.username,
-      password,
-      callerId: callerId || '',
-      alias: endpoint.alias,
-      sipUri,
-    });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message || 'Failed to retrieve endpoint' }, { status: 500 });
-  }
+    const number = await db.phoneNumber.findFirst({ where: { organizationId: auth!.organizationId, status: 'active' }, orderBy: { createdAt: 'desc' } });
+    return NextResponse.json({ mode: 'live', username: endpoint.username, password: endpoint.password, sipUri: endpoint.sipUri, callerId: integration?.credentials?.callerId || number?.e164 || '' }, { headers: { 'Cache-Control': 'private, no-store' } });
+  } catch (e) { return NextResponse.json({ error: e instanceof Error ? e.message : 'Could not prepare browser phone' }, { status: 503 }); }
 }

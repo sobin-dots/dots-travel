@@ -6,18 +6,22 @@ import {
   CheckCircle,
   DollarSign,
   Phone,
+  PhoneCall,
   MessageSquare,
   Plus,
   Clock,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
+import { getCallbackPhone, isMissedOrUnansweredCall } from '@/lib/telephony/call-callback';
 
 export default function ConsoleOverviewPage() {
   const {
     calls,
     threads,
     numbers,
+    currentOrg,
     setShowCallModal,
+    openCallbackModal,
     setShowBuyModal,
     handleSearchNumbers,
   } = useConsole();
@@ -128,44 +132,59 @@ export default function ConsoleOverviewPage() {
                   })
                 : null;
 
-              return (
-                <div key={call.id} className="px-4 sm:px-5 py-3.5 flex items-center justify-between text-xs hover:bg-zinc-800/30 gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div
-                      className={`w-2 h-2 rounded-full shrink-0 ${
-                        call.status === 'completed'
-                          ? 'bg-emerald-400'
-                          : call.status === 'in-progress'
-                          ? 'bg-indigo-400 animate-pulse'
-                          : 'bg-amber-400'
-                      }`}
-                    />
-                    <div className="min-w-0">
-                      <div className="font-mono text-zinc-200 font-medium truncate flex items-center gap-2">
-                        <span>{call.contactName ? `${call.contactName} (${call.to})` : `${call.from} → ${call.to}`}</span>
+                  const callbackPhone = getCallbackPhone(call);
+                  const isMissedCall = isMissedOrUnansweredCall(call);
+                  return (
+                    <div key={call.id} className="px-4 sm:px-5 py-3.5 flex items-center justify-between text-xs hover:bg-zinc-800/30 gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div
+                          className={`w-2 h-2 rounded-full shrink-0 ${
+                            call.status === 'completed'
+                              ? 'bg-emerald-400'
+                              : call.status === 'in-progress'
+                              ? 'bg-indigo-400 animate-pulse'
+                              : 'bg-amber-400'
+                          }`}
+                        />
+                        <div className="min-w-0">
+                          <div className="font-mono text-zinc-200 font-medium truncate flex items-center gap-2">
+                            <span>{call.contactName ? `${call.contactName} (${call.to})` : `${call.from} → ${call.to}`}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono mt-0.5 flex-wrap">
+                            {formattedDate && (
+                              <span className="flex items-center gap-1 text-zinc-300">
+                                <Clock className="w-2.5 h-2.5 text-indigo-400 shrink-0" />
+                                {formattedDate} at {formattedTime}
+                              </span>
+                            )}
+                            {formattedDate && <span>•</span>}
+                            <span className="text-zinc-500">UUID: {call.plivoCallUuid}</span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono mt-0.5 flex-wrap">
-                        {formattedDate && (
-                          <span className="flex items-center gap-1 text-zinc-300">
-                            <Clock className="w-2.5 h-2.5 text-indigo-400 shrink-0" />
-                            {formattedDate} at {formattedTime}
-                          </span>
+                      <div className="flex items-center gap-2.5 shrink-0">
+                        {isMissedCall && callbackPhone && currentOrg?.role !== 'viewer' && (
+                          <button
+                            type="button"
+                            onClick={() => openCallbackModal(call)}
+                            className="px-2.5 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/35 text-[11px] font-medium inline-flex items-center gap-1 transition cursor-pointer"
+                            title={`Call back ${callbackPhone}`}
+                          >
+                            <PhoneCall className="w-3 h-3" />
+                            <span>Call Back</span>
+                          </button>
                         )}
-                        {formattedDate && <span>•</span>}
-                        <span className="text-zinc-500">UUID: {call.plivoCallUuid}</span>
+                        <div className="text-right">
+                          <span className="capitalize px-2 py-0.5 rounded text-[10px] sm:text-[11px] bg-zinc-800 text-zinc-300 font-medium">
+                            {call.status}
+                          </span>
+                          <div className="text-[10px] text-zinc-500 mt-1">
+                            {call.billDurationSeconds ? `${call.billDurationSeconds}s billed` : 'Queued'}
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className="capitalize px-2 py-0.5 rounded text-[10px] sm:text-[11px] bg-zinc-800 text-zinc-300 font-medium">
-                      {call.status}
-                    </span>
-                    <div className="text-[10px] text-zinc-500 mt-1">
-                      {call.billDurationSeconds ? `${call.billDurationSeconds}s billed` : 'Queued'}
-                    </div>
-                  </div>
-                </div>
-              );
+                  );
             })
           )}
         </div>

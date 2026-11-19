@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { CreateContactRequestSchema } from '@/lib/schemas';
+import { contactScope, managesLeads } from '@/lib/lead-access';
 
 export const runtime = 'nodejs';
 
@@ -12,7 +13,7 @@ export async function GET(req: NextRequest) {
   if (errorResponse) return errorResponse;
 
   const contacts = await db.contact.findMany({
-    where: { organizationId: auth!.organizationId },
+    where: contactScope(auth!),
     orderBy: { name: 'asc' },
   });
 
@@ -38,17 +39,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { name, phone, email, company, notes } = parsed.data;
+    const { name, phone, email, company, notes, ...travelDetails } = parsed.data;
 
     // Check if contact with same phone already exists
-    const existing = await db.contact.findUnique({
+    const existing = phone ? await db.contact.findUnique({
       where: {
         organizationId_phone: {
           organizationId: auth!.organizationId,
           phone,
         },
       },
-    });
+    }) : null;
 
     if (existing) {
       return NextResponse.json(
@@ -65,6 +66,9 @@ export async function POST(req: NextRequest) {
         email: email || null,
         company: company || null,
         notes: notes || null,
+        // Staff who add a contact own it, so it appears in their "Assigned to me" list.
+        ...(managesLeads(auth!) ? {} : { assignedToId: auth!.userId, assignedAt: new Date() }),
+        ...travelDetails,
       },
     });
 
@@ -86,6 +90,7 @@ export async function POST(req: NextRequest) {
       { status: 201 }
     );
   } catch (err: any) {
+    if (err?.code === 'P2002') return NextResponse.json({ error: 'A contact with this phone number already exists' }, { status: 409 });
     console.error('Create contact error:', err);
     return NextResponse.json(
       { api_id: 'server_err', error: err.message || 'Internal error creating contact' },

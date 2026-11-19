@@ -622,6 +622,48 @@ const GENERIC_GUEST_PLACEHOLDERS = new Set([
   'partner supplier',
 ]);
 
+export function isGenericPlaceholderValue(val?: string | null): boolean {
+  if (!val || typeof val !== 'string') return true;
+  const clean = val.replace(/[*_`]/g, '').trim().toLowerCase();
+  if (!clean) return true;
+  const placeholders = new Set([
+    'none',
+    'none.',
+    'none on day',
+    'nil',
+    'n/a',
+    'na',
+    'tbd',
+    'to be confirmed',
+    '(to be confirmed)',
+    'to be confirmed.',
+    'to be confirmed)',
+    '(to be confirmed).',
+    'to be decided',
+    '(to be decided)',
+    'tbc',
+    'not applicable',
+    'not specified',
+    'pending',
+    'optional',
+    'unknown',
+  ]);
+  if (placeholders.has(clean)) return true;
+  if (/^(?:\(?to be confirmed\)?\.?|none\.?|n\/a|not applicable|tbd|tbc|to be decided)$/i.test(clean)) return true;
+  return false;
+}
+
+export function cleanDynamicValue(val?: string | null): string {
+  if (!val || typeof val !== 'string') return '';
+  if (isGenericPlaceholderValue(val)) return '';
+  const cleaned = val
+    .replace(/\s*\((?:proposed:?\s*)?to be confirmed\)/gi, '')
+    .replace(/\s*;\s*to be confirmed/gi, '')
+    .replace(/\s*-\s*to be confirmed/gi, '')
+    .trim();
+  return isGenericPlaceholderValue(cleaned) ? '' : cleaned;
+}
+
 export function resolveCustomerNameForPdf(options: PDFOptions, itineraryText?: string): string {
   if (options.recipientType === 'supplier') {
     const sup = options.recipientName?.trim();
@@ -658,7 +700,7 @@ export function resolveCustomerNameForPdf(options: PDFOptions, itineraryText?: s
     }
   }
 
-  return 'Guest';
+  return '';
 }
 
 function parsePipeTableRow(line: string): {
@@ -808,7 +850,7 @@ export function parseItineraryContent(text: string, options: PDFOptions): Parsed
       content.match(/\*\*Destination:\*\*\s*([^\n\r]+)/i) ||
       content.match(/^Destination:\s*([^\n\r]+)/im) ||
       content.match(/(?:Journey|Escape|Voyage|Trip|Holiday)\s+to\s+([A-Z][a-zA-Z\s,&]+?)(?:\s*\(|\n|\r|$)/i);
-    destination = destMatch ? sanitizePdfText(destMatch[1]) : 'Destination to be confirmed';
+    destination = destMatch ? sanitizePdfText(destMatch[1]) : '';
   }
 
   // 2. Duration
@@ -848,7 +890,7 @@ export function parseItineraryContent(text: string, options: PDFOptions): Parsed
         content.match(/\*\*Departure Date:\*\*\s*([^\n\r(]+)/i) ||
         content.match(/\*\*Travel Dates:\*\*\s*([^\n\r]+)/i) ||
         content.match(/Travel Dates:\s*([^\n\r]+)/i);
-      travelDates = dateMatch ? sanitizePdfText(dateMatch[1]) : 'Dates to be confirmed';
+      travelDates = dateMatch ? sanitizePdfText(dateMatch[1]) : '';
     }
   }
 
@@ -1339,13 +1381,13 @@ export async function generateItineraryPDF(options: PDFOptions): Promise<Uint8Ar
   const rawMetaRows: Array<[string, string]> = [
     ['Prepared for', resolveCustomerNameForPdf(options, options.itineraryText)],
     ['Destination', parsed.destination],
-    ['Duration', `${parsed.durationDays} days / ${parsed.durationNights} nights`],
+    ['Duration', parsed.durationDays ? `${parsed.durationDays} days / ${parsed.durationNights} nights` : ''],
     ['Travel dates', parsed.travelDates],
     ['Party size', partyParts],
     ['Prepared date', parsed.preparedDateStr],
     ['Reference', options.bookingReference || ''],
   ];
-  const metaRows = rawMetaRows.filter(([_, val]) => Boolean(val && val.trim().length > 0));
+  const metaRows = rawMetaRows.filter(([_, val]) => Boolean(val && val.trim().length > 0 && !isGenericPlaceholderValue(val)));
 
   for (const [lbl, val] of metaRows) {
     if (y < 68) startNewPage(currentSection, true);
@@ -1364,7 +1406,7 @@ export async function generateItineraryPDF(options: PDFOptions): Promise<Uint8Ar
 
   // Overview Specifications / Table rows (Hotel plan, Meal plan, Transfers, etc.)
   const overviewRows = parsed.overviewTableRows.filter(
-    ([label]) => !['Destination', 'Duration'].includes(label)
+    ([label, val]) => !['Destination', 'Duration'].includes(label) && Boolean(val && val.trim().length > 0 && !isGenericPlaceholderValue(val))
   );
   if (overviewRows.length > 0) {
     for (const [lbl, val] of overviewRows) {
@@ -1386,9 +1428,12 @@ export async function generateItineraryPDF(options: PDFOptions): Promise<Uint8Ar
     y -= 6;
   }
 
-  // Guest Preferences (Recorded Requirements & To Confirm Before Booking)
+  // Guest Preferences (Recorded Requirements)
   renderItemList('Recorded Requirements', parsed.recordedRequirements, 110);
-  renderItemList('To Confirm Before Booking', parsed.toConfirmItems, 110);
+  const cleanToConfirm = parsed.toConfirmItems.filter(item => !isGenericPlaceholderValue(item) && !item.toLowerCase().includes('to be confirmed'));
+  if (cleanToConfirm.length > 0) {
+    renderItemList('To Confirm Before Booking', cleanToConfirm, 110);
+  }
 
   // Day-by-Day Journey Itinerary
   writeSectionHeading('Day-by-Day Journey Itinerary', 140);
@@ -1429,7 +1474,7 @@ export async function generateItineraryPDF(options: PDFOptions): Promise<Uint8Ar
       ['Included experience', day.experience],
       ['Notes', day.notes],
     ];
-    const dayMeta = rawDayMeta.filter(([, val]) => Boolean(val && val.trim().length > 0 && !val.toLowerCase().includes('not applicable')));
+    const dayMeta = rawDayMeta.filter(([, val]) => Boolean(val && val.trim().length > 0 && !isGenericPlaceholderValue(val)));
 
     if (dayMeta.length > 0) {
       y -= 2;
@@ -1453,9 +1498,12 @@ export async function generateItineraryPDF(options: PDFOptions): Promise<Uint8Ar
   }
 
   // Curated Accommodations
-  if (parsed.accommodationRows.some(([, value]) => value)) {
+  const validAccommodationRows = parsed.accommodationRows.filter(
+    ([, val]) => Boolean(val && val.trim().length > 0 && !isGenericPlaceholderValue(val))
+  );
+  if (validAccommodationRows.length > 0) {
     writeSectionHeading('Curated Accommodations', 120);
-    for (const [lbl, val] of parsed.accommodationRows) {
+    for (const [lbl, val] of validAccommodationRows) {
       if (!val?.trim()) continue;
       if (y < 68) startNewPage('Curated Accommodations', true);
       const lblStr = `${lbl}: `;
@@ -1471,7 +1519,7 @@ export async function generateItineraryPDF(options: PDFOptions): Promise<Uint8Ar
       }
       if (first) y -= 14.5;
     }
-    if (parsed.alternativeAccommodationText) {
+    if (parsed.alternativeAccommodationText && !isGenericPlaceholderValue(parsed.alternativeAccommodationText)) {
       y -= 4;
       writeText(parsed.alternativeAccommodationText, 10, false, muted, 14, 6);
     }

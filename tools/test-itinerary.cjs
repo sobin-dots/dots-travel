@@ -30,6 +30,7 @@ const run = args => {
     process.exitCode = run(['node_modules/vitest/vitest.mjs', 'run',
       'tests/itinerary-content.test.ts', 'tests/itinerary-generation-failures.test.ts',
       'tests/itinerary-api-regression.test.ts', 'tests/itinerary-database.test.ts',
+      'tests/itinerary-response.test.ts',
       'tests/itinerary-pdf-consistency.test.ts', 'tests/itinerary-pdf-brand-portrait.test.ts',
       'tests/itinerary-proposal-e2e.test.ts', 'tests/itinerary-preparation-rules.test.ts',
       'tests/leads-itinerary.test.ts', 'tests/organization-details-settings.test.ts',

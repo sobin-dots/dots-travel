@@ -159,6 +159,25 @@ async function resolveCandidateAuthTokens(
   return Array.from(candidateTokens).filter(Boolean);
 }
 
+export function firstForwardedValue(rawHeader: string | null): string | null {
+  if (!rawHeader) return null;
+  const first = rawHeader.split(',')[0]?.trim();
+  return first || null;
+}
+
+export function resolveRequestBaseUrl(req: NextRequest, fallbackHost?: string): string {
+  const urlObj = new URL(req.url);
+  const proto =
+    firstForwardedValue(req.headers.get('x-forwarded-proto')) ||
+    (req.url.startsWith('https') ? 'https' : 'http');
+  const host =
+    firstForwardedValue(req.headers.get('x-forwarded-host')) ||
+    firstForwardedValue(req.headers.get('host')) ||
+    fallbackHost ||
+    urlObj.host;
+  return `${proto}://${host}`.trim().replace(/\/+$/, '');
+}
+
 export async function processIncomingWebhook(
   req: NextRequest,
   kind: 'voice' | 'message' | 'recording' | 'transcription',
@@ -208,8 +227,10 @@ export async function processIncomingWebhook(
 
   // Resolve actual public URL that Plivo signed against from request headers or DB-configured webhookBaseUrl
   const originalUrlObj = new URL(req.url);
-  const forwardedProto = req.headers.get('x-forwarded-proto') || 'https';
-  const forwardedHost = req.headers.get('x-forwarded-host') || req.headers.get('host');
+  const forwardedProto = firstForwardedValue(req.headers.get('x-forwarded-proto')) || 'https';
+  const forwardedHost =
+    firstForwardedValue(req.headers.get('x-forwarded-host')) ||
+    firstForwardedValue(req.headers.get('host'));
   const proxyUrl = forwardedHost
     ? `${forwardedProto}://${forwardedHost}${originalUrlObj.pathname}${originalUrlObj.search}`
     : req.url;
@@ -243,7 +264,7 @@ export async function processIncomingWebhook(
             nonce,
             authToken: token,
             signatureHeader,
-            params,
+            params: method === 'GET' ? {} : params,
           })
         ) {
           isSignatureValid = true;
