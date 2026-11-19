@@ -995,6 +995,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
             clientInstance.noiseSuppression = clientInstance.noiseSuppresion;
           }
           clientInstance.on('onLogin', () => {
+            patchPlivoSDK(PlivoClass, clientInstance);
             console.log('[WebPhone] SIP registered successfully with Plivo:', data.username);
             ensureDefaultSpeakerDevice(clientInstance);
             repairedEndpointRef.current = null;
@@ -1329,6 +1330,9 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         // Guarantee live microphone audio tracks are active before answering
         const micStream = await getLiveMicrophoneStream();
         if (!incomingActiveRef.current || generation !== incomingGenerationRef.current) return;
+        if (!micStream) {
+          throw new Error('Could not access the microphone. Allow microphone access in your browser and retry.');
+        }
         if (typeof window !== 'undefined' && micStream) {
           (window as any).localStream = micStream;
         }
