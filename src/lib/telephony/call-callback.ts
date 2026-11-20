@@ -67,3 +67,51 @@ export function resolveCallbackDestination(
 
   return normalizedMatch?.phone || normalizedTarget;
 }
+
+export interface CallableContactLike {
+  id: string;
+  name?: string | null;
+  phone?: string | null;
+  company?: string | null;
+  email?: string | null;
+}
+
+/**
+ * Filters dialable contacts by name, phone (with or without formatting), company, or email.
+ */
+export function filterCallableContacts<T extends CallableContactLike>(
+  contacts: T[],
+  query: string
+): Array<T & { phone: string }> {
+  const dialable = contacts.filter(
+    (c): c is T & { phone: string } => typeof c.phone === 'string' && c.phone.trim().length > 0
+  );
+  const trimmed = query.trim().toLowerCase();
+  if (!trimmed) return dialable;
+
+  const queryDigits = trimmed.replace(/\D/g, '');
+  return dialable.filter((contact) => {
+    const name = (contact.name || '').toLowerCase();
+    const phone = contact.phone.toLowerCase();
+    const company = (contact.company || '').toLowerCase();
+    const email = (contact.email || '').toLowerCase();
+
+    if (
+      name.includes(trimmed) ||
+      phone.includes(trimmed) ||
+      company.includes(trimmed) ||
+      email.includes(trimmed)
+    ) {
+      return true;
+    }
+
+    if (queryDigits.length > 0) {
+      const phoneDigits = contact.phone.replace(/\D/g, '');
+      if (phoneDigits.includes(queryDigits)) {
+        return true;
+      }
+    }
+
+    return false;
+  });
+}

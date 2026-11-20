@@ -8,6 +8,7 @@ import {
   inferHangupTerminalStatus,
   resolveHangupOrganizationId,
 } from '@/lib/telephony/plivo-call-sync';
+import { resolveOutboundBrowserFinalStatus } from '@/lib/telephony/outbound-browser-call';
 
 export const runtime = 'nodejs';
 
@@ -78,6 +79,9 @@ export async function POST(req: NextRequest) {
       }
       const reqParams = existingCall.requestedParams as Record<string, unknown> | null;
       const isRecoveredFromHangup = Boolean(reqParams?.recoveredFromHangup);
+      const isOutboundBrowserCall =
+        existingCall.direction === 'outbound' && existingCall.requestedMode === 'browser';
+      const hangupSource = params.HangupSource ? String(params.HangupSource) : undefined;
       const finalStatus = isRecoveredFromHangup
         ? inferHangupTerminalStatus({
             direction: existingCall.direction,
@@ -86,18 +90,31 @@ export async function POST(req: NextRequest) {
             hangupCauseCode: hangupCause,
             hangupCauseName,
           })
-        : inboundFinalStatus(existingCall);
+        : isOutboundBrowserCall
+          ? resolveOutboundBrowserFinalStatus(existingCall, {
+              hangupCauseCode: hangupCause,
+              hangupCauseName,
+              hangupSource,
+            })
+          : inboundFinalStatus(existingCall);
+      const resolvedDuration =
+        isOutboundBrowserCall && !existingCall.answeredAt
+          ? 0
+          : duration !== undefined
+            ? duration
+            : existingCall.durationSeconds;
       await tx.call.update({
         where: { id: existingCall.id },
         data: {
           status: finalStatus,
           ...(existingCall.direction === 'inbound' && existingCall.agentOutcome && finalStatus === 'missed' && existingCall.agentOutcome !== 'declined' ? { agentOutcome: 'missed' } : {}),
           endedAt: existingCall.endedAt || new Date(),
-          durationSeconds: duration !== undefined ? duration : existingCall.durationSeconds,
+          durationSeconds: resolvedDuration,
           billDurationSeconds: billDuration !== undefined ? billDuration : existingCall.billDurationSeconds,
           totalCost: totalCost !== undefined ? totalCost : existingCall.totalCost,
           hangupCauseCode: hangupCause,
           hangupCauseName,
+          ...(hangupSource ? { hangupSource } : {}),
         },
       });
 
