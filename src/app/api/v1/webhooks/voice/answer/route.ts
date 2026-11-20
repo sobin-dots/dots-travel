@@ -126,6 +126,9 @@ export async function handleAnswer(req: NextRequest) {
       })
       .dial(destinationNumber, {
         ...(resolvedCallerId ? { callerId: resolvedCallerId } : {}),
+        dialMusic: 'real',
+        callbackUrl: dialCallbackUrl,
+        callbackMethod: 'POST',
       });
   } else if (mode === 'bridge' && (connectTo || forwardTo)) {
     // Mobile Phone Bridge mode: Plivo called the Staff / Agent's mobile phone first.
@@ -280,11 +283,19 @@ export async function handleAnswer(req: NextRequest) {
     });
 
     if (existingCall) {
+      const isOutboundBrowserCall = isSipEndpointCall || existingCall.requestedMode === 'browser';
+      const nextStatus = isOutboundBrowserCall
+        ? existingCall.answeredAt || existingCall.status === 'in-progress'
+          ? 'in-progress'
+          : existingCall.endedAt
+            ? existingCall.status
+            : 'ringing'
+        : 'in-progress';
       await db.call.update({
         where: { id: existingCall.id },
         data: {
-          status: 'in-progress',
-          answeredAt: existingCall.answeredAt || new Date(),
+          status: nextStatus,
+          ...(isOutboundBrowserCall ? {} : { answeredAt: existingCall.answeredAt || new Date() }),
         },
       });
 
@@ -293,7 +304,7 @@ export async function handleAnswer(req: NextRequest) {
           organizationId: existingCall.organizationId,
           callId: existingCall.id,
           eventType: 'answer',
-          status: 'in-progress',
+          status: nextStatus,
           payload: params,
           occurredAt: new Date(),
           webhookEventId,
@@ -313,11 +324,11 @@ export async function handleAnswer(req: NextRequest) {
               from: resolvedCallerId || 'Unknown',
               to: destinationNumber || 'Unknown',
               direction: 'outbound',
-              status: 'in-progress',
+              status: 'ringing',
               recordingEnabled: true,
               transcriptionEnabled: true,
               transcriptionLanguage: 'en-US',
-              answeredAt: new Date(),
+              answeredAt: null,
               requestedMode: 'browser',
               requestedParams: actorUserId || actorName || actorEmail
                 ? { actorUserId, actorName, actorEmail }
@@ -333,7 +344,7 @@ export async function handleAnswer(req: NextRequest) {
               organizationId: effectiveOrgId,
               callId: savedCall.id,
               eventType: 'answer',
-              status: 'in-progress',
+              status: 'ringing',
               payload: params,
               occurredAt: new Date(),
               webhookEventId,

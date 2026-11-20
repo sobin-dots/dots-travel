@@ -18,6 +18,11 @@ import {
   resolveCallbackDestination,
   type CallbackCallLike,
 } from '@/lib/telephony/call-callback';
+import {
+  extractPlivoCallUuid,
+  isOutboundPlivoCall,
+  type PlivoCallInfoLike,
+} from '@/lib/telephony/outbound-browser-call';
 
 interface ConsoleContextType {
   bearerToken: string;
@@ -362,9 +367,14 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [endpointConfig, setEndpointConfig] = useState<any>(null);
   const [incomingCall, setIncomingCall] = useState<{ callerId: string; extraHeaders?: any; callUUID?: string } | null>(null);
   const [answeringIncomingCall, setAnsweringIncomingCall] = useState(false);
+  const [activeOutboundCallUuid, setActiveOutboundCallUuid] = useState<string | null>(null);
+  const [outboundAudioBridged, setOutboundAudioBridged] = useState(false);
   const incomingActiveRef = useRef(false);
   const incomingAnswerRef = useRef(false);
   const incomingGenerationRef = useRef(0);
+  const activeCallDirectionRef = useRef<'outbound' | 'inbound' | null>(null);
+  const activeOutboundCallUuidRef = useRef<string | null>(null);
+  const outboundCallAttemptRef = useRef(0);
 
   const plivoClientRef = useRef<any>(null);
   const webPhoneUsernameRef = useRef<string | null>(null);
@@ -424,14 +434,16 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   // Reactive audio tones for call progression
   useEffect(() => {
     if (webPhoneStatus === 'calling') {
-      toneGenRef.current?.startConnectingTune();
+      if (outboundAudioBridged) toneGenRef.current?.stop();
+      else toneGenRef.current?.startConnectingTune();
     } else if (webPhoneStatus === 'ringing') {
       if (incomingCall) toneGenRef.current?.startIncomingRingtone();
+      else if (outboundAudioBridged) toneGenRef.current?.stop();
       else toneGenRef.current?.startRingingTune();
     } else {
       toneGenRef.current?.stop();
     }
-  }, [webPhoneStatus, incomingCall]);
+  }, [webPhoneStatus, incomingCall, outboundAudioBridged]);
 
 
 
@@ -1040,9 +1052,48 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
               }, 2000);
             }
           });
-          clientInstance.on('onCalling', () => setWebPhoneStatus('calling'));
-          clientInstance.on('onCallRemoteRinging', () => setWebPhoneStatus('ringing'));
-          clientInstance.on('onCallAnswered', () => {
+          const captureOutboundCallUuid = (callInfo?: PlivoCallInfoLike | null) => {
+            const uuid = extractPlivoCallUuid(callInfo, clientInstance);
+            if (uuid && activeOutboundCallUuidRef.current !== uuid) {
+              activeOutboundCallUuidRef.current = uuid;
+              setActiveOutboundCallUuid(uuid);
+            }
+            return uuid;
+          };
+
+          const clearOutboundTracking = () => {
+            outboundCallAttemptRef.current += 1;
+            activeCallDirectionRef.current = null;
+            activeOutboundCallUuidRef.current = null;
+            setActiveOutboundCallUuid(null);
+            setOutboundAudioBridged(false);
+          };
+
+          clientInstance.on('onCalling', (callInfo?: PlivoCallInfoLike) => {
+            activeCallDirectionRef.current = 'outbound';
+            captureOutboundCallUuid(callInfo);
+            setWebPhoneStatus((prev) => (prev === 'connected' ? prev : 'calling'));
+          });
+          clientInstance.on('onCallRemoteRinging', (callInfo?: PlivoCallInfoLike) => {
+            if (isOutboundPlivoCall(callInfo, activeCallDirectionRef.current)) {
+              activeCallDirectionRef.current = 'outbound';
+              captureOutboundCallUuid(callInfo);
+            }
+            setWebPhoneStatus((prev) => (prev === 'connected' ? prev : 'ringing'));
+          });
+          clientInstance.on('onCallAnswered', (callInfo?: PlivoCallInfoLike) => {
+            if (isOutboundPlivoCall(callInfo, activeCallDirectionRef.current)) {
+              // On outbound browser calls, Plivo answers the A-leg (browser <-> Plivo) to run <Dial>
+              // before the customer's phone picks up. Stop synthetic local tones so real carrier ringback
+              // plays cleanly, and wait for the B-leg Dial callback before switching to 'connected'.
+              activeCallDirectionRef.current = 'outbound';
+              captureOutboundCallUuid(callInfo);
+              setOutboundAudioBridged(true);
+              toneGenRef.current?.stop();
+              setWebPhoneStatus((prev) => (prev === 'connected' ? prev : 'ringing'));
+              setShowCallModal(true);
+              return;
+            }
             toneGenRef.current?.stop();
             incomingActiveRef.current = false;
             incomingAnswerRef.current = false;
@@ -1051,28 +1102,39 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
             setWebPhoneStatus('connected');
             setShowCallModal(true);
           });
-          clientInstance.on('onCallConnected', () => {
-            toneGenRef.current?.stop();
-            incomingActiveRef.current = false;
-            incomingAnswerRef.current = false;
-            setAnsweringIncomingCall(false);
-            setIncomingCall(null);
-            setWebPhoneStatus('connected');
-            setShowCallModal(true);
+          clientInstance.on('onCallConnected', (callInfo?: PlivoCallInfoLike) => {
+            // In Plivo Browser SDK v2, onCallConnected fires on SIP INFO "remote-party-ringing"
+            // (remote PSTN phone started ringing, NOT answered).
+            if (isOutboundPlivoCall(callInfo, activeCallDirectionRef.current)) {
+              activeCallDirectionRef.current = 'outbound';
+              captureOutboundCallUuid(callInfo);
+              setWebPhoneStatus((prev) => (prev === 'connected' ? prev : 'ringing'));
+            }
           });
-          clientInstance.on('onMediaConnected', () => {
-            toneGenRef.current?.stop();
-            incomingActiveRef.current = false;
-            incomingAnswerRef.current = false;
-            setAnsweringIncomingCall(false);
-            setIncomingCall(null);
-            setWebPhoneStatus('connected');
-            setShowCallModal(true);
+          clientInstance.on('onMediaConnected', (callInfo?: PlivoCallInfoLike) => {
+            // WebRTC ICE connection to Plivo media server (early media / A-leg).
+            // For outbound calls, silence synthetic tones without marking the call answered.
+            if (isOutboundPlivoCall(callInfo, activeCallDirectionRef.current)) {
+              captureOutboundCallUuid(callInfo);
+              setOutboundAudioBridged(true);
+              toneGenRef.current?.stop();
+              return;
+            }
+            if (incomingAnswerRef.current) {
+              toneGenRef.current?.stop();
+              incomingActiveRef.current = false;
+              incomingAnswerRef.current = false;
+              setAnsweringIncomingCall(false);
+              setIncomingCall(null);
+              setWebPhoneStatus('connected');
+              setShowCallModal(true);
+            }
           });
           clientInstance.on('onCallTerminated', () => {
             incomingActiveRef.current = false;
             incomingAnswerRef.current = false;
             setAnsweringIncomingCall(false);
+            clearOutboundTracking();
             toneGenRef.current?.stop();
             setIncomingCall(null);
             setWebPhoneStatus('ended');
@@ -1082,6 +1144,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
             incomingActiveRef.current = false;
             incomingAnswerRef.current = false;
             setAnsweringIncomingCall(false);
+            clearOutboundTracking();
             toneGenRef.current?.stop();
             setIncomingCall(null);
             const outcome = classifyPlivoCallFailure(cause, clientInstance.isLoggedIn !== false);
@@ -1095,6 +1158,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           const handleIncoming = (callerId: any, extraHeaders: any, callInfo?: any) => {
             if (incomingActiveRef.current) return;
             incomingGenerationRef.current++;
+            clearOutboundTracking();
+            activeCallDirectionRef.current = 'inbound';
             console.log('[WebPhone] Incoming call received from:', callerId);
             const rawId = typeof callerId === 'string'
               ? callerId.replace(/^sip:/i, '').replace(/@.*$/, '')
@@ -1116,6 +1181,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
             incomingActiveRef.current = false;
             incomingAnswerRef.current = false;
             setAnsweringIncomingCall(false);
+            clearOutboundTracking();
             console.log('[WebPhone] Inbound caller hung up / canceled');
             toneGenRef.current?.stop();
             setIncomingCall(null);
@@ -1208,11 +1274,82 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     };
   }, [webPhoneStatus]);
 
+  // Poll backend B-leg <Dial callbackUrl> state while an outbound browser call is connecting/ringing
+  useEffect(() => {
+    if (
+      !bearerToken ||
+      activeCallDirectionRef.current !== 'outbound' ||
+      (webPhoneStatus !== 'calling' && webPhoneStatus !== 'ringing')
+    ) {
+      return;
+    }
+
+    const attempt = outboundCallAttemptRef.current;
+    let cancelled = false;
+    let inFlight = false;
+
+    const checkLiveStatus = async () => {
+      if (cancelled || inFlight || outboundCallAttemptRef.current !== attempt) return;
+      const uuid =
+        activeOutboundCallUuidRef.current ||
+        activeOutboundCallUuid ||
+        extractPlivoCallUuid(null, plivoClientRef.current);
+      if (!uuid) return;
+      if (activeOutboundCallUuidRef.current !== uuid) {
+        activeOutboundCallUuidRef.current = uuid;
+        setActiveOutboundCallUuid(uuid);
+      }
+
+      inFlight = true;
+      try {
+        const res = await authFetch(`/api/v1/calls/live-status?callUuid=${encodeURIComponent(uuid)}`, {
+          cache: 'no-store',
+        });
+        if (!res.ok || cancelled || outboundCallAttemptRef.current !== attempt) return;
+        const data = await res.json();
+        if (cancelled || outboundCallAttemptRef.current !== attempt) return;
+
+        if (data.found && data.state === 'connected' && data.answered) {
+          toneGenRef.current?.stop();
+          setOutboundAudioBridged(true);
+          const answeredMs = data.answeredAt ? new Date(data.answeredAt).getTime() : NaN;
+          const elapsedSec = Number.isFinite(answeredMs)
+            ? Math.max(0, Math.floor((Date.now() - answeredMs) / 1000))
+            : 0;
+          setWebPhoneDuration(elapsedSec);
+          setWebPhoneStatus('connected');
+          setShowCallModal(true);
+        } else if (data.found && data.state === 'ringing') {
+          setWebPhoneStatus((prev) => (prev === 'calling' ? 'ringing' : prev));
+        }
+      } catch {
+        // Ignore transient network blips while polling active ringing state
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void checkLiveStatus();
+    const interval = setInterval(() => {
+      void checkLiveStatus();
+    }, 750);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [bearerToken, webPhoneStatus, activeOutboundCallUuid]);
+
   const handleStartBrowserCall = async () => {
     if (!callDestination) {
       alert('You must select or add a verified contact before placing a call.');
       return;
     }
+    outboundCallAttemptRef.current += 1;
+    activeCallDirectionRef.current = 'outbound';
+    activeOutboundCallUuidRef.current = null;
+    setActiveOutboundCallUuid(null);
+    setOutboundAudioBridged(false);
     toneGenRef.current?.startConnectingTune();
     setWebPhoneStatus('calling');
     setWebPhoneError(null);
@@ -1261,11 +1398,15 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         if (currentUser?.email) sipHeaders['X-PH-actorEmail'] = String(currentUser.email);
         if (currentUser?.name) sipHeaders['X-PH-actorName'] = String(currentUser.name);
         plivoClientRef.current.call(cleanDestination, sipHeaders);
-        setTimeout(() => setWebPhoneStatus((c) => (c === 'calling' ? 'ringing' : c)), 2600);
       } else {
         throw new Error('Plivo Web Phone client is not registered with carrier. Please refresh or verify Plivo credentials.');
       }
     } catch (err: any) {
+      outboundCallAttemptRef.current += 1;
+      activeCallDirectionRef.current = null;
+      activeOutboundCallUuidRef.current = null;
+      setActiveOutboundCallUuid(null);
+      setOutboundAudioBridged(false);
       toneGenRef.current?.stop();
       setWebPhoneError(err.message || 'Microphone access denied or call initiation failed.');
       setWebPhoneStatus('error');
@@ -1288,6 +1429,11 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   const handleHangupBrowserCall = () => {
     toneGenRef.current?.stop();
+    outboundCallAttemptRef.current += 1;
+    activeCallDirectionRef.current = null;
+    activeOutboundCallUuidRef.current = null;
+    setActiveOutboundCallUuid(null);
+    setOutboundAudioBridged(false);
     incomingActiveRef.current = false;
     incomingAnswerRef.current = false;
     setAnsweringIncomingCall(false);
@@ -1315,6 +1461,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   const handleAnswerIncomingCall = async () => {
     if (!incomingCall || incomingAnswerRef.current) return;
+    activeCallDirectionRef.current = 'inbound';
     incomingAnswerRef.current = true;
     setAnsweringIncomingCall(true);
     setWebPhoneError(null);
@@ -1374,6 +1521,11 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   };
 
   const handleRejectIncomingCall = () => {
+    outboundCallAttemptRef.current += 1;
+    activeCallDirectionRef.current = null;
+    activeOutboundCallUuidRef.current = null;
+    setActiveOutboundCallUuid(null);
+    setOutboundAudioBridged(false);
     incomingActiveRef.current = false;
     incomingAnswerRef.current = false;
     setAnsweringIncomingCall(false);

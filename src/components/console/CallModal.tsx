@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Phone,
   Mic,
@@ -11,8 +11,13 @@ import {
   Plus,
   AlertTriangle,
   Volume2,
+  Search,
+  ChevronDown,
+  Check,
+  X,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
+import { filterCallableContacts } from '@/lib/telephony/call-callback';
 
 export function CallModal() {
   const {
@@ -48,19 +53,61 @@ export function CallModal() {
     setReturnToCallModal,
   } = useConsole();
 
-  // Default to the first verified contact only when no destination (e.g. a callback number) is already set
+  const [contactDropdownOpen, setContactDropdownOpen] = useState(false);
+  const [contactSearch, setContactSearch] = useState('');
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const contactDropdownRef = useRef<HTMLDivElement>(null);
+
+  const callableContacts = useMemo(
+    () => filterCallableContacts(contactsList, ''),
+    [contactsList]
+  );
+
+  const filteredContacts = useMemo(
+    () => filterCallableContacts(contactsList, contactSearch),
+    [contactsList, contactSearch]
+  );
+
+  // Default to the first verified contact with a phone number when no destination (e.g. a callback number) is already set
   useEffect(() => {
-    if (showCallModal && !callDestination && contactsList.length > 0) {
-      setCallDestination(contactsList[0].phone);
+    if (showCallModal && !callDestination && callableContacts.length > 0) {
+      setCallDestination(callableContacts[0].phone);
     }
-  }, [showCallModal, contactsList, callDestination, setCallDestination]);
+  }, [showCallModal, callableContacts, callDestination, setCallDestination]);
+
+  useEffect(() => {
+    if (!contactDropdownOpen) return;
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (contactDropdownRef.current && !contactDropdownRef.current.contains(event.target as Node)) {
+        setContactDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [contactDropdownOpen]);
 
   if (!showCallModal) return null;
 
-  const isSavedContactDestination =
-    Boolean(callDestination) &&
-    contactsList.some((c: { phone?: string | null }) => c.phone === callDestination);
+  const selectedContact = callableContacts.find((c) => c.phone === callDestination) || null;
+  const isSavedContactDestination = Boolean(selectedContact);
   const isUnsavedCallbackDestination = Boolean(callDestination) && !isSavedContactDestination;
+
+  const closeContactDropdown = () => {
+    setContactDropdownOpen(false);
+    setContactSearch('');
+    setHighlightedIndex(0);
+  };
+
+  const handleSelectRecipient = (phone: string) => {
+    setCallDestination(phone);
+    closeContactDropdown();
+  };
+
+  const selectedLabel = selectedContact
+    ? `${selectedContact.name} (${selectedContact.phone})${selectedContact.company ? ` — ${selectedContact.company}` : ''}`
+    : isUnsavedCallbackDestination
+      ? `${callDestination} — Callback Number (Unsaved Caller)`
+      : '-- Select Contact to Call --';
 
   return (
     <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -72,18 +119,25 @@ export function CallModal() {
             </div>
             <div>
               <h3 className="text-sm font-bold text-white">
-                {webPhoneStatus === 'connected' ? 'Live In-Browser Voice Call' : 'Outbound Voice Calling'}
+                {webPhoneStatus === 'connected'
+                  ? 'Live In-Browser Voice Call'
+                  : webPhoneStatus === 'calling' || webPhoneStatus === 'ringing'
+                    ? 'Calling Customer via WebRTC'
+                    : 'Outbound Voice Calling'}
               </h3>
               <p className="text-[11px] text-zinc-400">
                 {webPhoneStatus === 'connected'
                   ? 'Connected live via WebRTC • 2-way cloud recording active'
-                  : 'Connect live with customers & record audio for AI itineraries'}
+                  : webPhoneStatus === 'calling' || webPhoneStatus === 'ringing'
+                    ? 'Waiting for recipient to answer • Cloud recording starts on answer'
+                    : 'Connect live with customers & record audio for AI itineraries'}
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={() => {
+              closeContactDropdown();
               if (webPhoneStatus === 'calling' || webPhoneStatus === 'ringing' || webPhoneStatus === 'connected') {
                 handleHangupBrowserCall();
               }
@@ -146,13 +200,13 @@ export function CallModal() {
                 {webPhoneStatus === 'calling' && (
                   <span className="text-amber-400 flex items-center gap-1.5 font-medium">
                     <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-                    Connecting... (Playing dot caller tune • • •)
+                    Connecting to carrier...
                   </span>
                 )}
                 {webPhoneStatus === 'ringing' && (
                   <span className="text-sky-400 flex items-center gap-1.5 font-medium">
                     <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
-                    Ringing customer line... (Playing ringing caller tune 🎵)
+                    Ringing customer line...
                   </span>
                 )}
                 {webPhoneStatus === 'connected' && (
@@ -164,19 +218,29 @@ export function CallModal() {
               </div>
             </div>
 
-            {/* Soundwave animation */}
-            <div className="flex items-center gap-1.5 h-8">
-              <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-4" />
-              <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-7 delay-75" />
-              <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-3 delay-150" />
-              <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-6 delay-100" />
-              <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-8 delay-200" />
-              <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-5 delay-75" />
-              <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-3 delay-150" />
-            </div>
+            {/* Soundwave animation — active only once recipient answers */}
+            {webPhoneStatus === 'connected' ? (
+              <div className="flex items-center gap-1.5 h-8">
+                <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-4" />
+                <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-7 delay-75" />
+                <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-3 delay-150" />
+                <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-6 delay-100" />
+                <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-8 delay-200" />
+                <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-5 delay-75" />
+                <span className="w-1.5 bg-emerald-400 rounded-full animate-bounce h-3 delay-150" />
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 h-8">
+                <span className="w-2 h-2 rounded-full bg-sky-400/80 animate-pulse" />
+                <span className="w-2 h-2 rounded-full bg-sky-400/60 animate-pulse delay-100" />
+                <span className="w-2 h-2 rounded-full bg-sky-400/40 animate-pulse delay-200" />
+              </div>
+            )}
 
             <div className="p-2.5 bg-zinc-900 border border-zinc-800 rounded-lg text-[11px] text-zinc-400 text-center max-w-sm">
-              🎧 Speaking live via your browser microphone. Audio is being recorded on Plivo cloud and will be transcribed for AI itinerary generation.
+              {webPhoneStatus === 'connected'
+                ? '🎧 Speaking live via your browser microphone. Audio is being recorded on Plivo cloud and will be transcribed for AI itinerary generation.'
+                : '📞 Waiting for the customer to pick up. Cloud recording and the live call timer will begin as soon as the call is answered.'}
             </div>
 
             {/* Call Controls */}
@@ -243,22 +307,23 @@ export function CallModal() {
             </div>
 
             {/* Recipient Contact */}
-            <div>
+            <div ref={contactDropdownRef} className="relative">
               <div className="flex items-center justify-between mb-1">
                 <label className="text-zinc-400 block">Recipient Contact</label>
                 <button
                   type="button"
                   onClick={() => {
+                    closeContactDropdown();
                     setReturnToCallModal(true);
                     setShowCallModal(false);
                     setShowContactModal(true);
                   }}
-                  className="text-[11px] text-emerald-400 hover:underline flex items-center gap-1"
+                  className="text-[11px] text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
                 >
                   <Plus className="w-3 h-3" /> Add Contact
                 </button>
               </div>
-              {contactsList.length === 0 && !isUnsavedCallbackDestination ? (
+              {callableContacts.length === 0 && !isUnsavedCallbackDestination ? (
                 <div className="p-3 bg-amber-950/40 border border-amber-800/60 rounded-lg text-amber-300 text-xs space-y-2">
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
@@ -270,34 +335,177 @@ export function CallModal() {
                   <button
                     type="button"
                     onClick={() => {
+                      closeContactDropdown();
                       setReturnToCallModal(true);
                       setShowCallModal(false);
                       setShowContactModal(true);
                     }}
-                    className="w-full py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-semibold"
+                    className="w-full py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-semibold cursor-pointer"
                   >
                     + Add Verified Contact First
                   </button>
                 </div>
               ) : (
                 <div className="space-y-1.5">
-                  <select
-                    value={callDestination}
-                    onChange={(e) => setCallDestination(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200"
+                  <button
+                    type="button"
+                    role="combobox"
+                    aria-controls="recipient-contact-listbox"
+                    aria-expanded={contactDropdownOpen}
+                    aria-haspopup="listbox"
+                    onClick={() => {
+                      if (contactDropdownOpen) {
+                        closeContactDropdown();
+                      } else {
+                        setContactSearch('');
+                        setHighlightedIndex(0);
+                        setContactDropdownOpen(true);
+                      }
+                    }}
+                    className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-emerald-500/60 rounded-lg px-2.5 py-2.5 text-left text-zinc-200 flex items-center justify-between gap-2 transition cursor-pointer"
                   >
-                    <option value="">-- Select Contact to Call --</option>
-                    {isUnsavedCallbackDestination && (
-                      <option value={callDestination}>
-                        {callDestination} — Callback Number (Unsaved Caller)
-                      </option>
-                    )}
-                    {contactsList.map((c) => (
-                      <option key={c.id} value={c.phone}>
-                        {c.name} ({c.phone}) {c.company ? `— ${c.company}` : ''}
-                      </option>
-                    ))}
-                  </select>
+                    <span className={`truncate ${callDestination ? 'text-zinc-200' : 'text-zinc-500'}`}>
+                      {selectedLabel}
+                    </span>
+                    <ChevronDown
+                      className={`w-4 h-4 text-zinc-400 shrink-0 transition-transform ${contactDropdownOpen ? 'rotate-180 text-emerald-400' : ''}`}
+                    />
+                  </button>
+
+                  {contactDropdownOpen && (
+                    <div className="mt-1 bg-zinc-950 border border-zinc-700 rounded-xl shadow-2xl overflow-hidden">
+                      <div className="p-2 border-b border-zinc-800 flex items-center gap-2 bg-zinc-900/70">
+                        <Search className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                        <input
+                          type="text"
+                          autoFocus
+                          value={contactSearch}
+                          onChange={(e) => {
+                            setContactSearch(e.target.value);
+                            setHighlightedIndex(0);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                              e.preventDefault();
+                              closeContactDropdown();
+                            } else if (e.key === 'ArrowDown') {
+                              e.preventDefault();
+                              setHighlightedIndex((prev) =>
+                                filteredContacts.length > 0 ? Math.min(prev + 1, filteredContacts.length - 1) : 0
+                              );
+                            } else if (e.key === 'ArrowUp') {
+                              e.preventDefault();
+                              setHighlightedIndex((prev) => Math.max(prev - 1, 0));
+                            } else if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const target = filteredContacts[highlightedIndex] || filteredContacts[0];
+                              if (target) handleSelectRecipient(target.phone);
+                            }
+                          }}
+                          placeholder="Search by name, phone, company, or email..."
+                          className="w-full bg-transparent text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none"
+                        />
+                        {contactSearch && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setContactSearch('');
+                              setHighlightedIndex(0);
+                            }}
+                            aria-label="Clear contact search"
+                            className="text-zinc-500 hover:text-zinc-200 p-0.5 rounded cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      <div id="recipient-contact-listbox" role="listbox" className="max-h-56 overflow-y-auto py-1">
+                        {isUnsavedCallbackDestination &&
+                          (!contactSearch.trim() ||
+                            callDestination.toLowerCase().includes(contactSearch.trim().toLowerCase()) ||
+                            (contactSearch.replace(/\D/g, '').length > 0 &&
+                              callDestination.replace(/\D/g, '').includes(contactSearch.replace(/\D/g, '')))) && (
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={true}
+                              onClick={() => handleSelectRecipient(callDestination)}
+                              className="w-full px-3 py-2 text-left text-xs flex items-center justify-between gap-2 bg-amber-950/30 hover:bg-amber-900/40 text-amber-200 border-b border-zinc-800/80 cursor-pointer"
+                            >
+                              <div className="min-w-0">
+                                <div className="font-mono font-medium truncate">{callDestination}</div>
+                                <div className="text-[10px] text-amber-300/80">Callback Number (Unsaved Caller)</div>
+                              </div>
+                              <Check className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                            </button>
+                          )}
+
+                        {filteredContacts.length === 0 ? (
+                          <div className="px-3 py-5 text-center space-y-2">
+                            <p className="text-xs text-zinc-400">
+                              No contacts match &ldquo;{contactSearch.trim()}&rdquo;
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                closeContactDropdown();
+                                setReturnToCallModal(true);
+                                setShowCallModal(false);
+                                setShowContactModal(true);
+                              }}
+                              className="text-[11px] text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Plus className="w-3 h-3" /> Add New Contact
+                            </button>
+                          </div>
+                        ) : (
+                          filteredContacts.map((c, idx) => {
+                            const isSelected = c.phone === callDestination;
+                            const isHighlighted = idx === highlightedIndex;
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                role="option"
+                                aria-selected={isSelected}
+                                onMouseEnter={() => setHighlightedIndex(idx)}
+                                onClick={() => handleSelectRecipient(c.phone)}
+                                className={`w-full px-3 py-2 text-left text-xs flex items-center justify-between gap-2 transition cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-emerald-600/20 text-white'
+                                    : isHighlighted
+                                      ? 'bg-zinc-800/80 text-white'
+                                      : 'text-zinc-200 hover:bg-zinc-800/60'
+                                }`}
+                              >
+                                <div className="min-w-0">
+                                  <div className="truncate font-medium">
+                                    <span>{c.name}</span>
+                                    <span className="text-zinc-400 font-mono font-normal"> ({c.phone})</span>
+                                  </div>
+                                  {c.company && (
+                                    <div className="text-[10px] text-zinc-400 truncate">{c.company}</div>
+                                  )}
+                                </div>
+                                {isSelected && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      {contactSearch.trim() && (
+                        <div className="px-3 py-1.5 border-t border-zinc-800 bg-zinc-900/60 text-[10px] text-zinc-500 flex items-center justify-between">
+                          <span>
+                            Showing {filteredContacts.length} of {callableContacts.length} contacts
+                          </span>
+                          <span>Enter to select • Esc to close</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {isUnsavedCallbackDestination && (
                     <p className="text-[11px] text-amber-300/90">
                       Calling back unsaved number <span className="font-mono">{callDestination}</span>. You can save them as an enquiry anytime from Calls or + Add Contact.
@@ -315,7 +523,7 @@ export function CallModal() {
                   <span>Direct In-Browser Voice Calling (WebRTC)</span>
                 </div>
                 <p className="text-[11px] text-zinc-300 leading-relaxed">
-                  You will speak and listen directly through your computer headset or microphone. Plivo dials the customer's phone from <span className="font-mono text-emerald-400 font-semibold">{numbers.find((n) => n.id === callFromNumber)?.e164 || numbers[0]?.e164 || 'your active line'}</span> and connects them live to your browser.
+                  You will speak and listen directly through your computer headset or microphone. Plivo dials the customer&apos;s phone from <span className="font-mono text-emerald-400 font-semibold">{numbers.find((n) => n.id === callFromNumber)?.e164 || numbers[0]?.e164 || 'your active line'}</span> and connects them live to your browser.
                 </p>
                 <div className="flex items-center gap-2 pt-1 text-[11px] text-emerald-400">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -372,7 +580,10 @@ export function CallModal() {
             <div className="flex justify-end gap-3 pt-3 border-t border-zinc-800">
               <button
                 type="button"
-                onClick={() => setShowCallModal(false)}
+                onClick={() => {
+                  closeContactDropdown();
+                  setShowCallModal(false);
+                }}
                 className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs"
               >
                 Cancel
