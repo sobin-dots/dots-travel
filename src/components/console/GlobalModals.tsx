@@ -6,6 +6,8 @@ import {
   BookUser,
   Building2,
   Loader2,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { ItineraryIntakeModal } from './ItineraryIntakeModal';
@@ -76,6 +78,7 @@ export function GlobalModals() {
   } = useConsole();
 
   const [newOrgName, setNewOrgName] = React.useState('');
+  const [showStaffPassword, setShowStaffPassword] = React.useState(false);
 
   return (
     <>
@@ -182,15 +185,26 @@ export function GlobalModals() {
 
               <div>
                 <label className="text-zinc-400 block mb-1">Password (min. 8 characters)</label>
-                <input
-                  type="password"
-                  required
-                  minLength={8}
-                  placeholder="••••••••••••"
-                  value={staffPassword}
-                  onChange={(e) => setStaffPassword(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200 focus:outline-none focus:border-indigo-500"
-                />
+                <div className="relative">
+                  <input
+                    type={showStaffPassword ? 'text' : 'password'}
+                    required
+                    minLength={8}
+                    placeholder="••••••••••••"
+                    value={staffPassword}
+                    onChange={(e) => setStaffPassword(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 pr-10 text-zinc-200 focus:outline-none focus:border-indigo-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowStaffPassword((prev) => !prev)}
+                    aria-label={showStaffPassword ? 'Hide password' : 'Show password'}
+                    title={showStaffPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+                  >
+                    {showStaffPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               <div>

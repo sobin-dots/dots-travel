@@ -223,7 +223,7 @@ export default function LeadsPage() {
           title="Total margin set by your organization across active pipeline quotations (excludes Closed / Lost)"
         >
           <div>
-            <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Possible Income</div>
+            <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Possible Profit</div>
             <div className="text-xl font-bold text-amber-400 mt-1 font-mono">
               ₹{possibleIncome.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
             </div>
