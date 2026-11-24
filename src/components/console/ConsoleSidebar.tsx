@@ -42,6 +42,8 @@ export function ConsoleSidebar() {
     currentUser,
   } = useConsole();
 
+  const isSales = currentOrg?.role?.toLowerCase() === 'sales';
+
   const navItems = [
     { href: '/console', label: 'Overview', icon: Activity, exact: true },
     {
@@ -52,25 +54,29 @@ export function ConsoleSidebar() {
     },
     { href: '/console/leads', label: 'Leads & Itineraries', icon: Compass, count: leadsList.length },
     // { href: '/console/enquiries', label: 'Lead Inbox', icon: Inbox },
-    { href: '/console/suppliers', label: 'Suppliers', icon: Building2, count: suppliersList.length },
-    { href: '/console/contacts', label: 'Enquiries', icon: BookUser, count: contactsList.length },
+    ...(!isSales ? [{ href: '/console/suppliers', label: 'Suppliers', icon: Building2, count: suppliersList.length }] : []),
+    ...(!isSales ? [{ href: '/console/contacts', label: 'Enquiries', icon: BookUser, count: contactsList.length }] : []),
     ...(currentOrg?.role && currentOrg.role !== 'viewer'
       ? [{ href: '/console/assigned-to-me', label: 'Assigned to me', icon: UserCheck, count: contactsList.filter((c) => c.assignedToId === currentUser?.id).length }]
       : []),
-    { href: '/console/users', label: 'Staff Team', icon: Users, count: staffList.length },
+    ...(!isSales ? [{ href: '/console/users', label: 'Staff Team', icon: Users, count: staffList.length }] : []),
     { href: '/console/recordings', label: 'Recordings', icon: Mic, count: recordings.length },
     { href: '/console/transcripts', label: 'Transcripts', icon: FileText, count: transcripts.length },
-    {
-      href: '/console/settings',
-      label: 'Settings',
-      icon: Settings,
-      subItems: [
-        { href: '/console/settings', label: 'Platform & BYOK', exact: true },
-        { href: '/console/settings/itinerary-rules', label: 'Itinerary Rules', icon: Sparkles },
-        { href: '/console/settings/lead-intake', label: 'Lead Intake', icon: BookUser },
-      ],
-    },
-    { href: '/console/audit', label: 'Audit Log', icon: Shield },
+    ...(!isSales
+      ? [
+          {
+            href: '/console/settings',
+            label: 'Settings',
+            icon: Settings,
+            subItems: [
+              { href: '/console/settings', label: 'Platform & BYOK', exact: true },
+              { href: '/console/settings/itinerary-rules', label: 'Itinerary Rules', icon: Sparkles },
+              { href: '/console/settings/lead-intake', label: 'Lead Intake', icon: BookUser },
+            ],
+          },
+          { href: '/console/audit', label: 'Audit Log', icon: Shield },
+        ]
+      : []),
   ];
 
   const renderNavList = (isMobile = false) => (

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
+import { canAccessCallRecord } from '@/lib/call-access';
 import { getOrgPlivoClient, syncSingleCallStatusWithPlivo } from '@/lib/telephony/plivo-call-sync';
 import { transcribeAudioFromUrl } from '@/lib/openai-transcribe';
 
@@ -96,7 +97,7 @@ export async function GET(
     },
   });
 
-  if (!call) {
+  if (!call || !canAccessCallRecord(auth!, call)) {
     return NextResponse.json(
       { api_id: 'not_found', error: 'Call record not found' },
       { status: 404 }
