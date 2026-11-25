@@ -73,7 +73,7 @@ export default function UsersPage() {
                             : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                         }`}
                       >
-                        {member.role}
+                        {member.role === 'operator' ? 'sales' : member.role}
                       </span>
                     </td>
                     <td className="py-3.5 px-4">

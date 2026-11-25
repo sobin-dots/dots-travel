@@ -45,10 +45,12 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const { auth, errorResponse } = await authenticateRequest(req, 'admin'); if (errorResponse) return errorResponse;
-  const parsed = enquirySchema.safeParse(await req.json().catch(() => null));
+  const body = await req.json().catch(() => null);
+  const parsed = enquirySchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message }, { status: 400 });
+  const customSource = typeof body?.source === 'string' && body.source.trim() ? body.source.trim() : 'manual';
   const lead = await db.$transaction(async tx => {
-    const created = await createEnquiry(tx, auth!.organizationId, 'manual', parsed.data);
+    const created = await createEnquiry(tx, auth!.organizationId, customSource, parsed.data);
     await tx.auditLog.create({ data: { organizationId: auth!.organizationId, actorUserId: auth!.userId, action: 'lead.create', targetType: 'Lead', targetId: created.id } });
     return created;
   });

@@ -225,7 +225,7 @@ export function ConsoleHeader() {
               </div>
 
               <div className="space-y-1">
-                {currentOrg?.role && ['owner', 'admin', 'operator'].includes(currentOrg.role) && (
+                {currentOrg?.role && ['owner', 'admin', 'operator', 'sales'].includes(currentOrg.role) && (
                   <Link
                     href="/console/users"
                     onClick={() => setUserDropdownOpen(false)}

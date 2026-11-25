@@ -1,14 +1,26 @@
 'use client';
 
 import { useId } from 'react';
+import { formatMonthYearInput } from '@/lib/contact-fields';
 
 interface Props { contact?: Record<string, any>; disabled?: boolean; }
 export function ContactDetailsFields({ contact = {}, disabled }: Props) {
   const id = useId();
   const field = 'w-full rounded-lg border border-zinc-700 bg-zinc-950 p-2.5 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none';
+
   return <fieldset disabled={disabled} className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs text-zinc-400 disabled:opacity-60">
     <label className="sm:col-span-2">Full name *<input name="name" autoComplete="name" required minLength={2} maxLength={100} defaultValue={contact.name || ''} className={field} /></label>
-    <label>Preferred month of travel<input name="preferredTravelMonth" type="month" defaultValue={contact.preferredTravelMonth || ''} className={field} /><span className="text-[11px] text-zinc-500">Select the month and year.</span></label>
+    <label>
+      Preferred month of travel
+      <input
+        name="preferredTravelMonth"
+        type="text"
+        placeholder="MM/YYYY (e.g. 12/2026)"
+        defaultValue={formatMonthYearInput(contact.preferredTravelMonth)}
+        className={field}
+      />
+      <span className="text-[11px] text-zinc-500">Format: MM/YYYY (e.g. 12/2026)</span>
+    </label>
     <label>Tour type<input name="tourType" list={`tour-types-${id}`} maxLength={100} defaultValue={contact.tourType || ''} placeholder="Choose or enter a tour type" className={field} /><datalist id={`tour-types-${id}`}>{['Family', 'Honeymoon', 'Group', 'Solo', 'Adventure', 'Business', 'Custom'].map(type => <option key={type} value={type} />)}</datalist></label>
     <label>Number of children<input name="numberOfChildren" type="number" min={0} max={1000} step={1} defaultValue={contact.numberOfChildren ?? ''} placeholder="Leave blank if unknown" className={field} /></label>
     <label>City<input name="city" autoComplete="address-level2" maxLength={100} defaultValue={contact.city || ''} className={field} /></label>

@@ -19,6 +19,7 @@ import {
   Settings,
   Shield,
   Sparkles,
+  TrendingUp,
   X,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
@@ -46,6 +47,9 @@ export function ConsoleSidebar() {
 
   const navItems = [
     { href: '/console', label: 'Overview', icon: Activity, exact: true },
+    ...(currentOrg?.role && currentOrg.role !== 'viewer'
+      ? [{ href: '/console/sales-cockpit', label: 'Sales Cockpit', icon: TrendingUp }]
+      : []),
     {
       href: '/console/calls',
       label: 'Calls',

@@ -214,8 +214,7 @@ export function GlobalModals() {
                   onChange={(e) => setStaffRole(e.target.value as any)}
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200"
                 >
-                  <option value="operator">Operator (Can make calls & send SMS)</option>
-                  <option value="sales">Sales (Assigned leads and follow-ups)</option>
+                  <option value="sales">Sales / Staff (Can make calls, send SMS & handle leads)</option>
                   <option value="admin">Admin (Full administrative controls)</option>
                   <option value="viewer">Viewer (Read-only observation)</option>
                 </select>
