@@ -17,6 +17,30 @@ export const ENQUIRY_STATUS_LABELS: Record<EnquiryStatus, string> = {
 };
 export const ENQUIRY_TAG_LABELS: Record<EnquiryTag, string> = { hot: 'Hot', warm: 'Warm', cold: 'Cold' };
 
+export const LEAD_SOURCES = [
+  'Instagram',
+  'Facebook',
+  'YouTube',
+  'LinkedIn',
+  'Google Ads',
+  'Website',
+  'Referral',
+  'Walk-in',
+  'manual',
+] as const;
+export type LeadSource = typeof LEAD_SOURCES[number];
+export const LEAD_SOURCE_LABELS: Record<string, string> = {
+  Instagram: 'Instagram',
+  Facebook: 'Facebook',
+  YouTube: 'YouTube',
+  LinkedIn: 'LinkedIn',
+  'Google Ads': 'Google Ads',
+  Website: 'Website',
+  Referral: 'Referral',
+  'Walk-in': 'Walk-in',
+  manual: 'Other / Manual',
+};
+
 /** Roles that may own an enquiry. Viewers can never be assigned. */
 export const ASSIGNABLE_ROLES = ['owner', 'admin', 'operator', 'sales'] as const;
 

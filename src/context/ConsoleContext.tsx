@@ -388,7 +388,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [staffName, setStaffName] = useState('');
   const [staffEmail, setStaffEmail] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
-  const [staffRole, setStaffRole] = useState<'operator' | 'sales' | 'admin' | 'viewer'>('operator');
+  const [staffRole, setStaffRole] = useState<'operator' | 'sales' | 'admin' | 'viewer'>('sales');
   const [staffLoading, setStaffLoading] = useState(false);
 
   // Contact creation state
@@ -1742,7 +1742,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           setStaffName('');
           setStaffEmail('');
           setStaffPassword('');
-          setStaffRole('operator');
+          setStaffRole('sales');
           fetchData();
         } else {
           alert(data.error || 'Failed to create staff member');

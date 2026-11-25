@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ContactTravelFieldsSchema } from '@/lib/contact-fields';
 
-export const providers = ['meta', 'google_ads', 'google_forms', 'website', 'generic'] as const;
+export const providers = ['meta', 'google_ads', 'google_forms', 'website', 'hosted_form', 'generic'] as const;
 export type LeadProvider = typeof providers[number];
 export const enquirySchema = z.object({
   submissionId: z.string().trim().min(1).max(200),

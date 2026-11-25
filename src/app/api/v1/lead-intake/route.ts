@@ -24,7 +24,31 @@ export async function GET(req: NextRequest) {
   const organizationId = auth!.organizationId;
   const [connections, submissions, members, organization, failedCount] = await Promise.all([
     db.leadConnection.findMany({ where: { organizationId }, select: { id: true, name: true, provider: true, enabled: true, formNames: true, lastReceivedAt: true }, orderBy: { createdAt: 'desc' } }),
-    db.leadSubmission.findMany({ where: { organizationId }, select: { id: true, externalId: true, connectionId: true, status: true, attempts: true, error: true, leadId: true, createdAt: true }, orderBy: { createdAt: 'desc' }, take: 50 }),
+    db.leadSubmission.findMany({
+      where: { organizationId },
+      select: {
+        id: true,
+        externalId: true,
+        connectionId: true,
+        status: true,
+        attempts: true,
+        error: true,
+        leadId: true,
+        payload: true,
+        createdAt: true,
+        lead: {
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            stage: true,
+            assignedTo: { select: { name: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    }),
     db.membership.findMany({ where: { organizationId }, select: { id: true, userId: true, role: true, receivesLeads: true, availableForLeads: true, voiceBusy: true, voicePresenceAt: true, voiceEndpoint: true, user: { select: { name: true, status: true } } } }),
     db.organization.findUniqueOrThrow({ where: { id: organizationId }, select: { firstContactMinutes: true } }),
     db.leadSubmission.count({ where: { organizationId, status: 'failed' } }),

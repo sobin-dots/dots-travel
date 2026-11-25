@@ -3,13 +3,10 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useConsole } from '@/context/ConsoleContext';
+import { ENQUIRY_TAGS, ENQUIRY_TAG_LABELS, LEAD_SOURCES, LEAD_SOURCE_LABELS } from '@/lib/enquiry-fields';
 
 const inputClass = 'rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-sm text-zinc-100 w-full';
-const enquiryTags = [
-  { value: 'hot', label: 'Hot' },
-  { value: 'warm', label: 'Warm' },
-  { value: 'cold', label: 'Cold' },
-];
+const enquiryTags = ENQUIRY_TAGS.map(tag => ({ value: tag, label: ENQUIRY_TAG_LABELS[tag] }));
 
 export default function EnquiriesPage() {
   const { leadsList, authFetch, bearerToken, currentOrg, staffList, fetchData, handleSelectLead } = useConsole();
@@ -44,6 +41,7 @@ export default function EnquiriesPage() {
       const res = await authFetch('/api/v1/leads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
         submissionId: crypto.randomUUID(), name: form.get('name'), phone: form.get('phone') || undefined, email: form.get('email') || undefined,
         destination: form.get('destination') || undefined, notes: form.get('notes') || undefined, formId: 'manual', formName: 'Staff entry',
+        source: form.get('source') || 'manual', campaignName: form.get('campaignName') || undefined,
       }) });
       const data = await res.json(); if (!res.ok) throw new Error(data.error || 'Could not create enquiry');
       setShowNew(false); await fetchData();
@@ -66,9 +64,17 @@ export default function EnquiriesPage() {
       <label className="text-sm">Phone with country code<input name="phone" placeholder="+919876543210" className={inputClass} /></label>
       <label className="text-sm">Email<input type="email" name="email" className={inputClass} /></label>
       <label className="text-sm">Destination<input name="destination" className={inputClass} /></label>
+      <label className="text-sm">Source
+        <select name="source" defaultValue="Instagram" className={inputClass}>
+          {LEAD_SOURCES.map(src => (
+            <option key={src} value={src}>{LEAD_SOURCE_LABELS[src] || src}</option>
+          ))}
+        </select>
+      </label>
+      <label className="text-sm">Campaign name (Optional)<input name="campaignName" placeholder="e.g. Summer Holiday 2027" className={inputClass} /></label>
       <label className="text-sm sm:col-span-2">Notes<textarea name="notes" className={inputClass} /></label>
-      <p className="text-xs text-zinc-400">Provide a phone number or email. Available salespeople receive enquiries in rotation.</p>
-      <button disabled={!!busy} className="rounded-lg bg-indigo-600 px-4 py-2 disabled:opacity-50">{busy === 'new' ? 'Saving…' : 'Save enquiry'}</button>
+      <p className="text-xs text-zinc-400 sm:col-span-2">Provide a phone number or email. All staff members receive enquiries in round robin.</p>
+      <button disabled={!!busy} className="rounded-lg bg-indigo-600 px-4 py-2 disabled:opacity-50 sm:col-span-2">{busy === 'new' ? 'Saving…' : 'Save enquiry'}</button>
     </form>}
     <div className="grid sm:grid-cols-4 gap-3">
       <input aria-label="Search enquiries" placeholder="Name, form, phone, email or tag" value={search} onChange={e => setSearch(e.target.value)} className={inputClass} />
@@ -81,7 +87,12 @@ export default function EnquiriesPage() {
       const overdue = !lead.firstContactAt && lead.firstContactDueAt && Date.parse(lead.firstContactDueAt) < now;
       return <article key={lead.id} className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
         <div className="flex flex-wrap justify-between gap-3"><div><h2 className="font-medium">{lead.title}</h2><p className="text-sm text-zinc-400">{lead.contact?.phone || lead.metadata?.customerPhone} {lead.customerEmail}</p></div><span className={`text-xs ${overdue ? 'text-red-300' : 'text-zinc-400'}`}>{lead.firstContactAt ? `Contacted ${new Date(lead.firstContactAt).toLocaleString()}` : lead.firstContactDueAt ? `${overdue ? 'Overdue' : 'Contact due'} ${new Date(lead.firstContactDueAt).toLocaleString()}` : 'No contact deadline'}</span></div>
-        <p className="text-xs text-zinc-400">{lead.source} · {lead.formName || 'No form recorded'} {lead.formId && `(${lead.formId})`} · {lead.stage}{lead.duplicateContactFlag && <span className="text-amber-300"> · Repeat enquiry or contact match needs review</span>}</p>
+        <p className="text-xs text-zinc-400">
+          <span className="inline-block px-1.5 py-0.5 rounded bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 font-medium mr-1.5">
+            {lead.source}
+          </span>
+          {lead.formName || 'No form recorded'} {lead.formId && `(${lead.formId})`} · {lead.stage}{lead.duplicateContactFlag && <span className="text-amber-300"> · Repeat enquiry or contact match needs review</span>}
+        </p>
         {(lead.campaignId || lead.adId || lead.utmCampaign) && <p className="text-xs text-zinc-400">Campaign: {lead.campaignName || lead.campaignId || lead.utmCampaign} {lead.adId && `· Ad: ${lead.adName || lead.adId}`}</p>}
         {lead.metadata?.enquiryNotes && <p className="text-sm whitespace-pre-wrap">{lead.metadata.enquiryNotes}</p>}
         {Object.keys(lead.metadata?.formAnswers || {}).length > 0 && <details className="text-sm text-zinc-400"><summary className="cursor-pointer">Original form answers</summary><dl className="mt-2 grid sm:grid-cols-2 gap-2">{Object.entries(lead.metadata.formAnswers).map(([question, answer]) => <div key={question}><dt className="text-xs text-zinc-500">{question}</dt><dd className="whitespace-pre-wrap text-zinc-200">{String(answer)}</dd></div>)}</dl></details>}
