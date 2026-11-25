@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeAndValidatePhone } from './phone-validation';
 
 const optionalText = (max: number) => z.string().trim().max(max).nullable().optional().transform(value => value === '' ? null : value);
 export const ContactTravelFieldsSchema = z.object({
@@ -24,7 +25,22 @@ export const ContactTravelFieldsSchema = z.object({
 });
 export const contactFields = z.object({
   name: z.string().trim().min(2, 'Full name must be at least 2 characters').max(100),
-  phone: z.string().trim().transform(value => value.replace(/[\s().-]/g, '')).pipe(z.string().regex(/^\+[1-9]\d{6,14}$/, 'Phone number must include a country code, for example +919876543210').or(z.literal(''))).nullable().optional().transform(value => value === '' ? null : value),
+  phone: z.string().trim().superRefine((val, ctx) => {
+    const cleaned = val.replace(/[\s().-]/g, '');
+    if (!cleaned) return;
+    const res = normalizeAndValidatePhone(cleaned);
+    if (!res.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: res.error || 'Invalid phone number format with country code',
+      });
+    }
+  }).transform(value => {
+    const cleaned = value.replace(/[\s().-]/g, '');
+    if (!cleaned) return null;
+    const res = normalizeAndValidatePhone(cleaned);
+    return res.valid ? res.phone : null;
+  }).nullable().optional(),
   email: z.string().trim().toLowerCase().email('Invalid email address').or(z.literal('')).nullable().optional().transform(value => value === '' ? null : value),
   company: optionalText(100), notes: optionalText(500), ...ContactTravelFieldsSchema.shape,
 });

@@ -4,15 +4,25 @@ import { db } from '@/lib/db';
 import { connectionSecrets, createEnquiry, lockAgency } from '@/lib/lead-intake/service';
 import { equalSecret } from '@/lib/lead-intake/normalize';
 import { ContactTravelFieldsSchema } from '@/lib/contact-fields';
+import { normalizeAndValidatePhone } from '@/lib/phone-validation';
 import { z } from 'zod';
 
 export const runtime = 'nodejs';
 
 const publicSubmissionSchema = z.object({
   name: z.string().trim().min(2, 'Name must be at least 2 characters').max(150),
-  phone: z.string().transform(v => v.replace(/[\s().-]/g, '')).pipe(
-    z.string().regex(/^\+[1-9]\d{6,14}$/, 'Phone number must include country code, e.g. +919876543210')
-  ),
+  phone: z.string().superRefine((val, ctx) => {
+    const res = normalizeAndValidatePhone(val);
+    if (!res.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: res.error || 'Invalid phone number format with country code',
+      });
+    }
+  }).transform(v => {
+    const res = normalizeAndValidatePhone(v);
+    return res.valid ? res.phone : v;
+  }),
   email: z.string().trim().toLowerCase().email().max(254).optional().or(z.literal('')),
   destination: z.string().trim().max(200).optional(),
   preferredTravelMonth: ContactTravelFieldsSchema.shape.preferredTravelMonth,
@@ -88,14 +98,40 @@ export async function POST(
     const suppliedSecret = req.headers.get('x-lead-secret') || req.nextUrl.searchParams.get('key');
     const suppliedOrgId = req.headers.get('x-org-id') || req.nextUrl.searchParams.get('orgId');
 
-    // If orgId is provided, enforce that it matches the connection's organization
-    if (suppliedOrgId && suppliedOrgId !== connection.organizationId) {
-      return NextResponse.json({ error: 'Organization identifier mismatch' }, { status: 403 });
-    }
-
-    // Verify secret key if supplied, or allow submission to valid active connection
-    if (suppliedSecret && !equalSecret(suppliedSecret, secrets.webhookSecret)) {
-      return NextResponse.json({ error: 'Invalid security token' }, { status: 401 });
+    // For custom website form API connections, strictly mandate both secret token and organization ID
+    if (connection.provider === 'website') {
+      if (!suppliedSecret) {
+        return NextResponse.json(
+          { error: 'Authentication required: missing x-lead-secret header' },
+          { status: 401 }
+        );
+      }
+      if (!equalSecret(suppliedSecret, secrets.webhookSecret)) {
+        return NextResponse.json(
+          { error: 'Authentication failed: invalid x-lead-secret security token' },
+          { status: 401 }
+        );
+      }
+      if (!suppliedOrgId) {
+        return NextResponse.json(
+          { error: 'Authentication required: missing x-org-id header' },
+          { status: 403 }
+        );
+      }
+      if (suppliedOrgId !== connection.organizationId) {
+        return NextResponse.json(
+          { error: 'Organization identifier mismatch: invalid x-org-id' },
+          { status: 403 }
+        );
+      }
+    } else {
+      // For hosted public form page: verify if supplied
+      if (suppliedOrgId && suppliedOrgId !== connection.organizationId) {
+        return NextResponse.json({ error: 'Organization identifier mismatch' }, { status: 403 });
+      }
+      if (suppliedSecret && !equalSecret(suppliedSecret, secrets.webhookSecret)) {
+        return NextResponse.json({ error: 'Invalid security token' }, { status: 401 });
+      }
     }
 
     const body = await req.json().catch(() => null);

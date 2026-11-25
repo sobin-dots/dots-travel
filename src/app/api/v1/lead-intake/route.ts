@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '@/lib/db';
 import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { encryptData } from '@/lib/crypto';
+import { connectionSecrets } from '@/lib/lead-intake/service';
 import { providers } from '@/lib/lead-intake/normalize';
 import { phoneReadiness } from '@/lib/telephony/phone-readiness';
 
@@ -23,7 +24,7 @@ export async function GET(req: NextRequest) {
   const { auth, errorResponse } = await authenticateRequest(req, 'admin'); if (errorResponse) return errorResponse;
   const organizationId = auth!.organizationId;
   const [connections, submissions, members, organization, failedCount] = await Promise.all([
-    db.leadConnection.findMany({ where: { organizationId }, select: { id: true, name: true, provider: true, enabled: true, formNames: true, lastReceivedAt: true }, orderBy: { createdAt: 'desc' } }),
+    db.leadConnection.findMany({ where: { organizationId }, select: { id: true, name: true, provider: true, enabled: true, formNames: true, lastReceivedAt: true, credentials: true }, orderBy: { createdAt: 'desc' } }),
     db.leadSubmission.findMany({
       where: { organizationId },
       select: {
@@ -53,8 +54,24 @@ export async function GET(req: NextRequest) {
     db.organization.findUniqueOrThrow({ where: { id: organizationId }, select: { firstContactMinutes: true } }),
     db.leadSubmission.count({ where: { organizationId, status: 'failed' } }),
   ]);
+  const safeConnections = connections.map((c) => {
+    let webhookSecret = '';
+    try {
+      const secrets = connectionSecrets(c.credentials);
+      webhookSecret = secrets.webhookSecret || '';
+    } catch {}
+    return {
+      id: c.id,
+      name: c.name,
+      provider: c.provider,
+      enabled: c.enabled,
+      formNames: c.formNames,
+      lastReceivedAt: c.lastReceivedAt,
+      webhookSecret,
+    };
+  });
   const publicMembers = members.map(({ voiceEndpoint, ...member }) => ({ ...member, phoneReadiness: phoneReadiness({ ...member, voiceEndpoint }) }));
-  return NextResponse.json({ connections, submissions, members: publicMembers, failedCount, ...organization, workerConfigured: !!process.env.LEAD_INTAKE_WORKER_SECRET, emailAlertsConfigured: !!process.env.RESEND_API_KEY && !!process.env.RESEND_FROM_EMAIL }, { headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json({ connections: safeConnections, submissions, members: publicMembers, failedCount, ...organization, workerConfigured: !!process.env.LEAD_INTAKE_WORKER_SECRET, emailAlertsConfigured: !!process.env.RESEND_API_KEY && !!process.env.RESEND_FROM_EMAIL }, { headers: { 'Cache-Control': 'no-store' } });
 }
 
 export async function POST(req: NextRequest) {
@@ -83,7 +100,7 @@ export async function PATCH(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: 'Invalid settings' }, { status: 400 });
   const body = parsed.data; const organizationId = auth!.organizationId;
   let count = 1;
-  if (body.action === 'member') count = (await db.membership.updateMany({ where: { id: body.membershipId, organizationId, role: { in: ['owner', 'admin', 'operator', 'sales'] } }, data: { receivesLeads: body.receivesLeads, availableForLeads: body.availableForLeads } })).count;
+  if (body.action === 'member') count = (await db.membership.updateMany({ where: { id: body.membershipId, organizationId, role: { not: 'viewer' } }, data: { receivesLeads: body.receivesLeads, availableForLeads: body.availableForLeads } })).count;
   if (body.action === 'deadline') await db.organization.update({ where: { id: organizationId }, data: { firstContactMinutes: body.minutes } });
   if (body.action === 'connection') count = (await db.leadConnection.updateMany({ where: { id: body.id, organizationId }, data: { enabled: body.enabled } })).count;
   if (body.action === 'retry') count = (await db.leadSubmission.updateMany({ where: { id: body.id, organizationId, status: 'failed' }, data: { status: 'pending', attempts: 0, nextAttemptAt: new Date(), error: null } })).count;
