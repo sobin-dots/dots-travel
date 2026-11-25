@@ -59,6 +59,22 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callId]);
 
+  const currentItem = existing || defaults;
+  const initialSource = useMemo(() => {
+    if (currentItem.source && typeof currentItem.source === 'string') return currentItem.source;
+    const sourceTag = (currentItem.tags || []).find((t: string) => t.toLowerCase().startsWith('source:'));
+    if (sourceTag) {
+      const raw = sourceTag.slice(7).trim();
+      return raw.split(/[_\s-]+/).map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    }
+    return '';
+  }, [currentItem]);
+
+  const initialOtherTags = useMemo(() => {
+    const rawTags = (currentItem.tags || []).filter((t: string) => !t.toLowerCase().startsWith('source:'));
+    return rawTags.join(', ');
+  }, [currentItem]);
+
   // Staff may only claim an unowned enquiry. Admins can always reassign.
   const ownerLocked = mode === 'edit' && !isAdmin && !!contact?.assignedToId;
   const ownerOptions = mode === 'edit' && !isAdmin ? staff.filter(member => member.id === currentUser?.id) : staff;
@@ -71,11 +87,18 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
     event.preventDefault();
     if (inFlight.current) return;
     const form = new FormData(event.currentTarget);
+    const sourceVal = String(form.get('source') || '').trim();
+    const rawTags = parseTagInput(String(form.get('tags') || ''));
+    const finalTags = rawTags.filter(t => !t.toLowerCase().startsWith('source:'));
+    if (sourceVal && sourceVal.toLowerCase() !== 'direct') {
+      finalTags.push(`source:${sourceVal.toLowerCase()}`);
+    }
+
     const body: Record<string, unknown> = {
       ...contactValuesFromForm(form),
       enquiryStatus: String(form.get('enquiryStatus') || 'new_inquiry'),
       enquiryTag: String(form.get('enquiryTag') || 'warm'),
-      tags: parseTagInput(String(form.get('tags') || '')),
+      tags: finalTags,
     };
     if (mode === 'edit') {
       body.expectedUpdatedAt = contact?.updatedAt;
@@ -138,13 +161,25 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
                   {ENQUIRY_STATUSES.map(status => <option key={status} value={status}>{ENQUIRY_STATUS_LABELS[status]}</option>)}
                 </select>
               </label>
+              <label>Source
+                <input name="source" list="source-options" defaultValue={initialSource} placeholder="e.g. Instagram, Google Ads, Referral" className={field} />
+                <datalist id="source-options">
+                  <option value="Instagram" />
+                  <option value="Google Ads" />
+                  <option value="Meta Ads" />
+                  <option value="Website Form" />
+                  <option value="Referral" />
+                  <option value="Walk-in" />
+                  <option value="Direct" />
+                </datalist>
+              </label>
               <label>Tag
                 <select name="enquiryTag" defaultValue={(existing || defaults).enquiryTag || 'warm'} className={field}>
                   {ENQUIRY_TAGS.map(tag => <option key={tag} value={tag}>{ENQUIRY_TAG_LABELS[tag]}</option>)}
                 </select>
               </label>
-              <label>Other tags, separated by commas
-                <input name="tags" maxLength={500} defaultValue={((existing || defaults).tags || []).join(', ')} placeholder="VIP, Family" className={field} />
+              <label className="sm:col-span-2">Other tags, separated by commas
+                <input name="tags" maxLength={500} defaultValue={initialOtherTags} placeholder="VIP, Family" className={field} />
               </label>
             </fieldset>
             <div className="flex justify-end gap-3 border-t border-zinc-800 pt-4">
