@@ -129,6 +129,7 @@ export async function POST(req: NextRequest, context: Context) {
       const assignedToId = await resolveNewOwner(tx, auth!, parsed.data.assignedToId);
       const contact = await createEnquiryContact(tx, auth!.organizationId, parsed.data, assignedToId);
       await tx.call.update({ where: { id: call.id }, data: { enquiryContactId: contact.id } });
+      await tx.lead.updateMany({ where: { contactId: contact.id, callId: null }, data: { callId: call.id } });
       await tx.auditLog.create({ data: { organizationId: auth!.organizationId, actorUserId: auth!.userId, action: 'call.convert_enquiry', targetType: 'Call', targetId: call.id, metadata: { contactId: contact.id, assignedToId } } });
       return { contact, created: true };
     }, { timeout: 15_000 });

@@ -5,6 +5,7 @@
  */
 
 import { ContactTravelFieldsSchema, type ContactTravelFields } from './contact-fields';
+import { normalizeAndValidatePhone } from './phone-validation';
 
 export interface ParsedContactRow extends Partial<ContactTravelFields> {
   rowIndex: number;
@@ -34,62 +35,12 @@ export interface CSVParseResult {
 
 /**
  * Normalizes a phone string into E.164 format (+[countryCode][digits]).
- * Supports India local 10-digit numbers (+91 default), 0-prefixed 11-digit numbers,
- * 91-prefixed 12-digit numbers, and general E.164 international numbers.
+ * Strictly enforces country-specific phone lengths (e.g. 10 digits for India).
  */
 export function normalizePhoneNumber(raw: string, defaultCountryCode = '+91'): string | null {
   if (!raw) return null;
-
-  // Clean spaces, hyphens, dots, parentheses, and tabs
-  let cleaned = raw.trim().replace(/[\s\-\(\)\.\t]/g, '');
-  if (!cleaned) return null;
-
-  // Replace international access code 00 with +
-  if (cleaned.startsWith('00')) {
-    cleaned = '+' + cleaned.slice(2);
-  }
-
-  // If already starts with +
-  if (cleaned.startsWith('+')) {
-    const digits = cleaned.slice(1);
-    if (/^[1-9]\d{6,14}$/.test(digits)) {
-      return cleaned;
-    }
-    return null;
-  }
-
-  // 10 digits without + (e.g. 9876543210)
-  if (/^\d{10}$/.test(cleaned)) {
-    const prefix = defaultCountryCode.startsWith('+') ? defaultCountryCode : `+${defaultCountryCode}`;
-    return `${prefix}${cleaned}`;
-  }
-
-  // 11 digits starting with 0 (e.g. 09876543210)
-  if (/^0\d{10}$/.test(cleaned)) {
-    const prefix = defaultCountryCode.startsWith('+') ? defaultCountryCode : `+${defaultCountryCode}`;
-    return `${prefix}${cleaned.slice(1)}`;
-  }
-
-  // 12 digits starting with 91 (e.g. 919876543210)
-  if (/^91\d{10}$/.test(cleaned)) {
-    return `+${cleaned}`;
-  }
-
-  // 11 digits starting with 1 (US / Canada without +, e.g. 14155550199)
-  if (/^1\d{10}$/.test(cleaned)) {
-    return `+${cleaned}`;
-  }
-
-  // Fallback: If 7 to 15 digits without +, test prefixing default country code
-  if (/^\d{7,14}$/.test(cleaned)) {
-    const prefix = defaultCountryCode.startsWith('+') ? defaultCountryCode : `+${defaultCountryCode}`;
-    const candidate = `${prefix}${cleaned}`;
-    if (/^\+[1-9]\d{6,14}$/.test(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
+  const res = normalizeAndValidatePhone(raw, defaultCountryCode.replace('+', ''));
+  return res.valid ? res.phone : null;
 }
 
 /**

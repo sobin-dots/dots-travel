@@ -126,7 +126,7 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
           <p className="text-xs sm:text-sm text-zinc-400 mt-1">
             {mine
               ? 'Enquiries assigned to you. Call customers and update their status from here.'
-              : 'Every customer enquiry with its owner, status and tags. Staff can only place calls to saved enquiries.'}
+              : 'Every customer enquiry with its assignee, status and tags. Staff can only place calls to saved enquiries.'}
           </p>
         </div>
         {canEdit && (
@@ -161,8 +161,8 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
           {ENQUIRY_TAGS.map(tag => <option key={tag} value={tag}>{ENQUIRY_TAG_LABELS[tag]}</option>)}
         </select>
         {!mine && (
-          <select aria-label="Filter by owner" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} className={`${control} py-2`}>
-            <option value="">All owners</option>
+          <select aria-label="Filter by assignee" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} className={`${control} py-2`}>
+            <option value="">All assignees</option>
             <option value="me">Assigned to me</option>
             <option value="unassigned">Unassigned</option>
             {staff.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}

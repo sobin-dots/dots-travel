@@ -53,6 +53,10 @@ export async function DELETE(
     );
   }
 
+  await db.lead.deleteMany({
+    where: { contactId: contact.id, quotations: { none: {} } },
+  });
+
   await db.contact.delete({
     where: { id: contact.id },
   });

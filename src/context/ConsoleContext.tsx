@@ -676,7 +676,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       'ngrok-skip-browser-warning': 'true',
     };
     const safeJson = (url: string) =>
-      fetch(url, { headers })
+      fetch(url, { headers, cache: 'no-store' })
         .then((r) => r.json())
         .catch(() => ({}));
 

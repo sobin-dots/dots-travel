@@ -70,6 +70,36 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
     return '';
   }, [currentItem]);
 
+  const sourceOptions = useMemo(() => {
+    const defaults = ['Direct', 'Website Form', 'Instagram', 'Google Ads', 'Meta Ads', 'Referral', 'Walk-in'];
+    if (initialSource && !defaults.some(d => d.toLowerCase() === initialSource.toLowerCase())) {
+      return [...defaults, initialSource, 'Other'];
+    }
+    return [...defaults, 'Other'];
+  }, [initialSource]);
+
+  const [selectedSource, setSelectedSource] = useState(initialSource || 'Direct');
+  const [customSource, setCustomSource] = useState(
+    initialSource && !['direct', 'website form', 'instagram', 'google ads', 'meta ads', 'referral', 'walk-in'].includes(initialSource.toLowerCase())
+      ? initialSource
+      : ''
+  );
+
+  useEffect(() => {
+    if (initialSource) {
+      const match = ['Direct', 'Website Form', 'Instagram', 'Google Ads', 'Meta Ads', 'Referral', 'Walk-in'].find(
+        s => s.toLowerCase() === initialSource.toLowerCase()
+      );
+      if (match) {
+        setSelectedSource(match);
+        setCustomSource('');
+      } else {
+        setSelectedSource(initialSource);
+        setCustomSource(initialSource);
+      }
+    }
+  }, [initialSource]);
+
   const initialOtherTags = useMemo(() => {
     const rawTags = (currentItem.tags || []).filter((t: string) => !t.toLowerCase().startsWith('source:'));
     return rawTags.join(', ');
@@ -162,16 +192,29 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
                 </select>
               </label>
               <label>Source
-                <input name="source" list="source-options" defaultValue={initialSource} placeholder="e.g. Instagram, Google Ads, Referral" className={field} />
-                <datalist id="source-options">
-                  <option value="Instagram" />
-                  <option value="Google Ads" />
-                  <option value="Meta Ads" />
-                  <option value="Website Form" />
-                  <option value="Referral" />
-                  <option value="Walk-in" />
-                  <option value="Direct" />
-                </datalist>
+                <input
+                  type="hidden"
+                  name="source"
+                  value={selectedSource === 'Other' ? (customSource.trim() || 'Other') : selectedSource}
+                />
+                <select
+                  value={selectedSource}
+                  onChange={e => setSelectedSource(e.target.value)}
+                  className={field}
+                >
+                  {sourceOptions.map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+                {selectedSource === 'Other' && (
+                  <input
+                    type="text"
+                    value={customSource}
+                    onChange={e => setCustomSource(e.target.value)}
+                    placeholder="Enter custom source name"
+                    className={`${field} mt-2`}
+                  />
+                )}
               </label>
               <label>Tag
                 <select name="enquiryTag" defaultValue={(existing || defaults).enquiryTag || 'warm'} className={field}>

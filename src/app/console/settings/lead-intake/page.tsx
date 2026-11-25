@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState, useMemo, type FormEvent } from 'react';
+import { useEffect, useState, useMemo, useRef, type FormEvent } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useConsole } from '@/context/ConsoleContext';
 import {
   Inbox,
@@ -36,6 +37,7 @@ import {
   AlertTriangle,
   LayoutGrid,
   List,
+  Code2,
 } from 'lucide-react';
 
 type Connection = {
@@ -45,6 +47,7 @@ type Connection = {
   enabled: boolean;
   formNames: Record<string, string>;
   lastReceivedAt: string | null;
+  webhookSecret?: string;
 };
 
 type Member = {
@@ -86,7 +89,8 @@ type Intake = {
 };
 
 export default function LeadIntakeSettings() {
-  const { authFetch, bearerToken, currentOrg } = useConsole();
+  const { authFetch, bearerToken, currentOrg, handleSelectLead } = useConsole();
+  const router = useRouter();
   const [data, setData] = useState<Intake | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -107,6 +111,29 @@ export default function LeadIntakeSettings() {
   const [origin, setOrigin] = useState('');
   const [editing, setEditing] = useState<Connection | null>(null);
   const [copiedMap, setCopiedMap] = useState<Record<string, boolean>>({});
+  const formRef = useRef<HTMLDivElement>(null);
+
+  const handleStartEdit = (connection: Connection) => {
+    setEditing(connection);
+    setProvider(connection.provider);
+    setSecret('');
+    setTimeout(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const input = formRef.current?.querySelector('input[name="name"]') as HTMLInputElement | null;
+      input?.focus();
+    }, 50);
+  };
+
+  const handleOpenLead = (leadId: string) => {
+    handleSelectLead(leadId);
+    router.push(`/console/leads?leadId=${leadId}`);
+  };
+
+  useEffect(() => {
+    if (editing && formRef.current) {
+      formRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [editing]);
 
   const admin = ['admin', 'owner'].includes(currentOrg?.role);
 
@@ -162,6 +189,63 @@ export default function LeadIntakeSettings() {
       return false;
     } finally {
       setBusy(false);
+    }
+  }
+
+  const [updatingMemberField, setUpdatingMemberField] = useState<string | null>(null);
+
+  async function handleToggleMember(
+    membershipId: string,
+    field: 'receivesLeads' | 'availableForLeads',
+    newVal: boolean
+  ) {
+    const key = `${membershipId}-${field}`;
+    if (updatingMemberField === key) return;
+
+    const previousData = data;
+    // 1. Instant optimistic UI update
+    setData((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        members: prev.members.map((m) =>
+          m.id === membershipId
+            ? {
+                ...m,
+                [field]: newVal,
+              }
+            : m
+        ),
+      };
+    });
+
+    setUpdatingMemberField(key);
+
+    try {
+      const currentMember = previousData?.members.find((m) => m.id === membershipId);
+      const receivesLeads = field === 'receivesLeads' ? newVal : (currentMember?.receivesLeads ?? false);
+      const availableForLeads = field === 'availableForLeads' ? newVal : (currentMember?.availableForLeads ?? true);
+
+      const res = await authFetch('/api/v1/lead-intake', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'member',
+          membershipId,
+          receivesLeads,
+          availableForLeads,
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => null);
+        throw new Error(errJson?.error || `Failed to update member (${res.status})`);
+      }
+    } catch (err) {
+      setData(previousData);
+      setError(err instanceof Error ? err.message : 'Could not update team member settings');
+    } finally {
+      setUpdatingMemberField(null);
     }
   }
 
@@ -354,13 +438,6 @@ export default function LeadIntakeSettings() {
         </div>
 
         <div className="flex items-center gap-3">
-          <Link
-            href="/console/enquiries"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition"
-          >
-            Open Enquiry Inbox
-            <ExternalLink className="w-3.5 h-3.5 text-zinc-400" />
-          </Link>
           <button
             type="button"
             disabled={busy}
@@ -741,37 +818,16 @@ export default function LeadIntakeSettings() {
                               )}
 
                               {s.leadId && (
-                                <Link
-                                  href="/console/enquiries"
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenLead(s.leadId!)}
                                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-800 text-indigo-300 transition"
                                 >
                                   Open Lead
                                   <ExternalLink className="w-3 h-3" />
-                                </Link>
+                                </button>
                               )}
-
-                              <button
-                                type="button"
-                                title="Inspect Raw Payload"
-                                onClick={() =>
-                                  setExpandedPayloads((prev) => ({ ...prev, [s.id]: !prev[s.id] }))
-                                }
-                                className="p-1 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition"
-                              >
-                                {isExpanded ? (
-                                  <ChevronUp className="w-4 h-4" />
-                                ) : (
-                                  <ChevronDown className="w-4 h-4" />
-                                )}
-                              </button>
                             </div>
-
-                            {/* Raw Payload expansion inside row */}
-                            {isExpanded && (
-                              <div className="mt-2 text-left p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 font-mono text-[10px] text-zinc-300 overflow-x-auto max-h-36">
-                                <pre>{JSON.stringify(s.payload || {}, null, 2)}</pre>
-                              </div>
-                            )}
                           </td>
                         </tr>
                       );
@@ -858,13 +914,14 @@ export default function LeadIntakeSettings() {
                         )}
 
                         {s.leadId && (
-                          <Link
-                            href="/console/enquiries"
+                          <button
+                            type="button"
+                            onClick={() => handleOpenLead(s.leadId!)}
                             className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-800 text-indigo-300 transition"
                           >
                             View Lead
                             <ExternalLink className="w-3 h-3" />
-                          </Link>
+                          </button>
                         )}
                       </div>
                     </div>
@@ -915,10 +972,27 @@ export default function LeadIntakeSettings() {
       {activeTab === 'connections' && (
         <div className="space-y-6">
           <div className="space-y-3">
-            <h2 className="text-base font-semibold text-white flex items-center gap-2">
-              <Radio className="w-4 h-4 text-indigo-400" />
-              Connected Forms ({data?.connections.length || 0})
-            </h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                <Radio className="w-4 h-4 text-indigo-400" />
+                Connected Forms ({data?.connections.length || 0})
+              </h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditing(null);
+                  setSecret('');
+                  setTimeout(() => {
+                    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    const input = formRef.current?.querySelector('input[name="name"]') as HTMLInputElement | null;
+                    input?.focus();
+                  }, 50);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-sm transition"
+              >
+                + Add Connection
+              </button>
+            </div>
 
             {data?.connections.length === 0 ? (
               <p className="text-sm text-zinc-400 p-6 bg-zinc-900 border border-zinc-800 rounded-xl">
@@ -965,30 +1039,11 @@ export default function LeadIntakeSettings() {
                             />
                             {c.enabled ? 'Active' : 'Paused'}
                           </span>
-
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => mutate({ action: 'connection', id: c.id, enabled: !c.enabled })}
-                            className="px-3 py-1 rounded-lg text-xs font-medium border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition flex items-center gap-1.5 shadow-sm"
-                          >
-                            {c.enabled ? (
-                              <>
-                                <Pause className="w-3.5 h-3.5 text-amber-400" />
-                                Pause
-                              </>
-                            ) : (
-                              <>
-                                <Play className="w-3.5 h-3.5 text-emerald-400" />
-                                Resume
-                              </>
-                            )}
-                          </button>
                         </div>
                       </div>
 
-                      {/* 1. For Webhook Integrations (Google Forms, Google Ads, Meta, Custom Website, Generic) */}
-                      {c.provider !== 'hosted_form' && (
+                      {/* 1. For Standard Webhook Integrations (Google Forms, Google Ads, Meta, Generic) */}
+                      {c.provider !== 'hosted_form' && c.provider !== 'website' && (
                         <div className="space-y-1">
                           <label className="text-[11px] font-medium text-zinc-400">Webhook URL</label>
                           <div className="flex items-center gap-2">
@@ -1018,6 +1073,86 @@ export default function LeadIntakeSettings() {
                           </div>
                         </div>
                       )}
+
+                      {/* 2. For Custom Website Form (Headless API Integration) */}
+                      {c.provider === 'website' && (() => {
+                        const publicApiUrl = `${origin}/api/v1/public/enquiry/${c.id}`;
+                        const isCopiedAll = !!copiedMap[`api_${c.id}`];
+                        const samplePayload = {
+                          name: "Customer Name",
+                          phone: "+919876543210",
+                          email: "customer@example.com",
+                          destination: "Paris, France",
+                          preferredTravelMonth: "October 2026",
+                          tourType: "Family Vacation",
+                          numberOfChildren: 0,
+                          city: "Chennai",
+                          specialRequirements: "Pure vegetarian food",
+                          notes: "Need 5-star package quote",
+                          bot_trap: ""
+                        };
+                        const fullSpec = `=== TravelAgent Website Form API Integration ===
+Endpoint: POST ${publicApiUrl}
+
+Headers:
+Content-Type: application/json
+x-org-id: ${currentOrg?.id || ''}
+x-lead-secret: ${c.webhookSecret || ''}
+
+Request Body (JSON):
+${JSON.stringify(samplePayload, null, 2)}`;
+
+                        return (
+                          <div className="space-y-3 p-3.5 rounded-xl bg-zinc-950/80 border border-emerald-900/50 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-semibold text-emerald-400 flex items-center gap-1.5">
+                                <Code2 className="w-4 h-4 text-emerald-400" />
+                                Website API & Payload Details
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => copyToClipboard(`api_${c.id}`, fullSpec)}
+                                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs flex items-center gap-1.5 transition shadow-sm shrink-0"
+                              >
+                                {isCopiedAll ? (
+                                  <>
+                                    <Check className="w-3.5 h-3.5 text-white" />
+                                    <span>Copied All Details!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3.5 h-3.5" />
+                                    <span>Copy All Details</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-medium text-zinc-400">Endpoint URL (POST)</label>
+                              <div className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 font-mono text-[11px] text-zinc-200 select-all break-all">
+                                {publicApiUrl}
+                              </div>
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-medium text-zinc-400">Required Headers</label>
+                              <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-2.5 font-mono text-[11px] text-zinc-300 space-y-1">
+                                <div><span className="text-zinc-500">Content-Type:</span> application/json</div>
+                                <div><span className="text-zinc-500">x-org-id:</span> <span className="text-emerald-300 font-semibold">{currentOrg?.id || '—'}</span></div>
+                                <div><span className="text-zinc-500">x-lead-secret:</span> <span className="text-amber-300 font-semibold">{c.webhookSecret || '••••••••'}</span></div>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-medium text-zinc-400">Payload Fields (JSON Body)</label>
+                              <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-2.5 font-mono text-[11px] text-zinc-300 overflow-x-auto max-h-48 whitespace-pre">
+                                {JSON.stringify(samplePayload, null, 2)}
+                              </pre>
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* 2. For Hosted Public Form (Branded Page) */}
                       {c.provider === 'hosted_form' && (
@@ -1068,12 +1203,8 @@ export default function LeadIntakeSettings() {
                         <button
                           type="button"
                           disabled={busy}
-                          onClick={() => {
-                            setEditing(c);
-                            setProvider(c.provider);
-                            setSecret('');
-                          }}
-                          className="text-xs text-zinc-400 hover:text-white transition"
+                          onClick={() => handleStartEdit(c)}
+                          className="text-xs text-indigo-400 hover:text-indigo-300 font-medium transition flex items-center gap-1"
                         >
                           Edit / rotate credentials &rarr;
                         </button>
@@ -1086,10 +1217,41 @@ export default function LeadIntakeSettings() {
           </div>
 
           {/* Add / Edit Connection Form */}
-          <div className="p-6 rounded-2xl bg-zinc-900/90 border border-zinc-800 space-y-5">
-            <h3 className="font-semibold text-white text-base">
-              {editing ? `Edit ${editing.name}` : 'Connect a New Form / Webhook'}
-            </h3>
+          <div
+            ref={formRef}
+            id="connection-form"
+            className={`p-6 rounded-2xl bg-zinc-900/90 border transition-all duration-300 space-y-5 scroll-mt-6 ${
+              editing
+                ? 'border-indigo-500/80 ring-2 ring-indigo-500/20 shadow-xl shadow-indigo-950/40'
+                : 'border-zinc-800'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-white text-base flex items-center gap-2">
+                {editing ? (
+                  <>
+                    <span>Edit Connection: <span className="text-indigo-400">{editing.name}</span></span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+                      Editing
+                    </span>
+                  </>
+                ) : (
+                  'Connect a New Form / Webhook'
+                )}
+              </h3>
+              {editing && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditing(null);
+                    setSecret('');
+                  }}
+                  className="text-xs text-zinc-400 hover:text-zinc-200 px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition"
+                >
+                  Cancel Edit
+                </button>
+              )}
+            </div>
 
             <form key={editing?.id || 'new'} onSubmit={saveConnection} className="space-y-4">
               <div className="grid sm:grid-cols-2 gap-4">
@@ -1113,7 +1275,7 @@ export default function LeadIntakeSettings() {
                     onChange={(e) => {
                       const val = e.target.value;
                       setProvider(val);
-                      if (val === 'hosted_form' && !secret) {
+                      if ((val === 'hosted_form' || val === 'website') && !secret) {
                         setSecret(
                           Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) =>
                             b.toString(16).padStart(2, '0')
@@ -1140,6 +1302,8 @@ export default function LeadIntakeSettings() {
                     ? 'Webhook Verification Token'
                     : provider === 'hosted_form'
                     ? 'Security Token (Auto-generated)'
+                    : provider === 'website'
+                    ? 'Website API Secret Token (Auto-generated)'
                     : 'Webhook Secret Token'}
                 </label>
                 <div className="flex gap-2">
@@ -1152,7 +1316,7 @@ export default function LeadIntakeSettings() {
                     value={secret}
                     onChange={(e) => setSecret(e.target.value)}
                     placeholder={
-                      provider === 'hosted_form'
+                      provider === 'hosted_form' || provider === 'website'
                         ? 'Auto-generated security token'
                         : 'Click Generate to create a 32-character secret...'
                     }
@@ -1225,6 +1389,55 @@ export default function LeadIntakeSettings() {
                       pattern="v[0-9]+\.[0-9]+"
                       className="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-2 text-sm text-white"
                     />
+                  </div>
+                </div>
+              )}
+
+              {/* Custom Website Form API Card Preview */}
+              {provider === 'website' && (
+                <div className="p-4 rounded-xl bg-zinc-950 border border-emerald-900/60 space-y-3">
+                  <div className="flex items-center gap-2 text-emerald-400 font-semibold text-xs">
+                    <Code2 className="w-4 h-4 text-emerald-400" />
+                    Custom Website API & Payload Preview
+                  </div>
+                  <p className="text-[11px] text-zinc-400">
+                    Connect any website (WordPress, PHP, React, Webflow, etc.) directly to your CRM.
+                    When saved, a live endpoint URL and credentials will be generated with 1-click copy for your developer.
+                  </p>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-medium text-zinc-400">Endpoint Format</label>
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 font-mono text-[11px] text-zinc-300">
+                      POST {origin}/api/v1/public/enquiry/{editing ? editing.id : '[connection_id]'}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-medium text-zinc-400">Required Request Headers</label>
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-2.5 font-mono text-[11px] text-zinc-300 space-y-1">
+                      <div><span className="text-zinc-500">Content-Type:</span> application/json</div>
+                      <div><span className="text-zinc-500">x-org-id:</span> <span className="text-emerald-300 font-semibold">{currentOrg?.id || 'your_org_id'}</span></div>
+                      <div><span className="text-zinc-500">x-lead-secret:</span> <span className="text-amber-300 font-semibold">{secret || '(Click Generate or save to assign secret)'}</span></div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-medium text-zinc-400">Accepted Payload Fields (JSON)</label>
+                    <pre className="bg-zinc-900 border border-zinc-800 rounded-lg p-2.5 font-mono text-[11px] text-zinc-300 overflow-x-auto max-h-40 whitespace-pre">
+{JSON.stringify({
+  name: "Customer Name",
+  phone: "+919876543210",
+  email: "customer@example.com",
+  destination: "Paris, France",
+  preferredTravelMonth: "October 2026",
+  tourType: "Family Vacation",
+  numberOfChildren: 0,
+  city: "Chennai",
+  specialRequirements: "Pure vegetarian food",
+  notes: "Looking for 5-star package",
+  bot_trap: ""
+}, null, 2)}
+                    </pre>
                   </div>
                 </div>
               )}
@@ -1360,38 +1573,28 @@ export default function LeadIntakeSettings() {
                     </div>
 
                     <div className="flex flex-col gap-2 shrink-0">
-                      <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                      <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
                         <input
                           type="checkbox"
-                          disabled={busy || m.user.status !== 'active'}
+                          disabled={updatingMemberField === `${m.id}-receivesLeads` || m.user.status !== 'active'}
                           checked={m.receivesLeads}
                           onChange={(e) =>
-                            mutate({
-                              action: 'member',
-                              membershipId: m.id,
-                              receivesLeads: e.target.checked,
-                              availableForLeads: m.availableForLeads,
-                            })
+                            handleToggleMember(m.id, 'receivesLeads', e.target.checked)
                           }
-                          className="rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                          className="rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer disabled:opacity-50"
                         />
                         Receives Leads
                       </label>
 
-                      <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer">
+                      <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none">
                         <input
                           type="checkbox"
-                          disabled={busy || m.user.status !== 'active'}
+                          disabled={updatingMemberField === `${m.id}-availableForLeads` || m.user.status !== 'active'}
                           checked={m.availableForLeads}
                           onChange={(e) =>
-                            mutate({
-                              action: 'member',
-                              membershipId: m.id,
-                              receivesLeads: m.receivesLeads,
-                              availableForLeads: e.target.checked,
-                            })
+                            handleToggleMember(m.id, 'availableForLeads', e.target.checked)
                           }
-                          className="rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                          className="rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer disabled:opacity-50"
                         />
                         Available Now
                       </label>

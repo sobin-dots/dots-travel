@@ -16,6 +16,7 @@ import {
   AlertCircle,
   ShieldCheck,
 } from 'lucide-react';
+import { normalizeAndValidatePhone } from '@/lib/phone-validation';
 
 interface FormProps {
   params: Promise<{ connectionId: string }>;
@@ -93,18 +94,13 @@ export default function PublicEnquiryFormPage(props: FormProps) {
     e.preventDefault();
     setFormError(null);
 
-    // Format phone to E.164 if missing '+'
-    let cleanedPhone = phoneNumber.trim().replace(/[\s\-\(\)]/g, '');
-    if (!cleanedPhone.startsWith('+')) {
-      // Default to +91 if 10 digits
-      if (cleanedPhone.length === 10) cleanedPhone = `+91${cleanedPhone}`;
-      else cleanedPhone = `+${cleanedPhone}`;
-    }
-
-    if (cleanedPhone.length < 8) {
-      setFormError('Please enter a valid phone number with country code.');
+    // Strict Country-Specific E.164 Phone Validation
+    const phoneValidation = normalizeAndValidatePhone(phoneNumber);
+    if (!phoneValidation.valid) {
+      setFormError(phoneValidation.error || 'Please enter a valid phone number with country code.');
       return;
     }
+    const cleanedPhone = phoneValidation.phone;
 
     setSubmitting(true);
     try {
@@ -274,6 +270,9 @@ export default function PublicEnquiryFormPage(props: FormProps) {
                     placeholder="+91 98765 43210"
                     className="w-full bg-zinc-950/80 border border-zinc-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 font-mono focus:outline-none focus:border-indigo-500 transition"
                   />
+                  <p className="text-[10px] text-zinc-500 mt-1">
+                    Include country code (e.g. +91 9876543210 for India, exactly 10 digits).
+                  </p>
                 </div>
               </div>
 
