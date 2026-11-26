@@ -126,8 +126,8 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
 
     const body: Record<string, unknown> = {
       ...contactValuesFromForm(form),
-      enquiryStatus: String(form.get('enquiryStatus') || 'new_inquiry'),
-      enquiryTag: String(form.get('enquiryTag') || 'warm'),
+      enquiryStatus: String(form.get('enquiryStatus') || 'warm'),
+      enquiryTag: 'warm',
       tags: finalTags,
     };
     if (mode === 'edit') {
@@ -187,7 +187,7 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
                 {ownerLocked && <span className="text-[11px] text-zinc-500">Only an admin can change the owner of an assigned enquiry.</span>}
               </label>
               <label>Status
-                <select name="enquiryStatus" defaultValue={(existing || defaults).enquiryStatus || 'new_inquiry'} className={field}>
+                <select name="enquiryStatus" defaultValue={(existing || defaults).enquiryStatus || 'warm'} className={field}>
                   {ENQUIRY_STATUSES.map(status => <option key={status} value={status}>{ENQUIRY_STATUS_LABELS[status]}</option>)}
                 </select>
               </label>
@@ -215,11 +215,6 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
                     className={`${field} mt-2`}
                   />
                 )}
-              </label>
-              <label>Tag
-                <select name="enquiryTag" defaultValue={(existing || defaults).enquiryTag || 'warm'} className={field}>
-                  {ENQUIRY_TAGS.map(tag => <option key={tag} value={tag}>{ENQUIRY_TAG_LABELS[tag]}</option>)}
-                </select>
               </label>
               <label className="sm:col-span-2">Other tags, separated by commas
                 <input name="tags" maxLength={500} defaultValue={initialOtherTags} placeholder="VIP, Family" className={field} />

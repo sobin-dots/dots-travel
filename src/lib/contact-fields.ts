@@ -2,23 +2,25 @@ import { z } from 'zod';
 import { normalizeAndValidatePhone } from './phone-validation';
 
 const optionalText = (max: number) => z.string().trim().max(max).nullable().optional().transform(value => value === '' ? null : value);
+const normalizeMonth = (val: string | null | undefined) => {
+  if (!val || val === '') return null;
+  const trimmed = val.trim();
+  if (/^(0[1-9]|1[0-2])\/[1-9]\d{3}$/.test(trimmed)) {
+    const [mm, yyyy] = trimmed.split('/');
+    return `${yyyy}-${mm}`;
+  }
+  return trimmed;
+};
+
 export const ContactTravelFieldsSchema = z.object({
-  preferredTravelMonth: z
-    .preprocess((val) => {
-      if (val === null || val === undefined || val === '') return null;
-      if (typeof val === 'string') {
-        const trimmed = val.trim();
-        if (!trimmed) return null;
-        const mmyyyy = trimmed.match(/^(0?[1-9]|1[0-2])[\/\-]([1-9]\d{3})$/);
-        if (mmyyyy) {
-          return `${mmyyyy[2]}-${mmyyyy[1].padStart(2, '0')}`;
-        }
-        return trimmed;
-      }
-      return val;
-    }, z.string().regex(/^[1-9]\d{3}-(0[1-9]|1[0-2])$/, 'Preferred travel month must use MM/YYYY (e.g. 12/2026)').nullable().optional())
-    .transform((value) => (value === '' ? null : value ?? null)),
+  destination: optionalText(150),
+  preferredTravelMonth: z.string().trim().nullable().optional()
+    .transform(normalizeMonth)
+    .refine(val => val === null || val === undefined || /^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(val), {
+      message: 'Preferred travel month must use MM/YYYY (e.g. 12/2026) or YYYY-MM',
+    }),
   tourType: optionalText(100),
+  numberOfAdults: z.number().int('Number of adults must be a whole number').min(0).max(1000).nullable().optional(),
   numberOfChildren: z.number().int('Number of children must be a whole number').min(0).max(1000).nullable().optional(),
   specialRequirements: optionalText(5000),
   city: optionalText(100),
@@ -49,17 +51,27 @@ export const UpdateContactSchema = contactFields.partial().extend({ expectedUpda
 export type ContactTravelFields = z.infer<typeof ContactTravelFieldsSchema>;
 
 export function contactValuesFromForm(form: FormData) {
+  const adults = String(form.get('numberOfAdults') ?? '').trim();
   const children = String(form.get('numberOfChildren') ?? '').trim();
-  const rawMonth = String(form.get('preferredTravelMonth') ?? '').trim();
-  let preferredTravelMonth = rawMonth;
-  const mmyyyy = rawMonth.match(/^(0?[1-9]|1[0-2])[\/\-]([1-9]\d{3})$/);
-  if (mmyyyy) {
-    preferredTravelMonth = `${mmyyyy[2]}-${mmyyyy[1].padStart(2, '0')}`;
+  let rawMonth = String(form.get('preferredTravelMonth') ?? '').trim();
+  if (/^(0[1-9]|1[0-2])\/[1-9]\d{3}$/.test(rawMonth)) {
+    const [mm, yyyy] = rawMonth.split('/');
+    rawMonth = `${yyyy}-${mm}`;
   }
-  return { name: String(form.get('name') ?? ''), phone: String(form.get('phone') ?? ''), email: String(form.get('email') ?? ''),
-    preferredTravelMonth, tourType: String(form.get('tourType') ?? ''),
-    numberOfChildren: children === '' ? null : Number(children), specialRequirements: String(form.get('specialRequirements') ?? ''), city: String(form.get('city') ?? ''),
-    company: String(form.get('company') ?? ''), notes: String(form.get('notes') ?? '') };
+  return {
+    name: String(form.get('name') ?? ''),
+    phone: String(form.get('phone') ?? ''),
+    email: String(form.get('email') ?? ''),
+    destination: String(form.get('destination') ?? ''),
+    preferredTravelMonth: rawMonth,
+    tourType: String(form.get('tourType') ?? ''),
+    numberOfAdults: adults === '' ? null : Number(adults),
+    numberOfChildren: children === '' ? null : Number(children),
+    specialRequirements: String(form.get('specialRequirements') ?? ''),
+    city: String(form.get('city') ?? ''),
+    company: String(form.get('company') ?? ''),
+    notes: String(form.get('notes') ?? ''),
+  };
 }
 export function formatTravelMonth(value?: string | null) {
   if (!value) return '—';
@@ -106,4 +118,3 @@ export function getUpcomingTravelMonths(count: number = 24, existingValue?: stri
 
   return options.sort((a, b) => a.value.localeCompare(b.value));
 }
-
