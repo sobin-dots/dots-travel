@@ -39,6 +39,14 @@ import {
   List,
   Code2,
 } from 'lucide-react';
+import { ENQUIRY_TAGS, ENQUIRY_TAG_LABELS, type EnquiryTag } from '@/lib/enquiry-fields';
+
+const tagStyle: Record<EnquiryTag, string> = {
+  hot: 'border-red-500/40 bg-red-500/10 text-red-300',
+  warm: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
+  cold: 'border-sky-500/40 bg-sky-500/10 text-sky-300',
+};
+const controlStyle = 'rounded-lg border bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 outline-none transition cursor-pointer disabled:opacity-50';
 
 type Connection = {
   id: string;
@@ -74,6 +82,7 @@ type Submission = {
     title: string;
     status: string;
     stage: string;
+    temperature?: string;
     assignedTo?: { name: string };
   };
 };
@@ -127,6 +136,40 @@ export default function LeadIntakeSettings() {
   const handleOpenLead = (leadId: string) => {
     handleSelectLead(leadId);
     router.push(`/console/leads?leadId=${leadId}`);
+  };
+
+  const handleUpdateTemperature = async (submissionId: string, leadId: string | null | undefined, temperature: 'hot' | 'warm' | 'cold') => {
+    // Optimistic UI update
+    setData((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        submissions: prev.submissions.map((sub) => {
+          if (sub.id === submissionId && sub.lead) {
+            return {
+              ...sub,
+              lead: {
+                ...sub.lead,
+                temperature,
+              },
+            };
+          }
+          return sub;
+        }),
+      };
+    });
+
+    if (leadId) {
+      try {
+        await authFetch(`/api/v1/leads/${leadId}/qualification`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ temperature }),
+        });
+      } catch (err) {
+        console.error('Failed to update lead classification:', err);
+      }
+    }
   };
 
   useEffect(() => {
@@ -678,6 +721,7 @@ export default function LeadIntakeSettings() {
                       <th className="py-3.5 px-4">Trip Requirements</th>
                       <th className="py-3.5 px-4">Source & Time</th>
                       <th className="py-3.5 px-4">Status & Details</th>
+                      <th className="py-3.5 px-4">Tag</th>
                       <th className="py-3.5 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
@@ -802,7 +846,24 @@ export default function LeadIntakeSettings() {
                             </div>
                           </td>
 
-                          {/* Column 5: Action Buttons */}
+                          {/* Column 5: Classification Tag (Hot, Warm, Cold) */}
+                          <td className="py-3 px-4 align-top whitespace-nowrap">
+                            <select
+                              aria-label={`Tag of ${cust.name}`}
+                              disabled={busy || !s.leadId}
+                              value={s.lead?.temperature || 'warm'}
+                              onChange={(e) => handleUpdateTemperature(s.id, s.leadId, e.target.value as EnquiryTag)}
+                              className={`${controlStyle} border ${tagStyle[(s.lead?.temperature as EnquiryTag) || 'warm'] || 'border-zinc-700'}`}
+                            >
+                              {ENQUIRY_TAGS.map((tag) => (
+                                <option key={tag} value={tag} className="bg-zinc-900 text-zinc-200">
+                                  {ENQUIRY_TAG_LABELS[tag]}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+
+                          {/* Column 6: Action Buttons */}
                           <td className="py-3 px-4 align-top text-right">
                             <div className="flex items-center justify-end gap-1.5">
                               {s.status === 'failed' && (
@@ -894,6 +955,22 @@ export default function LeadIntakeSettings() {
                             Processing in Queue
                           </span>
                         )}
+                        {s.leadId && (
+                          <select
+                            aria-label={`Tag of ${cust.name}`}
+                            disabled={busy}
+                            value={s.lead?.temperature || 'warm'}
+                            onChange={(e) => handleUpdateTemperature(s.id, s.leadId, e.target.value as EnquiryTag)}
+                            className={`${controlStyle} border ${tagStyle[(s.lead?.temperature as EnquiryTag) || 'warm'] || 'border-zinc-700'}`}
+                          >
+                            {ENQUIRY_TAGS.map((tag) => (
+                              <option key={tag} value={tag} className="bg-zinc-900 text-zinc-200">
+                                {ENQUIRY_TAG_LABELS[tag]}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+
                         {s.status === 'failed' && (
                           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-950/80 border border-red-800/80 text-red-300">
                             <AlertCircle className="w-3.5 h-3.5 text-red-400" />

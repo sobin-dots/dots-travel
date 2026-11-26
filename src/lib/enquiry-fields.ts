@@ -17,6 +17,20 @@ export const ENQUIRY_STATUS_LABELS: Record<EnquiryStatus, string> = {
 };
 export const ENQUIRY_TAG_LABELS: Record<EnquiryTag, string> = { hot: 'Hot', warm: 'Warm', cold: 'Cold' };
 
+export const STANDARD_LEAD_SOURCES = [
+  'Website Form',
+  'Instagram',
+  'Facebook',
+  'WhatsApp',
+  'Google Ads',
+  'Meta Ads',
+  'YouTube',
+  'LinkedIn',
+  'Referral',
+  'Walk-in',
+  'Direct',
+] as const;
+
 export const LEAD_SOURCES = [
   'Instagram',
   'Facebook',

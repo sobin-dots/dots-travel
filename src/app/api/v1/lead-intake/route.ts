@@ -43,6 +43,7 @@ export async function GET(req: NextRequest) {
             title: true,
             status: true,
             stage: true,
+            temperature: true,
             assignedTo: { select: { name: true } },
           },
         },

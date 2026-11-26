@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { CallNotifications } from './CallNotifications';
+import { NotificationBell } from './NotificationBell';
 
 export function ConsoleHeader() {
   const {
@@ -183,6 +184,7 @@ export function ConsoleHeader() {
         </div>
 
         <CallNotifications />
+        <NotificationBell />
         {/* Logged-in User Account & Profile Popover */}
         <div className="relative" ref={userDropdownRef}>
           <button
