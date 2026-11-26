@@ -33,7 +33,7 @@ export async function createEnquiry(tx: Prisma.TransactionClient, organizationId
   const ambiguous = emailMatches.length > 1 || (!!phoneMatch && emailMatches.some(c => c.id !== phoneMatch.id));
   let contact = phoneMatch || (!ambiguous ? emailMatches[0] : null);
   const repeat = contact ? await tx.lead.count({ where: { organizationId, contactId: contact.id } }) > 0 : false;
-  const { preferredTravelMonth, tourType, numberOfChildren, specialRequirements, city } = input;
+  const { destination, numberOfAdults, preferredTravelMonth, tourType, numberOfChildren, specialRequirements, city } = input;
   // A returning customer stays with the team member who already owns the enquiry, even if a
   // different salesperson is next in rotation. Only an owner who can no longer be assigned
   // (inactive, removed or now a viewer) is replaced.
@@ -42,6 +42,7 @@ export async function createEnquiry(tx: Prisma.TransactionClient, organizationId
   const assignedToId = ownerId || await pickAssignee(tx, organizationId);
   if (!contact && !ambiguous) {
     contact = await tx.contact.create({ data: { organizationId, name: input.name, phone: input.phone, email: input.email,
+      destination, numberOfAdults,
       preferredTravelMonth, tourType, numberOfChildren, specialRequirements, city,
       enquiryTag: input.temperature, tags: [...new Set(input.tags)], assignedToId, assignedAt: assignedToId ? new Date() : null } });
   } else if (contact && contact.assignedToId !== assignedToId && assignedToId) {
@@ -49,9 +50,12 @@ export async function createEnquiry(tx: Prisma.TransactionClient, organizationId
   }
   const organization = await tx.organization.findUniqueOrThrow({ where: { id: organizationId }, select: { firstContactMinutes: true } });
   const { submissionId: _submissionId, name, phone, email, notes, title, answers,
+    destination: _dest, numberOfAdults: _adults,
     preferredTravelMonth: _month, tourType: _tour, numberOfChildren: _children, specialRequirements: _requirements, city: _city, ...fields } = input;
   return tx.lead.create({ data: {
-    ...fields, organizationId, source, title: title || `${name} — ${input.destination || 'Travel enquiry'}`,
+    ...fields, organizationId, source, title: title || `${name} — ${destination || 'Travel enquiry'}`,
+    destination: destination || undefined,
+    headcountAdults: numberOfAdults ?? (fields as any).headcountAdults ?? 2,
     contactId: contact?.id, customerEmail: email || contact?.email, itinerary: '', status: 'draft', createdAt: receivedAt,
     headcountChildren: numberOfChildren ?? 0,
     specialRequests: specialRequirements,
@@ -59,7 +63,7 @@ export async function createEnquiry(tx: Prisma.TransactionClient, organizationId
     firstContactDueAt: new Date(receivedAt.getTime() + organization.firstContactMinutes * 60_000),
     duplicateContactFlag: ambiguous || repeat,
     metadata: { customerName: name, customerPhone: phone || null, enquiryNotes: notes || null, formAnswers: answers || {}, contactMatchNeedsReview: ambiguous,
-      contactTravelPreferences: { preferredTravelMonth: preferredTravelMonth ?? null, tourType: tourType ?? null, numberOfChildren: numberOfChildren ?? null, specialRequirements: specialRequirements ?? null, city: city ?? null } },
+      contactTravelPreferences: { destination: destination ?? null, numberOfAdults: numberOfAdults ?? null, preferredTravelMonth: preferredTravelMonth ?? null, tourType: tourType ?? null, numberOfChildren: numberOfChildren ?? null, specialRequirements: specialRequirements ?? null, city: city ?? null } },
   } });
 }
 
