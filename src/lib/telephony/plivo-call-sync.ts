@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { getTenantIntegration } from '@/lib/integrations/credentials-manager';
 import { lockAgency } from '@/lib/lead-intake/service';
 import { inboundFinalStatus, releaseCallAgentInTransaction } from '@/lib/telephony/agent-routing';
+import { resolveOutboundBrowserFinalStatus } from '@/lib/telephony/outbound-browser-call';
 
 export interface CarrierCallSnapshot {
   callUuid?: string | null;
@@ -160,6 +161,8 @@ export async function applyCarrierCallUpdate(
 
     const isUntrackedInbound =
       latest.direction === 'inbound' && !latest.agentOutcome && !latest.agentAnsweredAt && !latest.answeredAt;
+    const isUnansweredOutboundBrowser =
+      latest.direction === 'outbound' && latest.requestedMode === 'browser' && !latest.answeredAt;
     const finalStatus = isUntrackedInbound
       ? inferHangupTerminalStatus({
           direction: 'inbound',
@@ -168,7 +171,14 @@ export async function applyCarrierCallUpdate(
           hangupCauseCode: carrierCauseCode,
           hangupCauseName: carrierCauseName,
         })
-      : inboundFinalStatus({ ...latest, status: rawMappedStatus });
+      : isUnansweredOutboundBrowser
+        ? resolveOutboundBrowserFinalStatus(latest, {
+            incomingStatus: rawMappedStatus,
+            hangupCauseCode: carrierCauseCode,
+            hangupCauseName: carrierCauseName,
+            hangupSource: carrierCall.hangupSource || undefined,
+          })
+        : inboundFinalStatus({ ...latest, status: rawMappedStatus });
     await tx.call.update({
       where: { id: latest.id },
       data: {
@@ -180,8 +190,14 @@ export async function applyCarrierCallUpdate(
           ? { agentOutcome: 'missed' }
           : {}),
         endedAt: latest.endedAt || resolvedEndedAt,
-        ...(!latest.answeredAt && resolvedAnsweredAt ? { answeredAt: resolvedAnsweredAt } : {}),
-        ...(parsedDur !== undefined ? { durationSeconds: parsedDur } : {}),
+        ...(!latest.answeredAt && !isUnansweredOutboundBrowser && resolvedAnsweredAt
+          ? { answeredAt: resolvedAnsweredAt }
+          : {}),
+        ...(isUnansweredOutboundBrowser
+          ? { durationSeconds: 0 }
+          : parsedDur !== undefined
+            ? { durationSeconds: parsedDur }
+            : {}),
         ...(parsedBill !== undefined ? { billDurationSeconds: parsedBill } : {}),
         ...(parsedCost !== undefined ? { totalCost: parsedCost } : {}),
         ...(carrierCauseCode !== undefined ? { hangupCauseCode: carrierCauseCode } : {}),

@@ -52,13 +52,14 @@ export async function resolveNewOwner(tx: Prisma.TransactionClient, auth: AuthCo
   return auth.userId;
 }
 
-/** Create an enquiry contact. Call inside a transaction that already holds the agency lock. */
+/** Create an enquiry contact and corresponding CRM lead. Call inside a transaction that already holds the agency lock. */
 export async function createEnquiryContact(tx: Prisma.TransactionClient, organizationId: string, input: CreateEnquiryInput, assignedToId: string | null) {
   if (input.phone) {
     const existing = await tx.contact.findUnique({ where: { organizationId_phone: { organizationId, phone: input.phone } } });
     if (existing) throw new EnquiryError(`An enquiry with phone number ${input.phone} already exists (${existing.name})`, 409, 'conflict');
   }
-  return tx.contact.create({
+  const now = new Date();
+  const contact = await tx.contact.create({
     data: {
       organizationId,
       name: input.name,
@@ -77,10 +78,59 @@ export async function createEnquiryContact(tx: Prisma.TransactionClient, organiz
       enquiryTag: input.enquiryTag && ['hot', 'warm', 'cold'].includes(input.enquiryTag) ? input.enquiryTag : 'warm',
       tags: dedupeTags(input.tags),
       assignedToId,
-      assignedAt: assignedToId ? new Date() : null,
+      assignedAt: assignedToId ? now : null,
     },
     include: enquiryInclude,
   });
+
+  const organization = await tx.organization.findUnique({
+    where: { id: organizationId },
+    select: { firstContactMinutes: true },
+  });
+  const firstContactMinutes = organization?.firstContactMinutes ?? 30;
+
+  const tags = dedupeTags(input.tags);
+  const sourceTag = tags.find(t => t.toLowerCase().startsWith('source:'));
+  const sourceName = sourceTag
+    ? sourceTag.slice(7).trim().split(/[_\s-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+    : 'Direct';
+
+  await tx.lead.create({
+    data: {
+      organizationId,
+      contactId: contact.id,
+      title: `${contact.name} — ${contact.city || contact.tourType || 'Travel enquiry'}`,
+      destination: contact.city || null,
+      source: sourceName,
+      formName: sourceName,
+      stage: contact.enquiryStatus || 'new_inquiry',
+      temperature: contact.enquiryTag || 'warm',
+      tags,
+      assignedToId,
+      assignedAt: assignedToId ? now : null,
+      customerEmail: contact.email || null,
+      itinerary: '',
+      status: 'draft',
+      createdAt: now,
+      headcountChildren: input.numberOfChildren ?? 0,
+      specialRequests: input.specialRequirements || null,
+      firstContactDueAt: new Date(now.getTime() + firstContactMinutes * 60_000),
+      metadata: {
+        customerName: contact.name,
+        customerPhone: contact.phone || null,
+        enquiryNotes: contact.notes || null,
+        contactTravelPreferences: {
+          preferredTravelMonth: contact.preferredTravelMonth ?? null,
+          tourType: contact.tourType ?? null,
+          numberOfChildren: contact.numberOfChildren ?? null,
+          specialRequirements: contact.specialRequirements ?? null,
+          city: contact.city ?? null,
+        },
+      },
+    },
+  });
+
+  return contact;
 }
 
 export { lockAgency };

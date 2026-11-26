@@ -18,12 +18,20 @@ const ROLE_RANK: Record<string, number> = {
 };
 
 /**
+ * Normalizes role so that 'sales' and 'operator' are interchangeable/mapped.
+ */
+export function normalizeRole(role: string): string {
+  if (role === 'operator') return 'sales';
+  return role;
+}
+
+/**
  * Extracts Bearer token from incoming HTTP Request and verifies the caller's session.
  * Never requires cookies, ensuring 100% mobile and external API compatibility.
  */
 export async function authenticateRequest(
   req: Request | NextRequest,
-  requiredRole: 'viewer' | 'operator' | 'admin' | 'owner' = 'viewer'
+  requiredRole: 'viewer' | 'operator' | 'sales' | 'admin' | 'owner' = 'viewer'
 ): Promise<{ auth?: AuthContext; errorResponse?: NextResponse }> {
   let token: string | null = null;
   const authHeader = req.headers.get('authorization');

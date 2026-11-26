@@ -73,6 +73,35 @@ export async function PATCH(req: NextRequest, context: Context) {
       });
       if (!updated.count) throw new EnquiryError('This enquiry changed. Reopen it before saving your changes.', 409, 'stale');
 
+      const leadCount = await tx.lead.count({ where: { contactId: id, organizationId: auth!.organizationId } });
+      if (leadCount > 0) {
+        const leadUpdateData: Record<string, unknown> = {};
+        if (ownerChanges) {
+          leadUpdateData.assignedToId = assignedToId;
+          leadUpdateData.assignedAt = assignedToId ? new Date() : null;
+        }
+        if (rest.enquiryStatus) leadUpdateData.stage = rest.enquiryStatus;
+        if (rest.enquiryTag) leadUpdateData.temperature = rest.enquiryTag;
+        if (tags) {
+          const finalTags = dedupeTags(tags);
+          leadUpdateData.tags = finalTags;
+          const srcTag = finalTags.find(t => t.toLowerCase().startsWith('source:'));
+          if (srcTag) {
+            const srcName = srcTag.slice(7).trim().split(/[_\s-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            leadUpdateData.source = srcName;
+            leadUpdateData.formName = srcName;
+          }
+        }
+        if (rest.city !== undefined) leadUpdateData.destination = rest.city || null;
+        if (rest.email !== undefined) leadUpdateData.customerEmail = rest.email || null;
+        if (Object.keys(leadUpdateData).length > 0) {
+          await tx.lead.updateMany({
+            where: { contactId: id, organizationId: auth!.organizationId },
+            data: leadUpdateData,
+          });
+        }
+      }
+
       await tx.auditLog.create({ data: {
         organizationId: auth!.organizationId, actorUserId: auth!.userId, action: 'enquiry.update', targetType: 'Contact', targetId: id,
         metadata: { fields: Object.keys(parsed.data).filter(key => key !== 'expectedUpdatedAt'), ...(ownerChanges ? { previousAssignee: existing.assignedToId, assignedToId } : {}) },

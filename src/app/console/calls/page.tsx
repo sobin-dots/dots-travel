@@ -48,6 +48,8 @@ export default function CallsPage() {
     setIntakeCallTarget,
   } = useConsole();
 
+  const isSales = currentOrg?.role?.toLowerCase() === 'sales';
+
   const [openingDetailId, setOpeningDetailId] = useState<string | null>(null);
   const [openingItineraryId, setOpeningItineraryId] = useState<string | null>(null);
   const [enquiryCallId, setEnquiryCallId] = useState<string | null>(null);
@@ -160,7 +162,7 @@ export default function CallsPage() {
 
       if (debouncedSearch) params.set('search', debouncedSearch);
       if (selectedContactPhone) params.set('contactPhone', selectedContactPhone);
-      if (selectedStaffUserId) params.set('staffUserId', selectedStaffUserId);
+      if (!isSales && selectedStaffUserId) params.set('staffUserId', selectedStaffUserId);
       if (directionFilter) params.set('direction', directionFilter);
       if (statusFilter) params.set('status', statusFilter);
       if (startDateInput) {
@@ -248,7 +250,7 @@ export default function CallsPage() {
 
       {/* Filter Bar: User/Customer, Staff Member, Direction, Status & Date-Time Range */}
       <div className="bg-zinc-900/60 border border-zinc-800/90 rounded-xl p-4 space-y-3.5">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className={`grid grid-cols-1 sm:grid-cols-2 ${isSales ? 'lg:grid-cols-4' : 'lg:grid-cols-5'} gap-3`}>
           {/* Search by Customer Name, Phone or Call UUID */}
           <div className="relative lg:col-span-2">
             <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -292,30 +294,32 @@ export default function CallsPage() {
           </div>
 
           {/* Staff Member / Operator Filter */}
-          <div className="relative">
-            <User className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <select
-              value={selectedStaffUserId}
-              onChange={(e) => {
-                setSelectedStaffUserId(e.target.value);
-                setPage(1);
-              }}
-              className="w-full bg-zinc-950 border border-zinc-800 focus:border-indigo-500/60 rounded-lg pl-8 pr-3 py-2 text-xs text-zinc-200 outline-none"
-              title="Filter by Staff Member / Operator"
-            >
-              <option value="">All Staff Members</option>
-              {staffList.map((st: any) => {
-                const u = st.user || st;
-                const uid = u.id || st.userId;
-                const label = u.name ? `${u.name} (${u.email})` : u.email || uid;
-                return (
-                  <option key={uid} value={uid}>
-                    {label}
-                  </option>
-                );
-              })}
-            </select>
-          </div>
+          {!isSales && (
+            <div className="relative">
+              <User className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <select
+                value={selectedStaffUserId}
+                onChange={(e) => {
+                  setSelectedStaffUserId(e.target.value);
+                  setPage(1);
+                }}
+                className="w-full bg-zinc-950 border border-zinc-800 focus:border-indigo-500/60 rounded-lg pl-8 pr-3 py-2 text-xs text-zinc-200 outline-none"
+                title="Filter by Staff Member / Operator"
+              >
+                <option value="">All Staff Members</option>
+                {staffList.map((st: any) => {
+                  const u = st.user || st;
+                  const uid = u.id || st.userId;
+                  const label = u.name ? `${u.name} (${u.email})` : u.email || uid;
+                  return (
+                    <option key={uid} value={uid}>
+                      {label}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          )}
 
           {/* Direction & Status Combined Row */}
           <div className="grid grid-cols-2 gap-2">

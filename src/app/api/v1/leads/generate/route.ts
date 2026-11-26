@@ -241,18 +241,23 @@ export async function POST(req: NextRequest) {
       };
 
       // Reuse the authorized lead, or serialize creation for this organization.
-      const savedLead = existingLeadForCall
-        ? await db.lead.update({
-            where: { id: existingLeadForCall.id },
-            data: leadDataPayload,
-            include: leadInclude,
-          })
-        : await db.$transaction(async tx => {
+      let savedLead;
+      if (existingLeadForCall) {
+        savedLead = await db.lead.update({
+          where: { id: existingLeadForCall.id },
+          data: leadDataPayload,
+          include: leadInclude,
+        });
+      } else {
+        const organization = await db.organization.findUniqueOrThrow({
+          where: { id: auth!.organizationId },
+          select: { firstContactMinutes: true },
+        });
+        const createdLead = await db.$transaction(async tx => {
           await lockAgency(tx, auth!.organizationId);
           const concurrent = await tx.lead.findFirst({ where: { organizationId: auth!.organizationId, callId: call.id } });
           if (concurrent) throw new ItineraryError('A lead was created for this call. Reload it before generating again.', 409, 'lead_conflict');
           const assignedToId = await pickAssignee(tx, auth!.organizationId);
-          const organization = await tx.organization.findUniqueOrThrow({ where: { id: auth!.organizationId }, select: { firstContactMinutes: true } });
           return tx.lead.create({
             data: {
               organizationId: auth!.organizationId,
@@ -265,9 +270,14 @@ export async function POST(req: NextRequest) {
               stage: 'new_inquiry',
               ...leadDataPayload,
             },
-            include: leadInclude,
+            select: { id: true },
           });
+        }, { maxWait: 10_000, timeout: 20_000 });
+        savedLead = await db.lead.findUniqueOrThrow({
+          where: { id: createdLead.id },
+          include: leadInclude,
         });
+      }
 
       await logAuditEvent({
         organizationId: auth!.organizationId,

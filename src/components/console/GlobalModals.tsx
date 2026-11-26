@@ -6,6 +6,8 @@ import {
   BookUser,
   Building2,
   Loader2,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { ItineraryIntakeModal } from './ItineraryIntakeModal';
@@ -76,6 +78,18 @@ export function GlobalModals() {
   } = useConsole();
 
   const [newOrgName, setNewOrgName] = React.useState('');
+  const [showStaffPassword, setShowStaffPassword] = React.useState(false);
+
+  // Clear and reset form fields when opening staff modal to prevent auto-fill
+  React.useEffect(() => {
+    if (showStaffModal) {
+      setStaffName('');
+      setStaffEmail('');
+      setStaffPassword('');
+      setStaffRole('sales');
+      setShowStaffPassword(false);
+    }
+  }, [showStaffModal, setStaffName, setStaffEmail, setStaffPassword, setStaffRole]);
 
   return (
     <>
@@ -155,12 +169,14 @@ export function GlobalModals() {
               Provision a staff account for this organization. Staff members can sign in, dial calls, and manage communication threads.
             </p>
 
-            <form onSubmit={handleCreateStaff} className="space-y-4 text-xs">
+            <form onSubmit={handleCreateStaff} className="space-y-4 text-xs" autoComplete="off">
               <div>
                 <label className="text-zinc-400 block mb-1">Full Name</label>
                 <input
                   type="text"
+                  name="newStaffFullName"
                   required
+                  autoComplete="off"
                   placeholder="e.g. Rachel Adams"
                   value={staffName}
                   onChange={(e) => setStaffName(e.target.value)}
@@ -172,7 +188,10 @@ export function GlobalModals() {
                 <label className="text-zinc-400 block mb-1">Work Email</label>
                 <input
                   type="email"
+                  name="newStaffWorkEmail"
                   required
+                  autoComplete="off"
+                  data-lpignore="true"
                   placeholder="rachel@company.com"
                   value={staffEmail}
                   onChange={(e) => setStaffEmail(e.target.value)}
@@ -182,15 +201,29 @@ export function GlobalModals() {
 
               <div>
                 <label className="text-zinc-400 block mb-1">Password (min. 8 characters)</label>
-                <input
-                  type="password"
-                  required
-                  minLength={8}
-                  placeholder="••••••••••••"
-                  value={staffPassword}
-                  onChange={(e) => setStaffPassword(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200 focus:outline-none focus:border-indigo-500"
-                />
+                <div className="relative">
+                  <input
+                    type={showStaffPassword ? 'text' : 'password'}
+                    name="newStaffGeneratedPassword"
+                    required
+                    minLength={8}
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    placeholder="••••••••••••"
+                    value={staffPassword}
+                    onChange={(e) => setStaffPassword(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 pr-10 text-zinc-200 focus:outline-none focus:border-indigo-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowStaffPassword((prev) => !prev)}
+                    aria-label={showStaffPassword ? 'Hide password' : 'Show password'}
+                    title={showStaffPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+                  >
+                    {showStaffPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -200,10 +233,8 @@ export function GlobalModals() {
                   onChange={(e) => setStaffRole(e.target.value as any)}
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-zinc-200"
                 >
-                  <option value="operator">Operator (Can make calls & send SMS)</option>
-                  <option value="sales">Sales (Assigned leads and follow-ups)</option>
+                  <option value="sales">Sales / Staff (Can make calls, send SMS & handle leads)</option>
                   <option value="admin">Admin (Full administrative controls)</option>
-                  <option value="viewer">Viewer (Read-only observation)</option>
                 </select>
               </div>
 

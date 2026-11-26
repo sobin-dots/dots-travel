@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { processIncomingWebhook } from '@/lib/webhook-helper';
 import { lockAgency } from '@/lib/lead-intake/service';
 import { inboundFinalStatus, releaseCallAgentInTransaction } from '@/lib/telephony/agent-routing';
+import { resolveOutboundBrowserFinalStatus } from '@/lib/telephony/outbound-browser-call';
 
 export const runtime = 'nodejs';
 
@@ -39,8 +40,20 @@ export async function POST(req: NextRequest) {
       const current = await tx.call.findUniqueOrThrow({ where: { id: existingCall.id } });
       const terminal = ['completed', 'failed', 'busy', 'no-answer', 'timeout', 'canceled'].includes(callStatus);
       if (current.endedAt || (!terminal && ['completed', 'missed', 'failed', 'busy', 'no-answer', 'timeout', 'canceled'].includes(current.status))) return;
-      const status = terminal ? inboundFinalStatus({ ...current, status: callStatus })
-        : current.direction === 'inbound' && current.agentOutcome && current.agentOutcome !== 'answered' && callStatus === 'in-progress' ? 'ringing' : callStatus;
+      const isOutboundBrowserCall = current.direction === 'outbound' && current.requestedMode === 'browser';
+      const status = terminal
+        ? isOutboundBrowserCall
+          ? resolveOutboundBrowserFinalStatus(current, {
+              incomingStatus: callStatus,
+              hangupCauseName: params.HangupCauseName || params.HangupCause ? String(params.HangupCauseName || params.HangupCause) : undefined,
+              hangupSource: params.HangupSource ? String(params.HangupSource) : undefined,
+            })
+          : inboundFinalStatus({ ...current, status: callStatus })
+        : current.direction === 'inbound' && current.agentOutcome && current.agentOutcome !== 'answered' && callStatus === 'in-progress'
+          ? 'ringing'
+          : isOutboundBrowserCall && !current.answeredAt && callStatus === 'in-progress'
+            ? 'ringing'
+            : callStatus;
       await tx.call.update({ where: { id: current.id }, data: { status,
         ...(terminal ? { endedAt: new Date(), ...(current.direction === 'inbound' && status === 'missed' && current.agentOutcome && current.agentOutcome !== 'declined' ? { agentOutcome: 'missed' } : {}) } : {}) } });
       if (terminal) await releaseCallAgentInTransaction(tx, current);

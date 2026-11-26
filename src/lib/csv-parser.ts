@@ -5,6 +5,7 @@
  */
 
 import { ContactTravelFieldsSchema, type ContactTravelFields } from './contact-fields';
+import { normalizeAndValidatePhone } from './phone-validation';
 
 export interface ParsedContactRow extends Partial<ContactTravelFields> {
   rowIndex: number;
@@ -18,6 +19,8 @@ export interface ParsedContactRow extends Partial<ContactTravelFields> {
   email?: string;
   company?: string;
   notes?: string;
+  source?: string;
+  campaign?: string;
   isValid: boolean;
   error?: string;
 }
@@ -32,62 +35,12 @@ export interface CSVParseResult {
 
 /**
  * Normalizes a phone string into E.164 format (+[countryCode][digits]).
- * Supports India local 10-digit numbers (+91 default), 0-prefixed 11-digit numbers,
- * 91-prefixed 12-digit numbers, and general E.164 international numbers.
+ * Strictly enforces country-specific phone lengths (e.g. 10 digits for India).
  */
 export function normalizePhoneNumber(raw: string, defaultCountryCode = '+91'): string | null {
   if (!raw) return null;
-
-  // Clean spaces, hyphens, dots, parentheses, and tabs
-  let cleaned = raw.trim().replace(/[\s\-\(\)\.\t]/g, '');
-  if (!cleaned) return null;
-
-  // Replace international access code 00 with +
-  if (cleaned.startsWith('00')) {
-    cleaned = '+' + cleaned.slice(2);
-  }
-
-  // If already starts with +
-  if (cleaned.startsWith('+')) {
-    const digits = cleaned.slice(1);
-    if (/^[1-9]\d{6,14}$/.test(digits)) {
-      return cleaned;
-    }
-    return null;
-  }
-
-  // 10 digits without + (e.g. 9876543210)
-  if (/^\d{10}$/.test(cleaned)) {
-    const prefix = defaultCountryCode.startsWith('+') ? defaultCountryCode : `+${defaultCountryCode}`;
-    return `${prefix}${cleaned}`;
-  }
-
-  // 11 digits starting with 0 (e.g. 09876543210)
-  if (/^0\d{10}$/.test(cleaned)) {
-    const prefix = defaultCountryCode.startsWith('+') ? defaultCountryCode : `+${defaultCountryCode}`;
-    return `${prefix}${cleaned.slice(1)}`;
-  }
-
-  // 12 digits starting with 91 (e.g. 919876543210)
-  if (/^91\d{10}$/.test(cleaned)) {
-    return `+${cleaned}`;
-  }
-
-  // 11 digits starting with 1 (US / Canada without +, e.g. 14155550199)
-  if (/^1\d{10}$/.test(cleaned)) {
-    return `+${cleaned}`;
-  }
-
-  // Fallback: If 7 to 15 digits without +, test prefixing default country code
-  if (/^\d{7,14}$/.test(cleaned)) {
-    const prefix = defaultCountryCode.startsWith('+') ? defaultCountryCode : `+${defaultCountryCode}`;
-    const candidate = `${prefix}${cleaned}`;
-    if (/^\+[1-9]\d{6,14}$/.test(candidate)) {
-      return candidate;
-    }
-  }
-
-  return null;
+  const res = normalizeAndValidatePhone(raw, defaultCountryCode.replace('+', ''));
+  return res.valid ? res.phone : null;
 }
 
 /**
@@ -206,6 +159,8 @@ export function parseContactsCSV(csvText: string, defaultCountryCode = '+91'): C
   const childrenIdx = findColumnIndex(rawHeaders, ['numberofchildren', 'children', 'childrencount']);
   const requirementsIdx = findColumnIndex(rawHeaders, ['specialrequirements', 'specialrequests']);
   const cityIdx = findColumnIndex(rawHeaders, ['city', 'cityofresidence']);
+  const sourceIdx = findColumnIndex(rawHeaders, ['source', 'platform', 'leadsource', 'channel', 'origin']);
+  const campaignIdx = findColumnIndex(rawHeaders, ['campaign', 'campaignname', 'adcampaign', 'utmcampaign', 'utm_campaign']);
 
   const rows: ParsedContactRow[] = [];
 
@@ -223,6 +178,8 @@ export function parseContactsCSV(csvText: string, defaultCountryCode = '+91'): C
 
     const normalizedPhone = normalizePhoneNumber(rawPhone, defaultCountryCode);
     const cell = (column: number) => column < 0 ? undefined : row[column]?.trim() || '';
+    const rawSource = cell(sourceIdx) || '';
+    const rawCampaign = cell(campaignIdx) || '';
     const children = cell(childrenIdx);
     const travel = ContactTravelFieldsSchema.safeParse({ preferredTravelMonth: cell(monthIdx), tourType: cell(tourIdx),
       numberOfChildren: children == null ? undefined : children === '' ? null : Number(children), specialRequirements: cell(requirementsIdx), city: cell(cityIdx) });
@@ -259,6 +216,8 @@ export function parseContactsCSV(csvText: string, defaultCountryCode = '+91'): C
       email: rawEmail || undefined,
       company: rawCompany || undefined,
       notes: rawNotes || undefined,
+      source: rawSource || undefined,
+      campaign: rawCampaign || undefined,
       ...(travel.success ? travel.data : {}),
       isValid,
       error,
@@ -282,11 +241,11 @@ export function parseContactsCSV(csvText: string, defaultCountryCode = '+91'): C
  */
 export function getSampleContactsCSV(): string {
   return [
-    'Name,Phone,Email,Company,Notes,Preferred month of travel,Tour type,Number of children,Special requirements,City',
-    'Aarav Sharma,+919876543210,aarav.sharma@example.com,Sharma Tours,Maldives enquiry,2027-04,Family,2,Vegetarian meals,Chennai',
-    'Priya Patel,9823456789,priya.patel@outlook.com,Patel & Co,Singapore enquiry,2027-05,Honeymoon,0,Private transfers,Ahmedabad',
-    'Vikram Malhotra,+919123456780,,Malhotra Enterprises,Family holiday,2027-01,Family,1,Accessible room,Delhi',
-    'Sneha Menon,09447123456,sneha.menon@gmail.com,,Boutique hotels,,Solo,0,,Kochi',
+    'Name,Phone,Email,Source,Campaign,Company,Notes,Preferred month of travel,Tour type,Number of children,Special requirements,City',
+    'Aarav Sharma,+919876543210,aarav.sharma@example.com,Instagram,Summer Holiday 2027,Sharma Tours,Maldives enquiry,2027-04,Family,2,Vegetarian meals,Chennai',
+    'Priya Patel,9823456789,priya.patel@outlook.com,Facebook,Honeymoon Special,Patel & Co,Singapore enquiry,2027-05,Honeymoon,0,Private transfers,Ahmedabad',
+    'Vikram Malhotra,+919123456780,,YouTube,Europe Group Tours,Malhotra Enterprises,Family holiday,2027-01,Family,1,Accessible room,Delhi',
+    'Sneha Menon,09447123456,sneha.menon@gmail.com,LinkedIn,Corporate Getaway,,Boutique hotels,,Solo,0,,Kochi',
   ].join('\r\n');
 }
 

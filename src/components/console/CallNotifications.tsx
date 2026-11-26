@@ -1,14 +1,71 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useConsole } from '@/context/ConsoleContext';
 
 export function CallNotifications() {
-  const { incomingCall, webPhoneStatus, webPhoneError, initWebPhone, authFetch, bearerToken, currentOrg } = useConsole();
+  const { incomingCall, webPhoneStatus, webPhoneError, initWebPhone, authFetch, bearerToken, currentOrg, leadsList, currentUser } = useConsole();
   const [permission, setPermission] = useState<string>('default');
   const [error, setError] = useState('');
   const [readiness, setReadiness] = useState<{ canReceiveAssignedCalls: boolean; canReceiveNewCalls: boolean; reason: string; busy: boolean } | null>(null);
   const [presenceError, setPresenceError] = useState('');
+  const lastNotifiedTaskIdRef = useRef<string | null>(null);
+  const knownAssignedLeadIdsRef = useRef<Set<string>>(new Set());
+  const initialSyncDoneRef = useRef(false);
+
+  // Monitor newly assigned tasks/leads and follow-ups due now
+  useEffect(() => {
+    if (!currentUser?.id || !leadsList?.length) return;
+    const now = Date.now();
+
+    const currentAssigned = new Set<string>();
+    const newlyAssignedLeads: any[] = [];
+
+    for (const lead of leadsList) {
+      if (lead.assignedToId === currentUser.id) {
+        currentAssigned.add(lead.id);
+        if (initialSyncDoneRef.current && !knownAssignedLeadIdsRef.current.has(lead.id)) {
+          newlyAssignedLeads.push(lead);
+        }
+
+        // 1. Check if scheduled follow-up is due now
+        if (lead.nextFollowUpAt) {
+          const dueTime = new Date(lead.nextFollowUpAt).getTime();
+          const taskKey = `${lead.id}-${lead.nextFollowUpAt}`;
+          // If due within the last 5 minutes or right now, and not notified yet
+          if (Math.abs(now - dueTime) < 5 * 60 * 1000 && lastNotifiedTaskIdRef.current !== taskKey) {
+            lastNotifiedTaskIdRef.current = taskKey;
+            if ('Notification' in window && Notification.permission === 'granted') {
+              new Notification('Sales Follow-up Due', {
+                body: `Follow-up commitment for ${lead.contact?.name || lead.title} is due now!`,
+                tag: `followup-${lead.id}`,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Alert for newly assigned task / lead
+    if (initialSyncDoneRef.current && newlyAssignedLeads.length > 0) {
+      for (const lead of newlyAssignedLeads) {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          const followUpTime = lead.nextFollowUpAt
+            ? ` (Follow-up scheduled: ${new Date(lead.nextFollowUpAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`
+            : '';
+          new Notification('New Task Assigned to You', {
+            body: `${lead.title || 'Client Enquiry'} has been assigned to you by Admin${followUpTime}.`,
+            tag: `new-task-${lead.id}`,
+          });
+        }
+      }
+    }
+
+    knownAssignedLeadIdsRef.current = currentAssigned;
+    if (!initialSyncDoneRef.current) {
+      initialSyncDoneRef.current = true;
+    }
+  }, [leadsList, currentUser?.id]);
   useEffect(() => { setPermission('Notification' in window ? Notification.permission : 'unsupported'); }, []);
   useEffect(() => {
     if (!bearerToken || currentOrg?.role === 'viewer') return;

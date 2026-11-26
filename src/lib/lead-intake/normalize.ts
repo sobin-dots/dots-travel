@@ -1,13 +1,27 @@
 import { z } from 'zod';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ContactTravelFieldsSchema } from '@/lib/contact-fields';
+import { normalizeAndValidatePhone } from '@/lib/phone-validation';
 
-export const providers = ['meta', 'google_ads', 'google_forms', 'website', 'generic'] as const;
+export const providers = ['meta', 'google_ads', 'google_forms', 'website', 'hosted_form', 'generic'] as const;
 export type LeadProvider = typeof providers[number];
 export const enquirySchema = z.object({
   submissionId: z.string().trim().min(1).max(200),
   name: z.string().trim().min(1).max(150),
-  phone: z.string().transform(v => v.replace(/[\s().-]/g, '')).pipe(z.string().regex(/^\+[1-9]\d{6,14}$/, 'Use a phone number with country code, for example +919876543210')).optional(),
+  phone: z.string().superRefine((val, ctx) => {
+    if (!val) return;
+    const res = normalizeAndValidatePhone(val);
+    if (!res.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: res.error || 'Invalid phone number format with country code',
+      });
+    }
+  }).transform(v => {
+    if (!v) return undefined;
+    const res = normalizeAndValidatePhone(v);
+    return res.valid ? res.phone : undefined;
+  }).optional(),
   email: z.string().trim().toLowerCase().email().max(254).optional(),
   title: z.string().trim().min(1).max(200).optional(),
   notes: z.string().max(10000).optional(),
