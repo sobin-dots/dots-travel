@@ -1,5 +1,7 @@
-import { redirect } from 'next/navigation';
+'use client';
+
+import { EnquiriesView } from '@/components/console/EnquiriesView';
 
 export default function EnquiriesPage() {
-  redirect('/console/sales-cockpit');
+  return <EnquiriesView />;
 }

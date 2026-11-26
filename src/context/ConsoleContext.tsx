@@ -189,7 +189,7 @@ interface ConsoleContextType {
   setStaffEmail: (email: string) => void;
   staffPassword: string;
   setStaffPassword: (pass: string) => void;
-  staffRole: 'operator' | 'sales' | 'admin' | 'viewer';
+  staffRole: 'operator' | 'sales' | 'admin';
   setStaffRole: (role: any) => void;
   staffLoading: boolean;
   handleCreateStaff: (e: React.FormEvent) => Promise<void>;
@@ -388,7 +388,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [staffName, setStaffName] = useState('');
   const [staffEmail, setStaffEmail] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
-  const [staffRole, setStaffRole] = useState<'operator' | 'sales' | 'admin' | 'viewer'>('sales');
+  const [staffRole, setStaffRole] = useState<'operator' | 'sales' | 'admin'>('sales');
   const [staffLoading, setStaffLoading] = useState(false);
 
   // Contact creation state
@@ -685,7 +685,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       safeJson('/api/v1/calls'),
       safeJson('/api/v1/messages/threads'),
       safeJson('/api/v1/recordings'),
-      safeJson('/api/v1/transcriptions'),
+      Promise.resolve({ objects: [] }),
       safeJson('/api/v1/settings'),
       safeJson('/api/v1/audit'),
       safeJson('/api/v1/users'),

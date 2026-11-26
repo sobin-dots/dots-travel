@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { contactValuesFromForm } from '@/lib/contact-fields';
-import { ENQUIRY_STATUSES, ENQUIRY_STATUS_LABELS, ENQUIRY_TAGS, ENQUIRY_TAG_LABELS, parseTagInput } from '@/lib/enquiry-fields';
+import { ENQUIRY_STATUSES, ENQUIRY_STATUS_LABELS, ENQUIRY_TAGS, ENQUIRY_TAG_LABELS, STANDARD_LEAD_SOURCES, parseTagInput } from '@/lib/enquiry-fields';
 import { ContactDetailsFields } from './ContactDetailsFields';
 
 interface Props {
@@ -71,7 +71,7 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
   }, [currentItem]);
 
   const sourceOptions = useMemo(() => {
-    const defaults = ['Direct', 'Website Form', 'Instagram', 'Google Ads', 'Meta Ads', 'Referral', 'Walk-in'];
+    const defaults = Array.from(STANDARD_LEAD_SOURCES);
     if (initialSource && !defaults.some(d => d.toLowerCase() === initialSource.toLowerCase())) {
       return [...defaults, initialSource, 'Other'];
     }
@@ -80,14 +80,14 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
 
   const [selectedSource, setSelectedSource] = useState(initialSource || 'Direct');
   const [customSource, setCustomSource] = useState(
-    initialSource && !['direct', 'website form', 'instagram', 'google ads', 'meta ads', 'referral', 'walk-in'].includes(initialSource.toLowerCase())
+    initialSource && !STANDARD_LEAD_SOURCES.some(s => s.toLowerCase() === initialSource.toLowerCase())
       ? initialSource
       : ''
   );
 
   useEffect(() => {
     if (initialSource) {
-      const match = ['Direct', 'Website Form', 'Instagram', 'Google Ads', 'Meta Ads', 'Referral', 'Walk-in'].find(
+      const match = STANDARD_LEAD_SOURCES.find(
         s => s.toLowerCase() === initialSource.toLowerCase()
       );
       if (match) {

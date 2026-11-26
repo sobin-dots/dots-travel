@@ -14,13 +14,13 @@ import {
   Users,
   MessageSquare,
   Mic,
-  FileText,
   Hash,
   Settings,
   Shield,
   Sparkles,
   TrendingUp,
   X,
+  Bell,
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 
@@ -33,7 +33,6 @@ export function ConsoleSidebar() {
     contactsList,
     staffList,
     recordings,
-    transcripts,
     numbers,
     isMobileMenuOpen,
     setIsMobileMenuOpen,
@@ -63,9 +62,9 @@ export function ConsoleSidebar() {
     ...(currentOrg?.role && currentOrg.role !== 'viewer'
       ? [{ href: '/console/assigned-to-me', label: 'Assigned to me', icon: UserCheck, count: contactsList.filter((c) => c.assignedToId === currentUser?.id).length }]
       : []),
+    { href: '/console/notifications', label: 'Notifications', icon: Bell },
     ...(!isSales ? [{ href: '/console/users', label: 'Staff Team', icon: Users, count: staffList.length }] : []),
     { href: '/console/recordings', label: 'Recordings', icon: Mic, count: recordings.length },
-    { href: '/console/transcripts', label: 'Transcripts', icon: FileText, count: transcripts.length },
     ...(!isSales
       ? [
           {

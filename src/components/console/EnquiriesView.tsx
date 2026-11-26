@@ -5,7 +5,7 @@ import { BookUser, Edit3, Loader2, Plus, PhoneCall, Search, Trash2, Upload, User
 import { useConsole } from '@/context/ConsoleContext';
 import { EnquiryFormModal } from '@/components/console/EnquiryFormModal';
 import { formatTravelMonth } from '@/lib/contact-fields';
-import { ENQUIRY_STATUSES, ENQUIRY_STATUS_LABELS, ENQUIRY_TAGS, ENQUIRY_TAG_LABELS, type EnquiryTag } from '@/lib/enquiry-fields';
+import { ENQUIRY_STATUSES, ENQUIRY_STATUS_LABELS, ENQUIRY_TAGS, ENQUIRY_TAG_LABELS, STANDARD_LEAD_SOURCES, type EnquiryTag } from '@/lib/enquiry-fields';
 
 const control = 'rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-emerald-500/60 disabled:opacity-50';
 const tagStyle: Record<EnquiryTag, string> = {
@@ -16,13 +16,17 @@ const tagStyle: Record<EnquiryTag, string> = {
 
 export function getContactSource(item: Record<string, any>): string {
   if (item.source && typeof item.source === 'string' && item.source.trim()) {
-    return item.source.trim();
+    const s = item.source.trim();
+    if (s.toLowerCase() === 'hosted_form' || s.toLowerCase() === 'web_form' || s.toLowerCase() === 'hosted public form') return 'Website Form';
+    if (s.toLowerCase() === 'manual') return 'Direct';
+    return s;
   }
   const tags: string[] = Array.isArray(item.tags) ? item.tags : [];
   const sourceTag = tags.find((t: string) => t.toLowerCase().startsWith('source:'));
   if (sourceTag) {
     const raw = sourceTag.slice(7).trim();
     if (!raw) return 'Direct';
+    if (raw.toLowerCase() === 'web_form' || raw.toLowerCase() === 'hosted_form') return 'Website Form';
     return raw
       .split(/[_\s-]+/)
       .map(w => w.charAt(0).toUpperCase() + w.slice(1))
@@ -67,12 +71,13 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
   const staffName = (id?: string | null) => (id ? staffList.find(member => member.id === id)?.name || 'Staff member' : '');
 
   const availableSources = useMemo(() => {
-    const set = new Set<string>();
+    // Start with all standard sources so dropdown always shows full options (BUG-064 & BUG-065)
+    const set = new Set<string>(STANDARD_LEAD_SOURCES);
     contactsList.forEach(item => {
       const src = getContactSource(item);
       if (src) set.add(src);
     });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
+    return Array.from(set);
   }, [contactsList]);
 
   const visible = useMemo(() => {
