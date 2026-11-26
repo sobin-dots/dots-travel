@@ -1,17 +1,18 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import { BookUser, Edit3, Loader2, Plus, PhoneCall, Search, Trash2, Upload, UserCheck } from 'lucide-react';
+import { BookUser, Check, Copy, Edit3, Loader2, Plus, PhoneCall, Search, Trash2, Upload, UserCheck } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { EnquiryFormModal } from '@/components/console/EnquiryFormModal';
 import { formatTravelMonth } from '@/lib/contact-fields';
-import { ENQUIRY_STATUSES, ENQUIRY_STATUS_LABELS, ENQUIRY_TAGS, ENQUIRY_TAG_LABELS, type EnquiryTag } from '@/lib/enquiry-fields';
+import { ENQUIRY_STATUSES, ENQUIRY_STATUS_LABELS } from '@/lib/enquiry-fields';
 
 const control = 'rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-emerald-500/60 disabled:opacity-50';
-const tagStyle: Record<EnquiryTag, string> = {
-  hot: 'border-red-500/40 bg-red-500/10 text-red-300',
+const statusStyle: Record<string, string> = {
   warm: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
   cold: 'border-sky-500/40 bg-sky-500/10 text-sky-300',
+  call_unanswered: 'border-orange-500/40 bg-orange-500/10 text-orange-300',
+  whatsapp_sent: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
 };
 
 /**
@@ -33,8 +34,17 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [tagFilter, setTagFilter] = useState('');
   const [ownerFilter, setOwnerFilter] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  function handleCopyPhone(id: string, phone?: string | null) {
+    if (!phone) return;
+    navigator.clipboard.writeText(phone);
+    setCopiedId(id);
+    setTimeout(() => {
+      setCopiedId(prev => (prev === id ? null : prev));
+    }, 2000);
+  }
 
   const staff = useMemo(() => staffList.filter(member => member.status === 'active' && member.role !== 'viewer'), [staffList]);
   const staffName = (id?: string | null) => (id ? staffList.find(member => member.id === id)?.name || 'Staff member' : '');
@@ -44,15 +54,14 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
     return contactsList.filter(item => {
       if (mine && item.assignedToId !== currentUser?.id) return false;
       if (statusFilter && item.enquiryStatus !== statusFilter) return false;
-      if (tagFilter && item.enquiryTag !== tagFilter) return false;
       if (!mine && ownerFilter) {
         if (ownerFilter === 'me' ? item.assignedToId !== currentUser?.id : ownerFilter === 'unassigned' ? !!item.assignedToId : item.assignedToId !== ownerFilter) return false;
       }
       if (!term) return true;
-      return [item.name, item.phone, item.email, item.city, item.company, item.tourType, ...(item.tags || [])]
+      return [item.name, item.phone, item.email, item.city, item.company, item.destination, item.tourType, ...(item.tags || [])]
         .filter(Boolean).join(' ').toLowerCase().includes(term);
     });
-  }, [contactsList, mine, currentUser?.id, statusFilter, tagFilter, ownerFilter, search]);
+  }, [contactsList, mine, currentUser?.id, statusFilter, ownerFilter, search]);
 
   async function quickUpdate(item: Record<string, any>, changes: Record<string, unknown>) {
     setBusyId(item.id); setError('');
@@ -106,18 +115,14 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-        <div className="relative col-span-2 lg:col-span-1">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <div className="relative">
           <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input aria-label="Search enquiries" placeholder="Name, phone, email, city or tag" value={search} onChange={e => setSearch(e.target.value)} className={`${control} w-full pl-8 py-2`} />
+          <input aria-label="Search enquiries" placeholder="Name, phone, email, city or destination" value={search} onChange={e => setSearch(e.target.value)} className={`${control} w-full pl-8 py-2`} />
         </div>
         <select aria-label="Filter by status" value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className={`${control} py-2`}>
           <option value="">All statuses</option>
           {ENQUIRY_STATUSES.map(status => <option key={status} value={status}>{ENQUIRY_STATUS_LABELS[status]}</option>)}
-        </select>
-        <select aria-label="Filter by tag" value={tagFilter} onChange={e => setTagFilter(e.target.value)} className={`${control} py-2`}>
-          <option value="">All tags</option>
-          {ENQUIRY_TAGS.map(tag => <option key={tag} value={tag}>{ENQUIRY_TAG_LABELS[tag]}</option>)}
         </select>
         {!mine && (
           <select aria-label="Filter by owner" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} className={`${control} py-2`}>
@@ -137,19 +142,18 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
           <table className="w-full min-w-[1250px] text-left text-xs">
             <thead className="bg-zinc-900/80 border-b border-zinc-800 text-zinc-400 font-medium">
               <tr>
-                <th className="py-3 px-4">Enquiry</th>
+                <th className="py-3 px-4">Name</th>
                 <th className="py-3 px-4">Contact</th>
-                <th className="py-3 px-4">Trip details</th>
+                <th className="py-3 px-4">Destination</th>
                 <th className="py-3 px-4">Assigned to</th>
                 <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4">Tag</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60 text-zinc-300">
               {visible.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-10 text-center text-zinc-500">
+                  <td colSpan={6} className="py-10 text-center text-zinc-500">
                     <BookUser className="w-8 h-8 mx-auto mb-2 text-zinc-600 opacity-50" />
                     {emptyText}
                   </td>
@@ -176,13 +180,46 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
                       )}
                     </td>
                     <td className="py-3.5 px-4">
-                      <p className="font-mono text-emerald-400 font-medium">{item.phone || '—'}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="font-mono text-emerald-400 font-medium">{item.phone || '—'}</p>
+                        {item.phone && (
+                          <button
+                            type="button"
+                            title={copiedId === item.id ? 'Copied mobile number' : 'Copy mobile number'}
+                            aria-label={`Copy phone number for ${item.name}`}
+                            onClick={() => handleCopyPhone(item.id, item.phone)}
+                            className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition"
+                          >
+                            {copiedId === item.id ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
                       <p className="text-zinc-400">{item.email || '—'}</p>
                     </td>
-                    <td className="py-3.5 px-4 text-zinc-400 max-w-xs">
-                      <p>{formatTravelMonth(item.preferredTravelMonth)}{item.tourType ? ` · ${item.tourType}` : ''}{item.numberOfChildren != null ? ` · ${item.numberOfChildren} children` : ''}</p>
+                    <td className="py-3.5 px-4 text-zinc-300 max-w-xs">
+                      <p className="font-semibold text-emerald-400 text-sm">
+                        {item.destination || item.leads?.[0]?.destination || '—'}
+                      </p>
+                      <div className="text-[11px] text-zinc-400 mt-1 flex flex-wrap items-center gap-x-2">
+                        <span>
+                          <strong className="text-zinc-300">Adults:</strong> {item.numberOfAdults ?? item.leads?.[0]?.headcountAdults ?? '—'}
+                        </span>
+                        <span>·</span>
+                        <span>
+                          <strong className="text-zinc-300">Children:</strong> {item.numberOfChildren ?? item.leads?.[0]?.headcountChildren ?? '—'}
+                        </span>
+                      </div>
+                      {(item.preferredTravelMonth || item.tourType) && (
+                        <p className="text-[11px] text-zinc-400 mt-0.5">
+                          {formatTravelMonth(item.preferredTravelMonth)}{item.tourType ? ` · ${item.tourType}` : ''}
+                        </p>
+                      )}
                       {item.specialRequirements && (
-                        <details>
+                        <details className="mt-1 text-[11px]">
                           <summary className="cursor-pointer">{item.specialRequirements.length > 45 ? `${item.specialRequirements.slice(0, 45)}…` : item.specialRequirements}</summary>
                           <p className="whitespace-pre-wrap mt-1">{item.specialRequirements}</p>
                         </details>
@@ -202,13 +239,19 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
                       ) : '—'}
                     </td>
                     <td className="py-3.5 px-4">
-                      <select aria-label={`Status of ${item.name}`} disabled={busy || !canEdit} value={item.enquiryStatus} onChange={e => quickUpdate(item, { enquiryStatus: e.target.value })} className={control}>
-                        {ENQUIRY_STATUSES.map(status => <option key={status} value={status}>{ENQUIRY_STATUS_LABELS[status]}</option>)}
-                      </select>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <select aria-label={`Tag of ${item.name}`} disabled={busy || !canEdit} value={item.enquiryTag} onChange={e => quickUpdate(item, { enquiryTag: e.target.value })} className={`${control} border ${tagStyle[item.enquiryTag as EnquiryTag] || ''}`}>
-                        {ENQUIRY_TAGS.map(tag => <option key={tag} value={tag}>{ENQUIRY_TAG_LABELS[tag]}</option>)}
+                      <select
+                        aria-label={`Status of ${item.name}`}
+                        disabled={busy || !canEdit}
+                        value={item.enquiryStatus || 'warm'}
+                        onChange={e => quickUpdate(item, { enquiryStatus: e.target.value })}
+                        className={`${control} border font-medium ${statusStyle[item.enquiryStatus] || 'border-zinc-700'}`}
+                      >
+                        {ENQUIRY_STATUSES.map(status => (
+                          <option key={status} value={status}>{ENQUIRY_STATUS_LABELS[status]}</option>
+                        ))}
+                        {item.enquiryStatus && !ENQUIRY_STATUSES.includes(item.enquiryStatus) && (
+                          <option value={item.enquiryStatus}>{ENQUIRY_STATUS_LABELS[item.enquiryStatus] || item.enquiryStatus}</option>
+                        )}
                       </select>
                     </td>
                     <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">

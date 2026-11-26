@@ -10,7 +10,6 @@ export const enquirySchema = z.object({
   phone: z.string().transform(v => v.replace(/[\s().-]/g, '')).pipe(z.string().regex(/^\+[1-9]\d{6,14}$/, 'Use a phone number with country code, for example +919876543210')).optional(),
   email: z.string().trim().toLowerCase().email().max(254).optional(),
   title: z.string().trim().min(1).max(200).optional(),
-  destination: z.string().trim().max(200).optional(),
   notes: z.string().max(10000).optional(),
   answers: z.record(z.string().max(200), z.string().max(10000)).refine(v => Object.keys(v).length <= 100, 'Maximum 100 form answers').optional(),
   formId: z.string().trim().min(1).max(200),

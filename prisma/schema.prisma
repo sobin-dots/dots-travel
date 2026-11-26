@@ -498,15 +498,17 @@ model Contact {
   email          String?
   company        String?
   notes          String?
+  destination          String?
   preferredTravelMonth String?
-  tourType       String?
-  numberOfChildren Int?
+  tourType             String?
+  numberOfAdults       Int?
+  numberOfChildren     Int?
   specialRequirements String? @db.Text
   city           String?
   assignedToId   String?
   assignedAt     DateTime?
-  enquiryStatus  String @default("new_inquiry")
-  enquiryTag     String @default("warm")
+  enquiryStatus  String @default("warm")
+  enquiryTag     String? @default("warm")
   tags           String[] @default([])
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
