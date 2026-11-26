@@ -92,7 +92,17 @@ export async function PATCH(req: NextRequest, context: Context) {
             leadUpdateData.formName = srcName;
           }
         }
-        if (rest.city !== undefined) leadUpdateData.destination = rest.city || null;
+        if (rest.destination !== undefined) {
+          leadUpdateData.destination = rest.destination || null;
+        } else if (rest.city !== undefined && !existing.destination) {
+          leadUpdateData.destination = rest.city || null;
+        }
+        if (rest.numberOfAdults !== undefined) {
+          leadUpdateData.headcountAdults = rest.numberOfAdults ?? 2;
+        }
+        if (rest.numberOfChildren !== undefined) {
+          leadUpdateData.headcountChildren = rest.numberOfChildren ?? 0;
+        }
         if (rest.email !== undefined) leadUpdateData.customerEmail = rest.email || null;
         if (Object.keys(leadUpdateData).length > 0) {
           await tx.lead.updateMany({

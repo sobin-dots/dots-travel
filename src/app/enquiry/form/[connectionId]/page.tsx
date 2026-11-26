@@ -53,7 +53,8 @@ export default function PublicEnquiryFormPage(props: FormProps) {
   const [destination, setDestination] = useState('');
   const [travelMonth, setTravelMonth] = useState('');
   const [tourType, setTourType] = useState('Family');
-  const [numberOfChildren, setNumberOfChildren] = useState<number>(0);
+  const [numberOfAdults, setNumberOfAdults] = useState<number | ''>('');
+  const [numberOfChildren, setNumberOfChildren] = useState<number | ''>('');
   const [specialRequirements, setSpecialRequirements] = useState('');
   const [city, setCity] = useState('');
   const [notes, setNotes] = useState('');
@@ -111,7 +112,8 @@ export default function PublicEnquiryFormPage(props: FormProps) {
         destination: destination || undefined,
         preferredTravelMonth: travelMonth || undefined,
         tourType,
-        numberOfChildren: numberOfChildren ? Number(numberOfChildren) : 0,
+        numberOfAdults: numberOfAdults !== '' && numberOfAdults !== undefined ? Number(numberOfAdults) : undefined,
+        numberOfChildren: numberOfChildren !== '' && numberOfChildren !== undefined ? Number(numberOfChildren) : 0,
         specialRequirements: specialRequirements || undefined,
         city: city || undefined,
         notes: notes || undefined,
@@ -292,7 +294,7 @@ export default function PublicEnquiryFormPage(props: FormProps) {
 
                 <div>
                   <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
-                    City of Residence
+                    Departure City
                   </label>
                   <input
                     type="text"
@@ -331,28 +333,23 @@ export default function PublicEnquiryFormPage(props: FormProps) {
                       onChange={(e) => setTravelMonth(e.target.value)}
                       className="w-full bg-zinc-950/80 border border-zinc-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500 transition"
                     />
-                    <span className="block text-[11px] text-zinc-500 mt-1">
-                      Format: MM/YYYY (e.g. 12/2026)
-                    </span>
                   </div>
                 </div>
 
                 <div className="grid sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
-                      Tour Type
+                      Number of Adults
                     </label>
-                    <select
-                      value={tourType}
-                      onChange={(e) => setTourType(e.target.value)}
-                      className="w-full bg-zinc-950/80 border border-zinc-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 transition"
-                    >
-                      <option value="Family">Family Holiday</option>
-                      <option value="Honeymoon">Honeymoon / Couple</option>
-                      <option value="Solo">Solo Traveler</option>
-                      <option value="Friends">Group / Friends Trip</option>
-                      <option value="Corporate">Corporate / MICE</option>
-                    </select>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={numberOfAdults}
+                      onChange={(e) => setNumberOfAdults(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="Leave blank if unknown"
+                      className="w-full bg-zinc-950/80 border border-zinc-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500 transition"
+                    />
                   </div>
 
                   <div>
@@ -362,12 +359,30 @@ export default function PublicEnquiryFormPage(props: FormProps) {
                     <input
                       type="number"
                       min={0}
-                      max={20}
+                      max={50}
                       value={numberOfChildren}
-                      onChange={(e) => setNumberOfChildren(Number(e.target.value))}
-                      className="w-full bg-zinc-950/80 border border-zinc-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 transition"
+                      onChange={(e) => setNumberOfChildren(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="Leave blank if unknown"
+                      className="w-full bg-zinc-950/80 border border-zinc-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500 transition"
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                    Tour Type
+                  </label>
+                  <select
+                    value={tourType}
+                    onChange={(e) => setTourType(e.target.value)}
+                    className="w-full bg-zinc-950/80 border border-zinc-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 transition"
+                  >
+                    <option value="Family">Family Holiday</option>
+                    <option value="Honeymoon">Honeymoon / Couple</option>
+                    <option value="Solo">Solo Traveler</option>
+                    <option value="Friends">Group / Friends Trip</option>
+                    <option value="Corporate">Corporate / MICE</option>
+                  </select>
                 </div>
 
                 <div>

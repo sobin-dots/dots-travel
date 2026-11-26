@@ -1508,6 +1508,7 @@ ${JSON.stringify(samplePayload, null, 2)}`;
   destination: "Paris, France",
   preferredTravelMonth: "October 2026",
   tourType: "Family Vacation",
+  numberOfAdults: 2,
   numberOfChildren: 0,
   city: "Chennai",
   specialRequirements: "Pure vegetarian food",

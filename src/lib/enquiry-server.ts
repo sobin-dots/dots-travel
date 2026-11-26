@@ -99,8 +99,8 @@ export async function createEnquiryContact(tx: Prisma.TransactionClient, organiz
     data: {
       organizationId,
       contactId: contact.id,
-      title: `${contact.name} — ${contact.city || contact.tourType || 'Travel enquiry'}`,
-      destination: contact.city || null,
+      title: `${contact.name} — ${contact.destination || contact.city || contact.tourType || 'Travel enquiry'}`,
+      destination: contact.destination || contact.city || null,
       source: sourceName,
       formName: sourceName,
       stage: contact.enquiryStatus || 'new_inquiry',
@@ -112,6 +112,7 @@ export async function createEnquiryContact(tx: Prisma.TransactionClient, organiz
       itinerary: '',
       status: 'draft',
       createdAt: now,
+      headcountAdults: input.numberOfAdults ?? 2,
       headcountChildren: input.numberOfChildren ?? 0,
       specialRequests: input.specialRequirements || null,
       firstContactDueAt: new Date(now.getTime() + firstContactMinutes * 60_000),

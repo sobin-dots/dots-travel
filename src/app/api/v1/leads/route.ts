@@ -42,8 +42,8 @@ export async function GET(req: NextRequest) {
         data: {
           organizationId: contact.organizationId,
           contactId: contact.id,
-          title: `${contact.name} — ${contact.city || contact.tourType || 'Travel enquiry'}`,
-          destination: contact.city || null,
+          title: `${contact.name} — ${contact.destination || contact.city || contact.tourType || 'Travel enquiry'}`,
+          destination: contact.destination || contact.city || null,
           source: sourceName,
           formName: sourceName,
           stage: contact.enquiryStatus || 'new_inquiry',
@@ -55,6 +55,7 @@ export async function GET(req: NextRequest) {
           itinerary: '',
           status: 'draft',
           createdAt: createdDate,
+          headcountAdults: contact.numberOfAdults ?? 2,
           headcountChildren: contact.numberOfChildren ?? 0,
           specialRequests: contact.specialRequirements || null,
           firstContactDueAt: new Date(createdDate.getTime() + firstContactMinutes * 60_000),

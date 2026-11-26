@@ -22,6 +22,16 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     const result = await db.$transaction(async tx => {
       const updated = await tx.contact.updateMany({ where: { id, ...contactScope(auth!), updatedAt: existing.updatedAt }, data: changes });
       if (!updated.count) return null;
+      if (changes.destination !== undefined || changes.numberOfAdults !== undefined || changes.numberOfChildren !== undefined) {
+        const leadSyncData: Record<string, unknown> = {};
+        if (changes.destination !== undefined) leadSyncData.destination = changes.destination || null;
+        if (changes.numberOfAdults !== undefined) leadSyncData.headcountAdults = changes.numberOfAdults ?? 2;
+        if (changes.numberOfChildren !== undefined) leadSyncData.headcountChildren = changes.numberOfChildren ?? 0;
+        await tx.lead.updateMany({
+          where: { contactId: id, organizationId: auth!.organizationId },
+          data: leadSyncData,
+        });
+      }
       const contact = await tx.contact.findUniqueOrThrow({ where: { id } });
       await tx.auditLog.create({ data: { organizationId: auth!.organizationId, actorUserId: auth!.userId, action: 'contact.update', targetType: 'Contact', targetId: id, metadata: { fields: Object.keys(changes) } } });
       return contact;
