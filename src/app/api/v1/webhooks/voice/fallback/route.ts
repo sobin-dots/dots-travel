@@ -105,7 +105,7 @@ async function handleFallbackOrDialAction(req: NextRequest) {
     } else if (next.sipUri) {
       const nextAttempt = callRoutingState(next.call.requestedParams).dialAttempt;
       const actionUrl = orgWebhookUrls?.voiceFallback || `${effectiveBaseUrl}/api/v1/webhooks/voice/fallback?orgId=${effectiveOrgId}`;
-      builder.dial(next.sipUri, { callerId: next.call.from, timeLimit: 3600, timeout: 25, dialMusic: 'real',
+      builder.dial(next.sipUri, { callerId: next.call.from, timeLimit: 3600, timeout: 15, dialMusic: 'real',
         action: dialAttemptUrl(actionUrl, nextAttempt), method: 'POST', redirect: true,
         callbackUrl: dialAttemptUrl(`${effectiveBaseUrl}/api/v1/webhooks/voice/dial?orgId=${effectiveOrgId}`, nextAttempt), callbackMethod: 'POST' });
     } else {

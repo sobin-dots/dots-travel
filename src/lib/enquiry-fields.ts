@@ -1,12 +1,17 @@
 import { z } from 'zod';
 import { contactFields } from '@/lib/contact-fields';
 
-export const ENQUIRY_STATUSES = ['new_inquiry', 'contacted', 'quote_prep', 'quote_sent', 'negotiation', 'confirmed', 'lost'] as const;
+export const ENQUIRY_STATUSES = ['warm', 'cold', 'call_unanswered', 'whatsapp_sent'] as const;
+export const ALL_ENQUIRY_STATUSES = ['warm', 'cold', 'call_unanswered', 'whatsapp_sent', 'new_inquiry', 'contacted', 'quote_prep', 'quote_sent', 'negotiation', 'confirmed', 'lost'] as const;
 export const ENQUIRY_TAGS = ['hot', 'warm', 'cold'] as const;
 export type EnquiryStatus = typeof ENQUIRY_STATUSES[number];
 export type EnquiryTag = typeof ENQUIRY_TAGS[number];
 
-export const ENQUIRY_STATUS_LABELS: Record<EnquiryStatus, string> = {
+export const ENQUIRY_STATUS_LABELS: Record<string, string> = {
+  warm: 'Warm',
+  cold: 'Cold',
+  call_unanswered: 'Call Unanswered',
+  whatsapp_sent: 'WhatsApp Message Sent',
   new_inquiry: 'New enquiry',
   contacted: 'Contacted',
   quote_prep: 'Quote in preparation',
@@ -17,13 +22,51 @@ export const ENQUIRY_STATUS_LABELS: Record<EnquiryStatus, string> = {
 };
 export const ENQUIRY_TAG_LABELS: Record<EnquiryTag, string> = { hot: 'Hot', warm: 'Warm', cold: 'Cold' };
 
+export const STANDARD_LEAD_SOURCES = [
+  'Website Form',
+  'Instagram',
+  'Facebook',
+  'WhatsApp',
+  'Google Ads',
+  'Meta Ads',
+  'YouTube',
+  'LinkedIn',
+  'Referral',
+  'Walk-in',
+  'Direct',
+] as const;
+
+export const LEAD_SOURCES = [
+  'Instagram',
+  'Facebook',
+  'YouTube',
+  'LinkedIn',
+  'Google Ads',
+  'Website',
+  'Referral',
+  'Walk-in',
+  'manual',
+] as const;
+export type LeadSource = typeof LEAD_SOURCES[number];
+export const LEAD_SOURCE_LABELS: Record<string, string> = {
+  Instagram: 'Instagram',
+  Facebook: 'Facebook',
+  YouTube: 'YouTube',
+  LinkedIn: 'LinkedIn',
+  'Google Ads': 'Google Ads',
+  Website: 'Website',
+  Referral: 'Referral',
+  'Walk-in': 'Walk-in',
+  manual: 'Other / Manual',
+};
+
 /** Roles that may own an enquiry. Viewers can never be assigned. */
 export const ASSIGNABLE_ROLES = ['owner', 'admin', 'operator', 'sales'] as const;
 
 const tagList = z.array(z.string().trim().min(1, 'Tags cannot be empty').max(50)).max(30, 'Use at most 30 tags');
 const workflow = {
-  enquiryStatus: z.enum(ENQUIRY_STATUSES),
-  enquiryTag: z.enum(ENQUIRY_TAGS),
+  enquiryStatus: z.enum(ALL_ENQUIRY_STATUSES),
+  enquiryTag: z.string().optional(),
   tags: tagList,
   assignedToId: z.string().uuid('Choose a valid staff member').nullable(),
 };
@@ -31,7 +74,7 @@ const workflow = {
 /** Body used to create an enquiry (a contact with ownership, status and tags). */
 export const CreateEnquirySchema = contactFields
   .extend({
-    enquiryStatus: workflow.enquiryStatus.default('new_inquiry'),
+    enquiryStatus: workflow.enquiryStatus.default('warm'),
     enquiryTag: workflow.enquiryTag.default('warm'),
     tags: workflow.tags.default([]),
     assignedToId: workflow.assignedToId.optional(),

@@ -25,6 +25,8 @@ import {
   LogIn,
   Mail,
   Zap,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 export default function LandingPage() {
@@ -36,6 +38,7 @@ export default function LandingPage() {
   // Quick Inline Sign-In state on landing page
   const [quickEmail, setQuickEmail] = useState('admin@example.com');
   const [quickPassword, setQuickPassword] = useState('AdminSecurePassword2026!');
+  const [showQuickPassword, setShowQuickPassword] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -229,14 +232,25 @@ export default function LandingPage() {
 
               <div>
                 <label className="text-[11px] text-zinc-400 block mb-1">Password</label>
-                <input
-                  type="password"
-                  required
-                  value={quickPassword}
-                  onChange={(e) => setQuickPassword(e.target.value)}
-                  placeholder="••••••••••••"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 font-mono"
-                />
+                <div className="relative">
+                  <input
+                    type={showQuickPassword ? 'text' : 'password'}
+                    required
+                    value={quickPassword}
+                    onChange={(e) => setQuickPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-2.5 pr-9 py-2.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500 font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowQuickPassword((prev) => !prev)}
+                    aria-label={showQuickPassword ? 'Hide password' : 'Show password'}
+                    title={showQuickPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+                  >
+                    {showQuickPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center justify-between pt-1">

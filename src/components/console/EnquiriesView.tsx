@@ -1,18 +1,49 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import { BookUser, Edit3, Loader2, Plus, PhoneCall, Search, Trash2, Upload, UserCheck } from 'lucide-react';
+import { BookUser, Check, Copy, Edit3, Loader2, Plus, PhoneCall, Search, Trash2, Upload, UserCheck } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { EnquiryFormModal } from '@/components/console/EnquiryFormModal';
 import { formatTravelMonth } from '@/lib/contact-fields';
-import { ENQUIRY_STATUSES, ENQUIRY_STATUS_LABELS, ENQUIRY_TAGS, ENQUIRY_TAG_LABELS, type EnquiryTag } from '@/lib/enquiry-fields';
+import { ENQUIRY_STATUSES, ENQUIRY_STATUS_LABELS, STANDARD_LEAD_SOURCES } from '@/lib/enquiry-fields';
 
 const control = 'rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-emerald-500/60 disabled:opacity-50';
-const tagStyle: Record<EnquiryTag, string> = {
-  hot: 'border-red-500/40 bg-red-500/10 text-red-300',
+const statusStyle: Record<string, string> = {
   warm: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
   cold: 'border-sky-500/40 bg-sky-500/10 text-sky-300',
+  call_unanswered: 'border-orange-500/40 bg-orange-500/10 text-orange-300',
+  whatsapp_sent: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
 };
+
+export function getContactSource(item: Record<string, any>): string {
+  if (item.source && typeof item.source === 'string' && item.source.trim()) {
+    const s = item.source.trim();
+    if (s.toLowerCase() === 'hosted_form' || s.toLowerCase() === 'web_form' || s.toLowerCase() === 'hosted public form') return 'Website Form';
+    if (s.toLowerCase() === 'manual') return 'Direct';
+    return s;
+  }
+  const tags: string[] = Array.isArray(item.tags) ? item.tags : [];
+  const sourceTag = tags.find((t: string) => t.toLowerCase().startsWith('source:'));
+  if (sourceTag) {
+    const raw = sourceTag.slice(7).trim();
+    if (!raw) return 'Direct';
+    if (raw.toLowerCase() === 'web_form' || raw.toLowerCase() === 'hosted_form') return 'Website Form';
+    return raw
+      .split(/[_\s-]+/)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+  }
+  return 'Direct';
+}
+
+function getSourceBadgeClass(source: string): string {
+  const s = source.toLowerCase();
+  if (s.includes('google')) return 'border-blue-500/40 bg-blue-500/10 text-blue-300';
+  if (s.includes('insta') || s.includes('meta') || s.includes('fb') || s.includes('facebook')) return 'border-pink-500/40 bg-pink-500/10 text-pink-300';
+  if (s.includes('web') || s.includes('form') || s.includes('public')) return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300';
+  if (s.includes('referral') || s.includes('walk') || s.includes('direct')) return 'border-purple-500/40 bg-purple-500/10 text-purple-300';
+  return 'border-zinc-700 bg-zinc-800 text-zinc-300';
+}
 
 /**
  * The enquiry workspace. `mine` shows only the enquiries assigned to the signed-in
@@ -32,27 +63,47 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [tagFilter, setTagFilter] = useState('');
   const [ownerFilter, setOwnerFilter] = useState('');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  function handleCopyPhone(id: string, phone?: string | null) {
+    if (!phone) return;
+    navigator.clipboard.writeText(phone);
+    setCopiedId(id);
+    setTimeout(() => {
+      setCopiedId(prev => (prev === id ? null : prev));
+    }, 2000);
+  }
 
   const staff = useMemo(() => staffList.filter(member => member.status === 'active' && member.role !== 'viewer'), [staffList]);
   const staffName = (id?: string | null) => (id ? staffList.find(member => member.id === id)?.name || 'Staff member' : '');
+
+  const availableSources = useMemo(() => {
+    // Start with all standard sources so dropdown always shows full options (BUG-064 & BUG-065)
+    const set = new Set<string>(STANDARD_LEAD_SOURCES);
+    contactsList.forEach(item => {
+      const src = getContactSource(item);
+      if (src) set.add(src);
+    });
+    return Array.from(set);
+  }, [contactsList]);
 
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase();
     return contactsList.filter(item => {
       if (mine && item.assignedToId !== currentUser?.id) return false;
+      if (sourceFilter && getContactSource(item).toLowerCase() !== sourceFilter.toLowerCase()) return false;
       if (statusFilter && item.enquiryStatus !== statusFilter) return false;
-      if (tagFilter && item.enquiryTag !== tagFilter) return false;
       if (!mine && ownerFilter) {
         if (ownerFilter === 'me' ? item.assignedToId !== currentUser?.id : ownerFilter === 'unassigned' ? !!item.assignedToId : item.assignedToId !== ownerFilter) return false;
       }
       if (!term) return true;
-      return [item.name, item.phone, item.email, item.city, item.company, item.tourType, ...(item.tags || [])]
+      return [item.name, item.phone, item.email, item.city, item.company, item.destination, item.tourType, getContactSource(item), ...(item.tags || [])]
         .filter(Boolean).join(' ').toLowerCase().includes(term);
     });
-  }, [contactsList, mine, currentUser?.id, statusFilter, tagFilter, ownerFilter, search]);
+  }, [contactsList, mine, currentUser?.id, sourceFilter, statusFilter, ownerFilter, search]);
 
   async function quickUpdate(item: Record<string, any>, changes: Record<string, unknown>) {
     setBusyId(item.id); setError('');
@@ -89,7 +140,7 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
           <p className="text-xs sm:text-sm text-zinc-400 mt-1">
             {mine
               ? 'Enquiries assigned to you. Call customers and update their status from here.'
-              : 'Every customer enquiry with its owner, status and tags. Staff can only place calls to saved enquiries.'}
+              : 'Every customer enquiry with its assignee, status and tags. Staff can only place calls to saved enquiries.'}
           </p>
         </div>
         {canEdit && (
@@ -106,22 +157,22 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-        <div className="relative col-span-2 lg:col-span-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+        <div className="relative">
           <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input aria-label="Search enquiries" placeholder="Name, phone, email, city or tag" value={search} onChange={e => setSearch(e.target.value)} className={`${control} w-full pl-8 py-2`} />
+          <input aria-label="Search enquiries" placeholder="Name, phone, email, city, destination or source" value={search} onChange={e => setSearch(e.target.value)} className={`${control} w-full pl-8 py-2`} />
         </div>
+        <select aria-label="Filter by source" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)} className={`${control} py-2`}>
+          <option value="">All sources</option>
+          {availableSources.map(src => <option key={src} value={src}>{src}</option>)}
+        </select>
         <select aria-label="Filter by status" value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className={`${control} py-2`}>
           <option value="">All statuses</option>
           {ENQUIRY_STATUSES.map(status => <option key={status} value={status}>{ENQUIRY_STATUS_LABELS[status]}</option>)}
         </select>
-        <select aria-label="Filter by tag" value={tagFilter} onChange={e => setTagFilter(e.target.value)} className={`${control} py-2`}>
-          <option value="">All tags</option>
-          {ENQUIRY_TAGS.map(tag => <option key={tag} value={tag}>{ENQUIRY_TAG_LABELS[tag]}</option>)}
-        </select>
         {!mine && (
-          <select aria-label="Filter by owner" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} className={`${control} py-2`}>
-            <option value="">All owners</option>
+          <select aria-label="Filter by assignee" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} className={`${control} py-2`}>
+            <option value="">All assignees</option>
             <option value="me">Assigned to me</option>
             <option value="unassigned">Unassigned</option>
             {staff.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
@@ -137,12 +188,12 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
           <table className="w-full min-w-[1250px] text-left text-xs">
             <thead className="bg-zinc-900/80 border-b border-zinc-800 text-zinc-400 font-medium">
               <tr>
-                <th className="py-3 px-4">Enquiry</th>
+                <th className="py-3 px-4">Name</th>
                 <th className="py-3 px-4">Contact</th>
-                <th className="py-3 px-4">Trip details</th>
+                <th className="py-3 px-4">Destination</th>
+                <th className="py-3 px-4">Source</th>
                 <th className="py-3 px-4">Assigned to</th>
                 <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4">Tag</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
@@ -157,14 +208,16 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
               ) : visible.map(item => {
                 const busy = busyId === item.id;
                 const ownerName = item.assignedTo?.name || staffName(item.assignedToId);
+                const nonSourceTags = (item.tags || []).filter((tag: string) => !tag.toLowerCase().startsWith('source:'));
+                const contactSource = getContactSource(item);
                 return (
                   <tr key={item.id} className="hover:bg-zinc-800/30 transition align-top">
                     <td className="py-3.5 px-4">
                       <p className="font-semibold text-zinc-100">{item.name}</p>
                       {item.city && <p className="text-[11px] text-zinc-500">{item.city}</p>}
-                      {(item.tags || []).length > 0 && (
+                      {nonSourceTags.length > 0 && (
                         <div className="mt-1 flex flex-wrap gap-1">
-                          {item.tags.map((tag: string) => <span key={tag} className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">{tag}</span>)}
+                          {nonSourceTags.map((tag: string) => <span key={tag} className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">{tag}</span>)}
                         </div>
                       )}
                       {(item.company || item.notes) && (
@@ -176,17 +229,55 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
                       )}
                     </td>
                     <td className="py-3.5 px-4">
-                      <p className="font-mono text-emerald-400 font-medium">{item.phone || '—'}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="font-mono text-emerald-400 font-medium">{item.phone || '—'}</p>
+                        {item.phone && (
+                          <button
+                            type="button"
+                            title={copiedId === item.id ? 'Copied mobile number' : 'Copy mobile number'}
+                            aria-label={`Copy phone number for ${item.name}`}
+                            onClick={() => handleCopyPhone(item.id, item.phone)}
+                            className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition"
+                          >
+                            {copiedId === item.id ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
                       <p className="text-zinc-400">{item.email || '—'}</p>
                     </td>
-                    <td className="py-3.5 px-4 text-zinc-400 max-w-xs">
-                      <p>{formatTravelMonth(item.preferredTravelMonth)}{item.tourType ? ` · ${item.tourType}` : ''}{item.numberOfChildren != null ? ` · ${item.numberOfChildren} children` : ''}</p>
+                    <td className="py-3.5 px-4 text-zinc-300 max-w-xs">
+                      <p className="font-semibold text-emerald-400 text-sm">
+                        {item.destination || item.leads?.[0]?.destination || '—'}
+                      </p>
+                      <div className="text-[11px] text-zinc-400 mt-1 flex flex-wrap items-center gap-x-2">
+                        <span>
+                          <strong className="text-zinc-300">Adults:</strong> {item.numberOfAdults ?? item.leads?.[0]?.headcountAdults ?? '—'}
+                        </span>
+                        <span>·</span>
+                        <span>
+                          <strong className="text-zinc-300">Children:</strong> {item.numberOfChildren ?? item.leads?.[0]?.headcountChildren ?? '—'}
+                        </span>
+                      </div>
+                      {(item.preferredTravelMonth || item.tourType) && (
+                        <p className="text-[11px] text-zinc-400 mt-0.5">
+                          {formatTravelMonth(item.preferredTravelMonth)}{item.tourType ? ` · ${item.tourType}` : ''}
+                        </p>
+                      )}
                       {item.specialRequirements && (
-                        <details>
+                        <details className="mt-1 text-[11px]">
                           <summary className="cursor-pointer">{item.specialRequirements.length > 45 ? `${item.specialRequirements.slice(0, 45)}…` : item.specialRequirements}</summary>
                           <p className="whitespace-pre-wrap mt-1">{item.specialRequirements}</p>
                         </details>
                       )}
+                    </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      <span className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium border ${getSourceBadgeClass(contactSource)}`}>
+                        {contactSource}
+                      </span>
                     </td>
                     <td className="py-3.5 px-4">
                       {isAdmin ? (
@@ -202,13 +293,19 @@ export function EnquiriesView({ mine = false }: { mine?: boolean }) {
                       ) : '—'}
                     </td>
                     <td className="py-3.5 px-4">
-                      <select aria-label={`Status of ${item.name}`} disabled={busy || !canEdit} value={item.enquiryStatus} onChange={e => quickUpdate(item, { enquiryStatus: e.target.value })} className={control}>
-                        {ENQUIRY_STATUSES.map(status => <option key={status} value={status}>{ENQUIRY_STATUS_LABELS[status]}</option>)}
-                      </select>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <select aria-label={`Tag of ${item.name}`} disabled={busy || !canEdit} value={item.enquiryTag} onChange={e => quickUpdate(item, { enquiryTag: e.target.value })} className={`${control} border ${tagStyle[item.enquiryTag as EnquiryTag] || ''}`}>
-                        {ENQUIRY_TAGS.map(tag => <option key={tag} value={tag}>{ENQUIRY_TAG_LABELS[tag]}</option>)}
+                      <select
+                        aria-label={`Status of ${item.name}`}
+                        disabled={busy || !canEdit}
+                        value={item.enquiryStatus || 'warm'}
+                        onChange={e => quickUpdate(item, { enquiryStatus: e.target.value })}
+                        className={`${control} border font-medium ${statusStyle[item.enquiryStatus] || 'border-zinc-700'}`}
+                      >
+                        {ENQUIRY_STATUSES.map(status => (
+                          <option key={status} value={status}>{ENQUIRY_STATUS_LABELS[status]}</option>
+                        ))}
+                        {item.enquiryStatus && !ENQUIRY_STATUSES.includes(item.enquiryStatus) && (
+                          <option value={item.enquiryStatus}>{ENQUIRY_STATUS_LABELS[item.enquiryStatus] || item.enquiryStatus}</option>
+                        )}
                       </select>
                     </td>
                     <td className="py-3.5 px-4 text-right space-x-2 whitespace-nowrap">

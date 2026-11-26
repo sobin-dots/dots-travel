@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { db } from '@/lib/db';
 import { authenticateRequest } from '@/lib/api-auth';
 import { generateSignedMediaUrl } from '@/lib/media-urls';
+import { getCallScopeWhere } from '@/lib/call-access';
 
 export const runtime = 'nodejs';
 
@@ -16,7 +17,9 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(Number(url.searchParams.get('limit') || '20'), 50);
   const offset = Number(url.searchParams.get('offset') || '0');
 
+  const callScope = await getCallScopeWhere(auth!);
   const where: any = { organizationId: auth!.organizationId };
+  if (callScope) where.call = callScope;
   if (callId) where.callId = callId;
   if (status) where.status = status;
 

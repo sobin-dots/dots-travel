@@ -4,6 +4,7 @@ import type { Call } from '@prisma/client';
 import { db } from '@/lib/db';
 import { authenticateRequest, type AuthContext } from '@/lib/api-auth';
 import { contactScope, managesLeads } from '@/lib/lead-access';
+import { canAccessCallRecord, getAttendedStaffUserId } from '@/lib/call-access';
 import { CreateEnquirySchema } from '@/lib/enquiry-fields';
 import { EnquiryError, createEnquiryContact, enquiryErrorResponse, enquiryInclude, lockAgency, resolveNewOwner } from '@/lib/enquiry-server';
 
@@ -11,28 +12,12 @@ export const runtime = 'nodejs';
 
 type Context = { params: Promise<{ id: string }> };
 
-function actorOf(call: Pick<Call, 'requestedParams'>): string | null {
-  const params = call.requestedParams as Record<string, unknown> | null;
-  return typeof params?.actorUserId === 'string' ? params.actorUserId : null;
-}
-
-/** Admins see every call; staff only the calls they took or placed. */
-function canAccessCall(auth: AuthContext, call: Pick<Call, 'assignedToId' | 'requestedParams'>) {
-  return managesLeads(auth) || call.assignedToId === auth.userId || actorOf(call) === auth.userId;
-}
-
 /** The customer's number: the caller on inbound calls, the dialled number on outbound calls. */
 function customerPhone(call: Pick<Call, 'direction' | 'from' | 'to'>) {
   const raw = (call.direction === 'outbound' ? call.to : call.from) || '';
   if (/^sip:/i.test(raw.trim())) return '';
   const digits = raw.replace(/[\s().+-]/g, '').replace(/^00/, '');
   return /^[1-9]\d{6,14}$/.test(digits) ? `+${digits}` : '';
-}
-
-/** The staff member who actually attended the call; a missed or declined reservation does not count. */
-function attendedBy(call: Pick<Call, 'direction' | 'assignedToId' | 'agentOutcome' | 'agentAnsweredAt' | 'requestedParams'>) {
-  if (call.direction === 'outbound') return actorOf(call) || call.assignedToId;
-  return call.agentAnsweredAt || call.agentOutcome === 'answered' ? call.assignedToId : null;
 }
 
 async function findMatchingContact(organizationId: string, phone: string | null | undefined, email: string | null | undefined) {
@@ -55,7 +40,7 @@ export async function GET(req: NextRequest, context: Context) {
   const { id } = await context.params;
 
   const call = await db.call.findFirst({ where: { id, organizationId: auth!.organizationId } });
-  if (!call || !canAccessCall(auth!, call)) return NextResponse.json({ api_id: 'not_found', error: 'Call not found' }, { status: 404 });
+  if (!call || !canAccessCallRecord(auth!, call)) return NextResponse.json({ api_id: 'not_found', error: 'Call not found' }, { status: 404 });
 
   const phone = customerPhone(call);
   const linked = call.enquiryContactId
@@ -69,7 +54,7 @@ export async function GET(req: NextRequest, context: Context) {
   const lead = contact ? null : await db.lead.findFirst({ where: { organizationId: auth!.organizationId, callId: call.id }, orderBy: { createdAt: 'desc' }, select: { customerEmail: true, metadata: true } });
   const leadMeta = (lead?.metadata as Record<string, unknown> | null) || {};
 
-  const assignedToId = contact ? contact.assignedToId : attendedBy(call);
+  const assignedToId = contact ? contact.assignedToId : getAttendedStaffUserId(call);
   return NextResponse.json({
     api_id: `api_${crypto.randomBytes(8).toString('hex')}`,
     call: { id: call.id, direction: call.direction, status: call.status, startedAt: call.startedAt, enquiryContactId: call.enquiryContactId },
@@ -102,7 +87,7 @@ export async function POST(req: NextRequest, context: Context) {
 
   const body = await req.json().catch(() => null);
   const initialCall = await db.call.findFirst({ where: { id, organizationId: auth!.organizationId } });
-  if (!initialCall || !canAccessCall(auth!, initialCall)) return NextResponse.json({ api_id: 'not_found', error: 'Call not found' }, { status: 404 });
+  if (!initialCall || !canAccessCallRecord(auth!, initialCall)) return NextResponse.json({ api_id: 'not_found', error: 'Call not found' }, { status: 404 });
 
   const parsed = CreateEnquirySchema.safeParse({ ...(body && typeof body === 'object' ? body : {}), ...(body?.phone ? {} : customerPhone(initialCall) ? { phone: customerPhone(initialCall) } : {}) });
   if (!parsed.success) {
@@ -144,6 +129,7 @@ export async function POST(req: NextRequest, context: Context) {
       const assignedToId = await resolveNewOwner(tx, auth!, parsed.data.assignedToId);
       const contact = await createEnquiryContact(tx, auth!.organizationId, parsed.data, assignedToId);
       await tx.call.update({ where: { id: call.id }, data: { enquiryContactId: contact.id } });
+      await tx.lead.updateMany({ where: { contactId: contact.id, callId: null }, data: { callId: call.id } });
       await tx.auditLog.create({ data: { organizationId: auth!.organizationId, actorUserId: auth!.userId, action: 'call.convert_enquiry', targetType: 'Call', targetId: call.id, metadata: { contactId: contact.id, assignedToId } } });
       return { contact, created: true };
     }, { timeout: 15_000 });

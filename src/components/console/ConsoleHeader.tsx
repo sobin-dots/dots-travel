@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { CallNotifications } from './CallNotifications';
+import { NotificationBell } from './NotificationBell';
 
 export function ConsoleHeader() {
   const {
@@ -183,6 +184,7 @@ export function ConsoleHeader() {
         </div>
 
         <CallNotifications />
+        <NotificationBell />
         {/* Logged-in User Account & Profile Popover */}
         <div className="relative" ref={userDropdownRef}>
           <button
@@ -225,7 +227,7 @@ export function ConsoleHeader() {
               </div>
 
               <div className="space-y-1">
-                {currentOrg?.role && ['owner', 'admin', 'operator'].includes(currentOrg.role) && (
+                {currentOrg?.role && ['owner', 'admin', 'operator', 'sales'].includes(currentOrg.role) && (
                   <Link
                     href="/console/users"
                     onClick={() => setUserDropdownOpen(false)}

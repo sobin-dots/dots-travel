@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   Compass,
   ChevronDown,
@@ -77,6 +78,20 @@ function getLeadCustomerPhone(lead: any): string {
   return '—';
 }
 
+function LeadUrlParamHandler() {
+  const searchParams = useSearchParams();
+  const { handleSelectLead, selectedLead } = useConsole();
+  const leadId = searchParams.get('leadId');
+
+  useEffect(() => {
+    if (leadId && (!selectedLead || selectedLead.id !== leadId)) {
+      handleSelectLead(leadId);
+    }
+  }, [leadId, selectedLead?.id, handleSelectLead]);
+
+  return null;
+}
+
 export default function LeadsPage() {
   const {
     leadsList,
@@ -137,6 +152,9 @@ export default function LeadsPage() {
 
   return (
     <div className="space-y-6 max-w-7xl">
+      <Suspense fallback={null}>
+        <LeadUrlParamHandler />
+      </Suspense>
       {/* Header with Metrics & View Switcher */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -223,7 +241,7 @@ export default function LeadsPage() {
           title="Total margin set by your organization across active pipeline quotations (excludes Closed / Lost)"
         >
           <div>
-            <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Possible Income</div>
+            <div className="text-[11px] font-medium text-zinc-400 uppercase tracking-wider">Possible Profit</div>
             <div className="text-xl font-bold text-amber-400 mt-1 font-mono">
               ₹{possibleIncome.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
             </div>

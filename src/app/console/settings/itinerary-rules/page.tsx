@@ -1150,7 +1150,7 @@ export default function ItineraryRulesPage() {
                   <span>Live Compiled Prompt Injection</span>
                 </h3>
                 <p className="text-xs text-zinc-400 mt-0.5">
-                  This exact Markdown block is dynamically synthesized and injected into DeepSeek and OpenAI prompts whenever an operator clicks &ldquo;Generate Itinerary&rdquo; or &ldquo;Revise Itinerary&rdquo;.
+                  This exact Markdown block is dynamically synthesized and injected into DeepSeek and OpenAI prompts whenever a sales staff member clicks &ldquo;Generate Itinerary&rdquo; or &ldquo;Revise Itinerary&rdquo;.
                 </p>
               </div>
 

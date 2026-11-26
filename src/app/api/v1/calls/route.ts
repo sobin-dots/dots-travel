@@ -5,6 +5,7 @@ import { authenticateRequest, logAuditEvent } from '@/lib/api-auth';
 import { CreateCallRequestSchema } from '@/lib/schemas';
 import { getTelephonyProvider, getTenantTelephonyProvider } from '@/lib/telephony';
 import { contactScope, managesLeads } from '@/lib/lead-access';
+import { getCallScopeWhere } from '@/lib/call-access';
 import { syncRecentOrgCallsFromPlivo } from '@/lib/telephony/plivo-call-sync';
 
 export const runtime = 'nodejs';
@@ -117,7 +118,10 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  if (staffUserId) {
+  const callScope = await getCallScopeWhere(auth!);
+  if (callScope) {
+    andConditions.push(callScope);
+  } else if (staffUserId) {
     const staffAudits = await db.auditLog.findMany({
       where: {
         organizationId: orgId,

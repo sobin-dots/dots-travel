@@ -13,6 +13,8 @@ interface IncomingBulkContact extends ContactTravelFields {
   email?: string;
   company?: string;
   notes?: string;
+  source?: string;
+  campaign?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -46,6 +48,8 @@ export async function POST(req: NextRequest) {
       email: string | null;
       company: string | null;
       notes: string | null;
+      source: string | null;
+      campaign: string | null;
     }> = [];
 
     // Step 1: Normalize and deduplicate within the incoming batch
@@ -93,6 +97,8 @@ export async function POST(req: NextRequest) {
         email: validEmail,
         company: (item.company || '').trim().slice(0, 100) || null,
         notes: (item.notes || '').trim().slice(0, 500) || null,
+        source: (item.source || '').trim().slice(0, 50) || null,
+        campaign: (item.campaign || '').trim().slice(0, 100) || null,
         ...travel.data,
       });
     }
@@ -115,7 +121,19 @@ export async function POST(req: NextRequest) {
       if (ex.phone) existingDbSet.set(ex.phone, ex.name);
     }
 
-    // Step 3: Partition into to-insert vs skipped
+    // Step 3: Fetch ALL staff members for round-robin assignment (including owner, admin, sales)
+    const staffMembers = await db.membership.findMany({
+      where: {
+        organizationId: auth!.organizationId,
+        role: { in: ['owner', 'admin', 'operator', 'sales'] },
+      },
+      select: {
+        userId: true,
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Step 4: Partition into to-insert vs skipped
     const toInsert: Array<ContactTravelFields & {
       id: string;
       organizationId: string;
@@ -124,10 +142,14 @@ export async function POST(req: NextRequest) {
       email: string | null;
       company: string | null;
       notes: string | null;
+      assignedToId: string | null;
+      assignedAt: Date | null;
+      tags: string[];
     }> = [];
 
     const skipped: Array<{ name: string; phone: string; reason: string }> = [...batchDuplicates];
 
+    let rrIndex = 0;
     for (const contact of normalizedBatch) {
       const existingName = existingDbSet.get(contact.phone);
       if (existingName) {
@@ -137,6 +159,15 @@ export async function POST(req: NextRequest) {
           reason: `Already exists in directory (${existingName})`,
         });
       } else {
+        const assignedToId = staffMembers.length > 0
+          ? staffMembers[rrIndex % staffMembers.length].userId
+          : null;
+        rrIndex++;
+
+        const tags: string[] = [];
+        if (contact.source) tags.push(`source:${contact.source.toLowerCase()}`);
+        if (contact.campaign) tags.push(`campaign:${contact.campaign}`);
+
         toInsert.push({
           id: crypto.randomUUID(),
           organizationId: auth!.organizationId,
@@ -145,8 +176,13 @@ export async function POST(req: NextRequest) {
           email: contact.email,
           company: contact.company,
           notes: contact.notes,
+          destination: (contact as any).destination || null,
+          assignedToId,
+          assignedAt: assignedToId ? new Date() : null,
+          tags,
           preferredTravelMonth: contact.preferredTravelMonth,
           tourType: contact.tourType,
+          numberOfAdults: (contact as any).numberOfAdults ?? null,
           numberOfChildren: contact.numberOfChildren,
           specialRequirements: contact.specialRequirements,
           city: contact.city,
@@ -154,7 +190,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Step 4: Batch insert the new contacts
+    // Step 5: Batch insert the new contacts
     if (toInsert.length > 0) {
       await db.contact.createMany({
         data: toInsert,

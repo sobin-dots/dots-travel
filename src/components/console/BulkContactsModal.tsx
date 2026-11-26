@@ -122,6 +122,8 @@ export function BulkContactsModal() {
           email: r.email,
           company: r.company,
           notes: r.notes,
+          source: r.source,
+          campaign: r.campaign,
           preferredTravelMonth: r.preferredTravelMonth,
           tourType: r.tourType,
           numberOfChildren: r.numberOfChildren,

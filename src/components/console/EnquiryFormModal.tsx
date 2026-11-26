@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { useConsole } from '@/context/ConsoleContext';
 import { contactValuesFromForm } from '@/lib/contact-fields';
-import { ENQUIRY_STATUSES, ENQUIRY_STATUS_LABELS, ENQUIRY_TAGS, ENQUIRY_TAG_LABELS, parseTagInput } from '@/lib/enquiry-fields';
+import { ENQUIRY_STATUSES, ENQUIRY_STATUS_LABELS, ENQUIRY_TAGS, ENQUIRY_TAG_LABELS, STANDARD_LEAD_SOURCES, parseTagInput } from '@/lib/enquiry-fields';
 import { ContactDetailsFields } from './ContactDetailsFields';
 
 interface Props {
@@ -59,6 +59,52 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callId]);
 
+  const currentItem = existing || defaults;
+  const initialSource = useMemo(() => {
+    if (currentItem.source && typeof currentItem.source === 'string') return currentItem.source;
+    const sourceTag = (currentItem.tags || []).find((t: string) => t.toLowerCase().startsWith('source:'));
+    if (sourceTag) {
+      const raw = sourceTag.slice(7).trim();
+      return raw.split(/[_\s-]+/).map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    }
+    return '';
+  }, [currentItem]);
+
+  const sourceOptions = useMemo(() => {
+    const defaults = Array.from(STANDARD_LEAD_SOURCES);
+    if (initialSource && !defaults.some(d => d.toLowerCase() === initialSource.toLowerCase())) {
+      return [...defaults, initialSource, 'Other'];
+    }
+    return [...defaults, 'Other'];
+  }, [initialSource]);
+
+  const [selectedSource, setSelectedSource] = useState(initialSource || 'Direct');
+  const [customSource, setCustomSource] = useState(
+    initialSource && !STANDARD_LEAD_SOURCES.some(s => s.toLowerCase() === initialSource.toLowerCase())
+      ? initialSource
+      : ''
+  );
+
+  useEffect(() => {
+    if (initialSource) {
+      const match = STANDARD_LEAD_SOURCES.find(
+        s => s.toLowerCase() === initialSource.toLowerCase()
+      );
+      if (match) {
+        setSelectedSource(match);
+        setCustomSource('');
+      } else {
+        setSelectedSource(initialSource);
+        setCustomSource(initialSource);
+      }
+    }
+  }, [initialSource]);
+
+  const initialOtherTags = useMemo(() => {
+    const rawTags = (currentItem.tags || []).filter((t: string) => !t.toLowerCase().startsWith('source:'));
+    return rawTags.join(', ');
+  }, [currentItem]);
+
   // Staff may only claim an unowned enquiry. Admins can always reassign.
   const ownerLocked = mode === 'edit' && !isAdmin && !!contact?.assignedToId;
   const ownerOptions = mode === 'edit' && !isAdmin ? staff.filter(member => member.id === currentUser?.id) : staff;
@@ -71,11 +117,18 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
     event.preventDefault();
     if (inFlight.current) return;
     const form = new FormData(event.currentTarget);
+    const sourceVal = String(form.get('source') || '').trim();
+    const rawTags = parseTagInput(String(form.get('tags') || ''));
+    const finalTags = rawTags.filter(t => !t.toLowerCase().startsWith('source:'));
+    if (sourceVal && sourceVal.toLowerCase() !== 'direct') {
+      finalTags.push(`source:${sourceVal.toLowerCase()}`);
+    }
+
     const body: Record<string, unknown> = {
       ...contactValuesFromForm(form),
-      enquiryStatus: String(form.get('enquiryStatus') || 'new_inquiry'),
-      enquiryTag: String(form.get('enquiryTag') || 'warm'),
-      tags: parseTagInput(String(form.get('tags') || '')),
+      enquiryStatus: String(form.get('enquiryStatus') || 'warm'),
+      enquiryTag: 'warm',
+      tags: finalTags,
     };
     if (mode === 'edit') {
       body.expectedUpdatedAt = contact?.updatedAt;
@@ -134,17 +187,37 @@ export function EnquiryFormModal({ callId, contact, onClose, onSaved }: Props) {
                 {ownerLocked && <span className="text-[11px] text-zinc-500">Only an admin can change the owner of an assigned enquiry.</span>}
               </label>
               <label>Status
-                <select name="enquiryStatus" defaultValue={(existing || defaults).enquiryStatus || 'new_inquiry'} className={field}>
+                <select name="enquiryStatus" defaultValue={(existing || defaults).enquiryStatus || 'warm'} className={field}>
                   {ENQUIRY_STATUSES.map(status => <option key={status} value={status}>{ENQUIRY_STATUS_LABELS[status]}</option>)}
                 </select>
               </label>
-              <label>Tag
-                <select name="enquiryTag" defaultValue={(existing || defaults).enquiryTag || 'warm'} className={field}>
-                  {ENQUIRY_TAGS.map(tag => <option key={tag} value={tag}>{ENQUIRY_TAG_LABELS[tag]}</option>)}
+              <label>Source
+                <input
+                  type="hidden"
+                  name="source"
+                  value={selectedSource === 'Other' ? (customSource.trim() || 'Other') : selectedSource}
+                />
+                <select
+                  value={selectedSource}
+                  onChange={e => setSelectedSource(e.target.value)}
+                  className={field}
+                >
+                  {sourceOptions.map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
                 </select>
+                {selectedSource === 'Other' && (
+                  <input
+                    type="text"
+                    value={customSource}
+                    onChange={e => setCustomSource(e.target.value)}
+                    placeholder="Enter custom source name"
+                    className={`${field} mt-2`}
+                  />
+                )}
               </label>
-              <label>Other tags, separated by commas
-                <input name="tags" maxLength={500} defaultValue={((existing || defaults).tags || []).join(', ')} placeholder="VIP, Family" className={field} />
+              <label className="sm:col-span-2">Other tags, separated by commas
+                <input name="tags" maxLength={500} defaultValue={initialOtherTags} placeholder="VIP, Family" className={field} />
               </label>
             </fieldset>
             <div className="flex justify-end gap-3 border-t border-zinc-800 pt-4">

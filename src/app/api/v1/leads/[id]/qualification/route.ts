@@ -10,6 +10,7 @@ const schema = z.object({
   temperature: z.enum(['hot', 'warm', 'cold']).optional(), tags: z.array(z.string().trim().min(1).max(50)).max(30).optional(),
   assignedToId: z.string().uuid().nullable().optional(), autoAssign: z.boolean().optional(),
   contacted: z.literal(true).optional(), nextFollowUpAt: z.string().datetime().nullable().optional(),
+  followUpNote: z.string().max(2000).optional(),
 }).strict();
 
 export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -27,11 +28,17 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       let assignedToId = input.assignedToId;
       if (input.autoAssign) assignedToId = await pickAssignee(tx, auth!.organizationId);
       if (assignedToId && !await tx.membership.findFirst({ where: { organizationId: auth!.organizationId, userId: assignedToId, role: { in: ['owner', 'admin', 'operator', 'sales'] }, user: { status: 'active' } } })) throw new Error('invalid_assignee');
+      const currentMeta = (existing.metadata && typeof existing.metadata === 'object' ? existing.metadata : {}) as Record<string, any>;
+      const newMeta = input.followUpNote !== undefined
+        ? { ...currentMeta, followUpNote: input.followUpNote || null, followUpScheduledAt: new Date().toISOString(), followUpAssignedBy: auth!.userId }
+        : currentMeta;
+
       const updated = await tx.lead.update({ where: { id }, data: {
         temperature: input.temperature, tags: input.tags ? [...new Set(input.tags)] : undefined,
         ...(assignedToId !== undefined ? { assignedToId, assignedAt: assignedToId ? new Date() : null } : {}),
         ...(input.contacted && !existing.firstContactAt ? { firstContactAt: new Date() } : {}),
         nextFollowUpAt: input.nextFollowUpAt === undefined ? undefined : input.nextFollowUpAt ? new Date(input.nextFollowUpAt) : null,
+        metadata: newMeta,
       } });
       await tx.auditLog.create({ data: { organizationId: auth!.organizationId, actorUserId: auth!.userId, action: 'lead.qualify', targetType: 'Lead', targetId: id, metadata: { ...input, previousAssignee: existing.assignedToId } } });
       return updated;

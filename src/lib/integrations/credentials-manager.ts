@@ -209,6 +209,55 @@ export async function getTenantIntegration(
   }
 }
 
+function findMatchingPlivoApp(
+  apps: unknown,
+  opts: {
+    baseUrl?: string | null;
+    preferBaseUrlMatch?: boolean;
+    appId?: unknown;
+    metadataAppId?: unknown;
+  }
+) {
+  if (!Array.isArray(apps) || apps.length === 0) return null;
+  const nonLocalBase = opts.baseUrl && !isLocalWebhookBase(opts.baseUrl) ? opts.baseUrl : '';
+  const byBase = () =>
+    nonLocalBase
+      ? apps.find((a: any) => typeof a.answerUrl === 'string' && a.answerUrl.startsWith(nonLocalBase))
+      : undefined;
+  const byAppId = () =>
+    opts.appId ? apps.find((a: any) => String(a.appId) === String(opts.appId)) : undefined;
+  const byMetaAppId = () =>
+    opts.metadataAppId ? apps.find((a: any) => String(a.appId) === String(opts.metadataAppId)) : undefined;
+
+  return (
+    (opts.preferBaseUrlMatch ? byBase() || byAppId() : byAppId() || byBase()) ||
+    byMetaAppId() ||
+    apps.find((a: any) => a.defaultEndpointApp || a.defaultApp) ||
+    apps[0] ||
+    null
+  );
+}
+
+async function applyPlivoAppWebhookUrls(
+  client: any,
+  appId: string,
+  webhookUrls: Record<string, string>
+) {
+  if (typeof client?.applications?.update !== 'function') return;
+  try {
+    await client.applications.update(appId, {
+      answerUrl: webhookUrls.voiceAnswer,
+      answerMethod: 'POST',
+      fallbackAnswerUrl: webhookUrls.voiceFallback,
+      fallbackMethod: 'POST',
+      hangupUrl: webhookUrls.voiceHangup,
+      hangupMethod: 'POST',
+    });
+  } catch (err) {
+    console.warn('[CredentialsManager] Plivo application webhook sync notice:', err);
+  }
+}
+
 export function buildOrgWebhookUrls(baseUrl: string, organizationId: string) {
   const cleanBase = (baseUrl || 'http://localhost:3000').trim().replace(/\/+$/, '');
   return {
@@ -435,10 +484,11 @@ export async function saveTenantIntegration(
 
       // Sync or discover Plivo Application
       const apps = await client.applications.list();
-      let app =
-        apps.find((a: any) => credentials.appId && String(a.appId) === String(credentials.appId)) ||
-        apps.find((a: any) => a.defaultEndpointApp) ||
-        apps[0];
+      const app = findMatchingPlivoApp(apps, {
+        baseUrl: typeof mergedMetadata.webhookBaseUrl === 'string' ? mergedMetadata.webhookBaseUrl : '',
+        appId: credentials.appId,
+        metadataAppId: mergedMetadata.applicationId,
+      });
 
       const webhookUrls = mergedMetadata.webhookUrls;
       const isPublicHttps =
@@ -447,18 +497,7 @@ export async function saveTenantIntegration(
         !isLocalWebhookBase(mergedMetadata.webhookBaseUrl);
 
       if (app && isPublicHttps && webhookUrls) {
-        try {
-          await client.applications.update(app.appId, {
-            answerUrl: webhookUrls.voiceAnswer,
-            answerMethod: 'POST',
-            fallbackAnswerUrl: webhookUrls.voiceFallback,
-            fallbackMethod: 'POST',
-            hangupUrl: webhookUrls.voiceHangup,
-            hangupMethod: 'POST',
-          });
-        } catch (appUpdateErr) {
-          console.warn('[CredentialsManager] Plivo application webhook sync notice:', appUpdateErr);
-        }
+        await applyPlivoAppWebhookUrls(client, app.appId, webhookUrls);
       }
 
       if (app?.appId) {
@@ -734,4 +773,128 @@ export async function getTenantIntegrationsSummary(organizationId: string, reque
     integrations: rows,
     webhookUrls,
   };
+}
+
+const PLIVO_WEBHOOK_SYNC_TTL_MS = 60_000;
+const lastPlivoWebhookSyncByOrg = new Map<
+  string,
+  { baseUrl: string; syncedAt: number; appId: string | null }
+>();
+
+/**
+ * Synchronizes the organization's Plivo Application webhooks and owned Phone Numbers
+ * to the active public HTTPS origin when deployed/moved from another environment (e.g. ngrok -> prod).
+ */
+export async function syncTenantPlivoWebhooksIfNeeded(
+  organizationId: string,
+  requestBaseUrl?: string | null,
+  options?: { force?: boolean }
+): Promise<string | null> {
+  const integration = await getTenantIntegration(organizationId, 'plivo');
+  const authId = integration?.credentials?.authId;
+  const authToken = integration?.credentials?.authToken;
+  if (!authId || !authToken) return null;
+
+  const { effectiveBaseUrl, webhookUrls } = resolveOrgWebhookUrls(
+    organizationId,
+    requestBaseUrl,
+    integration.metadata
+  );
+
+  const fallbackAppId =
+    (integration.credentials.appId ? String(integration.credentials.appId) : null) ||
+    (typeof integration.metadata?.applicationId === 'string' ? integration.metadata.applicationId : null);
+
+  const isPublicHttps =
+    Boolean(effectiveBaseUrl) &&
+    effectiveBaseUrl.startsWith('https://') &&
+    !isLocalWebhookBase(effectiveBaseUrl);
+
+  if (!isPublicHttps) {
+    return fallbackAppId;
+  }
+
+  const cached = lastPlivoWebhookSyncByOrg.get(organizationId);
+  const metaMatches = integration.metadata?.webhookBaseUrl === effectiveBaseUrl;
+  const withinTtl =
+    cached &&
+    cached.baseUrl === effectiveBaseUrl &&
+    Date.now() - cached.syncedAt < PLIVO_WEBHOOK_SYNC_TTL_MS;
+
+  if (!options?.force && metaMatches && withinTtl) {
+    return cached.appId || fallbackAppId;
+  }
+
+  let resolvedAppId: string | null = fallbackAppId;
+
+  try {
+    const plivoModule = await import('plivo');
+    const client = new (plivoModule as any).Client(authId, authToken);
+
+    if (typeof client.applications?.list === 'function') {
+      const apps = await client.applications.list();
+      const matchedApp = findMatchingPlivoApp(apps, {
+        baseUrl: effectiveBaseUrl,
+        preferBaseUrlMatch: true,
+        appId: integration.credentials.appId,
+        metadataAppId: integration.metadata?.applicationId,
+      });
+
+      if (matchedApp?.appId) {
+        resolvedAppId = String(matchedApp.appId);
+        const appNeedsUpdate =
+          Boolean(options?.force) ||
+          !metaMatches ||
+          matchedApp.answerUrl !== webhookUrls.voiceAnswer ||
+          matchedApp.fallbackAnswerUrl !== webhookUrls.voiceFallback;
+
+        if (appNeedsUpdate) {
+          await applyPlivoAppWebhookUrls(client, matchedApp.appId, webhookUrls);
+        }
+
+        if (
+          typeof client.numbers?.list === 'function' &&
+          typeof client.numbers?.update === 'function'
+        ) {
+          try {
+            const ownedNumbers = await client.numbers.list();
+            if (Array.isArray(ownedNumbers)) {
+              for (const numObj of ownedNumbers) {
+                const alreadyLinked = String(numObj.application || '').includes(resolvedAppId);
+                if (options?.force || !metaMatches || !alreadyLinked) {
+                  try {
+                    await client.numbers.update(numObj.number, { appId: matchedApp.appId });
+                  } catch {}
+                }
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+
+    if (!metaMatches || options?.force || (resolvedAppId && integration.metadata?.applicationId !== resolvedAppId)) {
+      await db.tenantIntegration.update({
+        where: { id: integration.id },
+        data: {
+          metadata: {
+            ...(integration.metadata || {}),
+            webhookBaseUrl: effectiveBaseUrl,
+            webhookUrls,
+            ...(resolvedAppId ? { applicationId: resolvedAppId } : {}),
+          },
+        },
+      });
+    }
+
+    lastPlivoWebhookSyncByOrg.set(organizationId, {
+      baseUrl: effectiveBaseUrl,
+      syncedAt: Date.now(),
+      appId: resolvedAppId,
+    });
+  } catch (err) {
+    console.warn('[CredentialsManager] syncTenantPlivoWebhooksIfNeeded notice:', err);
+  }
+
+  return resolvedAppId;
 }

@@ -48,6 +48,7 @@ export async function getLiveMicrophoneStream(): Promise<MediaStream | null> {
 
 export function createNoiseSuppressionShim(clientInstance?: any) {
   return {
+    __isPlivoNoiseShim: true as const,
     noiseSupressionRunning: false,
     started: false,
     startNoiseSuppression: async (stream?: any) => {
@@ -68,7 +69,18 @@ export function createNoiseSuppressionShim(clientInstance?: any) {
     stopNoiseSuppresion: () => {},
     stopNoiseSuppression: () => {},
     setLocalMediaStream: async () => {
-      return await getLiveMicrophoneStream();
+      // Never block or prompt on getUserMedia() during incoming SIP INVITE ringing (outside a user gesture).
+      // Return an already-live local stream if present; otherwise resolve null immediately so Plivo emits onIncomingCall at 0ms.
+      if (typeof window === 'undefined') return null;
+      const existing = (window as any).localStream as MediaStream | undefined;
+      if (
+        existing &&
+        typeof existing.getAudioTracks === 'function' &&
+        existing.getAudioTracks().some((t) => t.readyState === 'live' && t.enabled)
+      ) {
+        return existing;
+      }
+      return null;
     },
     updateProcessingStream: async (stream: any) => stream,
     clearNoiseSupression: () => {},
@@ -138,17 +150,24 @@ export function patchPlivoSDK(PlivoClass?: any, instance?: any) {
         if (!desc || desc.configurable) {
           Object.defineProperty(target, prop, {
             get() {
-              if (!this[`_${prop}_shim`]) {
-                this[`_${prop}_shim`] = createNoiseSuppressionShim(this);
+              const store = this as Record<string, any>;
+              if (!store[`_${prop}_shim`]) {
+                store[`_${prop}_shim`] = createNoiseSuppressionShim(this);
               }
-              return this[`_${prop}_shim`];
+              return store[`_${prop}_shim`];
             },
-            set(val) {
-              this[`_${prop}_shim`] = val;
+            set(val: unknown) {
+              const candidate = val as { __isPlivoNoiseShim?: boolean } | null | undefined;
+              const store = this as Record<string, any>;
+              store[`_${prop}_shim`] = candidate?.__isPlivoNoiseShim
+                ? candidate
+                : createNoiseSuppressionShim(this);
             },
             configurable: true,
             enumerable: true,
           });
+        } else {
+          target[prop] = createNoiseSuppressionShim(target);
         }
       } catch {
         try {

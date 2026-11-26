@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  filterCallableContacts,
   getCallbackPhone,
   isMissedOrUnansweredCall,
   normalizeDialablePhone,
@@ -37,5 +38,20 @@ describe('Missed call callback helpers', () => {
     expect(resolveCallbackDestination('919876543210', contacts)).toBe('+91 (98765) 43210');
     expect(resolveCallbackDestination('+919999988888', contacts)).toBe('+919999988888');
     expect(resolveCallbackDestination('+919999988888', [])).toBe('+919999988888');
+  });
+
+  it('filters callable contacts by name, formatted/raw phone digits, company, or email and skips phone-less contacts', () => {
+    const contacts = [
+      { id: '1', name: 'Anitha Joseph', phone: '+919600012345', company: 'AJ Services', email: 'anitha@aj.test' },
+      { id: '2', name: 'Arun Kumar', phone: '+919876543210', company: 'Sunrise Technologies', email: 'arun@sunrise.test' },
+      { id: '3', name: 'Email Only', phone: null, company: 'No Phone Co', email: 'only@email.test' },
+    ];
+
+    expect(filterCallableContacts(contacts, '').map((c) => c.id)).toEqual(['1', '2']);
+    expect(filterCallableContacts(contacts, 'anitha').map((c) => c.id)).toEqual(['1']);
+    expect(filterCallableContacts(contacts, 'sunrise').map((c) => c.id)).toEqual(['2']);
+    expect(filterCallableContacts(contacts, '98765 43210').map((c) => c.id)).toEqual(['2']);
+    expect(filterCallableContacts(contacts, 'anitha@aj').map((c) => c.id)).toEqual(['1']);
+    expect(filterCallableContacts(contacts, 'nonexistent')).toEqual([]);
   });
 });

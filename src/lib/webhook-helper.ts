@@ -236,6 +236,17 @@ export async function processIncomingWebhook(
     : req.url;
 
   const candidateUrlsSet = new Set<string>([proxyUrl, req.url].filter(Boolean));
+  if (forwardedHost) {
+    candidateUrlsSet.add(`https://${forwardedHost}${originalUrlObj.pathname}${originalUrlObj.search}`);
+    candidateUrlsSet.add(`http://${forwardedHost}${originalUrlObj.pathname}${originalUrlObj.search}`);
+  }
+  const envPublicBase = (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '');
+  if (
+    envPublicBase &&
+    !/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i.test(envPublicBase)
+  ) {
+    candidateUrlsSet.add(`${envPublicBase}${originalUrlObj.pathname}${originalUrlObj.search}`);
+  }
   const orgIdParam = originalUrlObj.searchParams.get('orgId') || params.orgId;
   if (orgIdParam) {
     try {
