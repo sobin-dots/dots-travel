@@ -1,7 +1,17 @@
 import { z } from 'zod';
 import { contactFields } from '@/lib/contact-fields';
 
-export const ENQUIRY_STATUSES = ['warm', 'cold', 'call_unanswered', 'whatsapp_sent'] as const;
+export const ENQUIRY_STATUSES = [
+  'new_inquiry',
+  'contacted',
+  'call_unanswered',
+  'whatsapp_sent',
+  'quote_prep',
+  'quote_sent',
+  'confirmed',
+  'warm',
+  'cold',
+] as const;
 export const ALL_ENQUIRY_STATUSES = ['warm', 'cold', 'call_unanswered', 'whatsapp_sent', 'new_inquiry', 'contacted', 'quote_prep', 'quote_sent', 'negotiation', 'confirmed', 'lost'] as const;
 export const ENQUIRY_TAGS = ['hot', 'warm', 'cold'] as const;
 export type EnquiryStatus = typeof ENQUIRY_STATUSES[number];
@@ -12,12 +22,12 @@ export const ENQUIRY_STATUS_LABELS: Record<string, string> = {
   cold: 'Cold',
   call_unanswered: 'Call Unanswered',
   whatsapp_sent: 'WhatsApp Message Sent',
-  new_inquiry: 'New enquiry',
-  contacted: 'Contacted',
-  quote_prep: 'Quote in preparation',
-  quote_sent: 'Quote sent',
+  new_inquiry: 'New Enquiry',
+  contacted: 'Contact Attempted',
+  quote_prep: 'Waiting for Supplier Quote',
+  quote_sent: 'Quote Sent',
   negotiation: 'Negotiation',
-  confirmed: 'Confirmed',
+  confirmed: 'Booking Confirmed',
   lost: 'Lost',
 };
 export const ENQUIRY_TAG_LABELS: Record<EnquiryTag, string> = { hot: 'Hot', warm: 'Warm', cold: 'Cold' };
